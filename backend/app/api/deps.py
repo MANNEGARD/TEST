@@ -1,0 +1,134 @@
+"""Gemensamma FastAPI-beroenden: autentisering, CSRF och åtkomstkontroll."""
+
+from __future__ import annotations
+
+import uuid
+from dataclasses import dataclass
+from typing import Annotated
+
+from fastapi import Depends, Request
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.api.errors import ApiError, not_found
+from app.config import get_config
+from app.db import get_db
+from app.models import ApiToken, AuthSession, LogicalTrip, User, Vehicle
+from app.security import crypto, sessions
+from app.services import audit
+from app.services.audit import Actor
+from app.services.trips import segments as seg
+
+SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+
+DbDep = Annotated[Session, Depends(get_db)]
+
+
+@dataclass
+class Principal:
+    user: User
+    session: AuthSession | None = None
+    api_token: ApiToken | None = None
+    ip: str | None = None
+
+    @property
+    def actor(self) -> Actor:
+        if self.api_token is not None:
+            return Actor("ha" if "ha" in (self.api_token.scopes or []) else "user", str(self.user.id), self.user.id, self.ip)
+        return audit.user_actor(self.user.id, self.ip)
+
+    def has_scope(self, scope: str) -> bool:
+        if self.api_token is None:
+            return True
+        return scope in (self.api_token.scopes or []) or "*" in (self.api_token.scopes or [])
+
+
+def client_ip(request: Request) -> str:
+    fwd = request.headers.get("x-forwarded-for")
+    if fwd:
+        return fwd.split(",")[0].strip()[:64]
+    return (request.client.host if request.client else "")[:64]
+
+
+def _bearer(request: Request) -> str | None:
+    header = request.headers.get("authorization") or ""
+    if header.lower().startswith("bearer "):
+        return header[7:].strip()
+    return None
+
+
+def get_principal(request: Request, db: DbDep) -> Principal:
+    """Autentiserar via sessionskaka (webb) eller Bearer-token (maskin)."""
+    cfg = get_config()
+    ip = client_ip(request)
+    bearer = _bearer(request)
+    if bearer:
+        token = sessions.resolve_api_token(db, bearer)
+        if token is None:
+            raise ApiError(401, "Ogiltig eller återkallad API-token.", "invalid_token")
+        user = db.get(User, token.user_id)
+        if user is None or not user.is_active:
+            raise ApiError(401, "Kontot är inte aktivt.", "inactive_user")
+        db.commit()
+        return Principal(user=user, api_token=token, ip=ip)
+
+    sess = sessions.resolve_session(db, request.cookies.get(cfg.cookie_name))
+    if sess is None:
+        raise ApiError(401, "Du är inte inloggad.", "not_authenticated")
+    user = db.get(User, sess.user_id)
+    if user is None or not user.is_active:
+        raise ApiError(401, "Kontot är inte aktivt.", "inactive_user")
+    if request.method not in SAFE_METHODS:
+        sent = request.headers.get("x-csrf-token") or ""
+        if not sent or not crypto.constant_time_equals(sent, sess.csrf_token):
+            raise ApiError(403, "CSRF-kontrollen misslyckades. Ladda om sidan och försök igen.", "csrf_failed")
+    db.commit()
+    return Principal(user=user, session=sess, ip=ip)
+
+
+PrincipalDep = Annotated[Principal, Depends(get_principal)]
+
+
+def get_web_principal(principal: PrincipalDep) -> Principal:
+    """Endast inloggade webbanvändare (inte maskintokens)."""
+    if principal.api_token is not None:
+        raise ApiError(403, "Den här åtgärden kräver inloggning i webbappen.", "session_required")
+    return principal
+
+
+WebPrincipalDep = Annotated[Principal, Depends(get_web_principal)]
+
+
+def require_scope(scope: str):
+    def _dep(principal: PrincipalDep) -> Principal:
+        if not principal.has_scope(scope):
+            raise ApiError(403, "API-token saknar behörighet för åtgärden.", "insufficient_scope")
+        return principal
+
+    return _dep
+
+
+def get_vehicle(db: Session, principal: Principal, vehicle_id: uuid.UUID | None) -> Vehicle:
+    """Hämtar ett fordon som användaren äger; utan id används standardfordonet."""
+    if vehicle_id is not None:
+        vehicle = db.get(Vehicle, vehicle_id)
+        if vehicle is None or vehicle.owner_user_id != principal.user.id:
+            raise not_found("Fordonet")
+        return vehicle
+    from app.services import vehicles
+
+    return vehicles.default_vehicle(db, principal.user.id)
+
+
+def get_owned_trip(db: Session, principal: Principal, trip_id: uuid.UUID) -> LogicalTrip:
+    trip = seg.load_trip(db, trip_id)
+    if trip is None:
+        raise not_found("Resan")
+    owner = db.execute(select(Vehicle.owner_user_id).where(Vehicle.id == trip.vehicle_id)).scalar_one_or_none()
+    if owner != principal.user.id:
+        raise not_found("Resan")
+    return trip
+
+
+def owned_vehicle_ids(db: Session, user_id: uuid.UUID) -> list[uuid.UUID]:
+    return [v for (v,) in db.execute(select(Vehicle.id).where(Vehicle.owner_user_id == user_id)).all()]

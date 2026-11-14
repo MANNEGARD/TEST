@@ -99,6 +99,7 @@ def after_trips_changed(
     notify: bool = True,
     origin: str = "live",
     classify: bool = True,
+    use_llm: bool = True,
 ) -> dict[str, Any]:
     """Kör hela efterbearbetningen för ett fordon."""
     from app.services.classify import engine as classify_engine
@@ -117,10 +118,18 @@ def after_trips_changed(
     places.recount_visits(db, user_id)
     patterns.rebuild(db, user_id)
 
+    from app.services.calendar import matching as calendar_matching
+    from app.services.trips import journeys
+
+    out["calendar_matched"] = calendar_matching.match_vehicle(db, user_id=user_id, vehicle=vehicle)
+
     classified = 0
     if classify:
-        classified = classify_engine.classify_pending(db, user_id=user_id, vehicle=vehicle, actor=actor)
+        classified = classify_engine.classify_pending(
+            db, user_id=user_id, vehicle=vehicle, actor=actor, use_llm=use_llm
+        )
     out["classified"] = classified
+    out["journeys"] = journeys.detect(db, user_id=user_id, vehicle=vehicle)
 
     new_trip_items: list[tuple[LogicalTrip, list[str]]] = []
     for trip in seg.active_trips(db, vehicle.id):

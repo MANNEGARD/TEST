@@ -142,14 +142,17 @@ def refresh_logical(db: Session, trip: LogicalTrip) -> LogicalTrip:
     sources = {r.source for r in raws}
     trip.source = next(iter(sources)) if len(sources) == 1 else "mixed"
     flags: set[str] = set()
-    for r in raws:
+    uncertain = (TimeQuality.BOUNDED, TimeQuality.UNKNOWN)
+    for i, r in enumerate(raws):
         flags.update(r.quality_flags or [])
         if r.possible_missed_trips:
             flags.add("possible_missed_trips")
-        if r.start_time_quality in (TimeQuality.BOUNDED, TimeQuality.UNKNOWN):
-            flags.add("start_time_uncertain")
-        if r.end_time_quality in (TimeQuality.BOUNDED, TimeQuality.UNKNOWN):
-            flags.add("end_time_uncertain")
+        # Resans start/slut är osäker bara om första/sista delresan är det;
+        # osäkra tider vid mellanstopp flaggas separat.
+        if r.start_time_quality in uncertain:
+            flags.add("start_time_uncertain" if i == 0 else "stop_times_uncertain")
+        if r.end_time_quality in uncertain:
+            flags.add("end_time_uncertain" if i == len(raws) - 1 else "stop_times_uncertain")
         if r.odometer_start is None or r.odometer_end is None:
             flags.add("missing_odometer")
     trip.quality_flags = sorted(flags)
