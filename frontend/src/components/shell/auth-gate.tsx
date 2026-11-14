@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { ErrorState } from "@/components/ui/error-state";
 import { setTimeZone } from "@/lib/format";
@@ -27,21 +27,15 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const setup = useSetupStatus();
   const me = useMe();
   const settings = useSettings(!!me.data);
-  const [tzReady, setTzReady] = useState(false);
 
   useEffect(() => {
     if (setup.data?.needs_setup) router.replace("/setup");
     else if (me.isSuccess && me.data === null) router.replace(`/login?next=${encodeURIComponent(pathname)}`);
   }, [setup.data, me.isSuccess, me.data, router, pathname]);
 
-  useEffect(() => {
-    if (settings.data) {
-      setTimeZone(settings.data.settings.general?.timezone);
-      setTzReady(true);
-    } else if (settings.isError) {
-      setTzReady(true); // fortsätt med standardtidszonen
-    }
-  }, [settings.data, settings.isError]);
+  // Tidszonen måste vara satt innan sidorna formaterar datum. setTimeZone är idempotent.
+  if (settings.data) setTimeZone(settings.data.settings.general?.timezone);
+  const tzReady = !!settings.data || settings.isError; // vid fel: standardtidszonen
 
   if (me.isError) return <ErrorState error={me.error} onRetry={() => me.refetch()} className="min-h-dvh" />;
   if (setup.data?.needs_setup || !me.data || !tzReady) return <Splash />;

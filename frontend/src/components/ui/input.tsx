@@ -12,7 +12,6 @@ export const Input = React.forwardRef<HTMLInputElement, React.InputHTMLAttribute
 Input.displayName = "Input";
 
 export function Label({ className, ...props }: React.LabelHTMLAttributes<HTMLLabelElement>) {
-  // eslint-disable-next-line jsx-a11y/label-has-associated-control
   return <label className={cn("text-[13px] font-medium text-fg", className)} {...props} />;
 }
 

@@ -8,6 +8,8 @@ import { Kbd } from "@/components/ui/kbd";
 import { cn, modKeyLabel } from "@/lib/utils";
 import { NAV_ITEMS } from "./nav-items";
 
+const noopSubscribe = () => () => {};
+
 /**
  * Global sökning. ⌘K / Ctrl+K öppnar. Enter söker i Körjournalen (/journal?q=…);
  * matchande sidor visas som genvägar.
@@ -17,10 +19,9 @@ export function CommandSearch() {
   const [open, setOpen] = React.useState(false);
   const [q, setQ] = React.useState("");
   const [active, setActive] = React.useState(0);
-  const [mod, setMod] = React.useState("Ctrl");
+  const mod = React.useSyncExternalStore(noopSubscribe, modKeyLabel, () => "Ctrl");
 
   React.useEffect(() => {
-    setMod(modKeyLabel());
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();

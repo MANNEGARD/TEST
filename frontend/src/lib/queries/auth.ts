@@ -64,6 +64,8 @@ export function useLogout() {
     onSettled: () => {
       setCsrfToken(null);
       qc.clear();
+      // Full omladdning så att inget av den tidigare sessionens data ligger kvar i minnet.
+      // eslint-disable-next-line @next/next/no-location-assign-relative-destination
       window.location.assign("/login");
     },
   });

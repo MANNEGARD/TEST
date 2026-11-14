@@ -4,7 +4,7 @@ import * as React from "react";
 import { useRouter } from "next/navigation";
 import { AlertCircle, Check, Circle } from "lucide-react";
 import { PasswordInput, passwordProblems } from "@/components/auth/password-field";
-import { useCountdown } from "@/components/auth/rate-limit";
+import { retryUntil, useCountdown } from "@/components/auth/rate-limit";
 import { Button } from "@/components/ui/button";
 import { FieldError, FieldHint, Input, Label } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -43,7 +43,7 @@ export function SetupForm() {
       {
         onSuccess: () => router.replace("/"),
         onError: (err) => {
-          if (err instanceof ApiError && err.status === 429) setRetryAfter(err.retryAfterSeconds ?? 60);
+          if (err instanceof ApiError && err.status === 429) setRetryAfter(retryUntil(err.retryAfterSeconds));
           if (err instanceof ApiError && err.code === "already_setup") router.replace("/login");
         },
       },

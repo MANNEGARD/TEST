@@ -214,17 +214,18 @@ def test_callback_exchanges_code_and_stores_tokens_encrypted(db, user):
     sync.save_credentials(db, user.id, client_id="app-id", client_secret="hemligt", tenant="common")
     state = parse_qs(urlparse(sync.start_authorization(db, user.id)).query)["state"][0]
     seen = {}
+    ACCESS, REFRESH = "atkomsttoken-hemlig-0123456789", "uppdateringstoken-hemlig-9876543210"
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.update(parse_qs(request.content.decode()))
-        return httpx.Response(200, json={"access_token": "AT", "refresh_token": "RT", "expires_in": 3600,
+        return httpx.Response(200, json={"access_token": ACCESS, "refresh_token": REFRESH, "expires_in": 3600,
                                          "scope": "Calendars.Read offline_access"})
 
     conn = sync.complete_authorization(db, user.id, code="kod", state=state, transport=httpx.MockTransport(handler))
     assert conn.status == IntegrationStatus.CONNECTED
     assert seen["grant_type"] == ["authorization_code"] and "code_verifier" in seen
-    assert "AT" not in (conn.secrets_encrypted or "") and "RT" not in conn.secrets_encrypted
-    assert integrations.secrets(conn)["refresh_token"] == "RT"
+    assert ACCESS not in (conn.secrets_encrypted or "") and REFRESH not in conn.secrets_encrypted
+    assert integrations.secrets(conn)["refresh_token"] == REFRESH
     with pytest.raises(oauth_state.OAuthStateError):  # state är förbrukat
         sync.complete_authorization(db, user.id, code="kod", state=state, transport=httpx.MockTransport(handler))
 

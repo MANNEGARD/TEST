@@ -4,7 +4,7 @@ import * as React from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { AlertCircle, Timer } from "lucide-react";
 import { PasswordInput } from "@/components/auth/password-field";
-import { useCountdown } from "@/components/auth/rate-limit";
+import { retryUntil, useCountdown } from "@/components/auth/rate-limit";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
 import { ApiError, errorMessage } from "@/lib/api";
@@ -42,7 +42,7 @@ export function LoginForm() {
       {
         onSuccess: () => router.replace(next),
         onError: (err) => {
-          if (err instanceof ApiError && err.status === 429) setRetryAfter(err.retryAfterSeconds ?? 60);
+          if (err instanceof ApiError && err.status === 429) setRetryAfter(retryUntil(err.retryAfterSeconds));
         },
       },
     );

@@ -12,7 +12,14 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
-from app.api.deps import DbDep, PrincipalDep, WebPrincipalDep, get_owned_trip, get_principal, owned_vehicle_ids
+from app.api.deps import (
+    DbDep,
+    PrincipalDep,
+    WebPrincipalDep,
+    get_owned_trip,
+    get_principal,
+    owned_vehicle_ids,
+)
 from app.api.errors import ApiError, bad_request, not_found
 from app.config import get_config
 from app.db import utcnow

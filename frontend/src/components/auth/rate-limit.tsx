@@ -2,19 +2,26 @@
 
 import * as React from "react";
 
-/** Nedräkning för 429-svar. Returnerar kvarvarande sekunder (0 = får försöka igen). */
-export function useCountdown(seconds: number | null): number {
-  const [left, setLeft] = React.useState(seconds ?? 0);
+/**
+ * Nedräkning för 429-svar. `until` = tidsstämpel (ms) då man får försöka igen.
+ * Returnerar kvarvarande hela sekunder (0 = får försöka igen).
+ */
+export function useCountdown(until: number | null): number {
+  const [now, setNow] = React.useState(() => Date.now());
   React.useEffect(() => {
-    setLeft(seconds ?? 0);
-    if (!seconds) return;
-    const started = Date.now();
+    if (!until) return;
     const id = window.setInterval(() => {
-      const remaining = Math.max(0, seconds - Math.floor((Date.now() - started) / 1000));
-      setLeft(remaining);
-      if (remaining === 0) window.clearInterval(id);
+      const t = Date.now();
+      setNow(t);
+      if (t >= until) window.clearInterval(id);
     }, 500);
     return () => window.clearInterval(id);
-  }, [seconds]);
-  return left;
+  }, [until]);
+  if (!until) return 0;
+  return Math.max(0, Math.ceil((until - now) / 1000));
+}
+
+/** Tidsstämpel för när ett 429-svar med `seconds` väntetid löper ut. */
+export function retryUntil(seconds: number | null | undefined): number {
+  return Date.now() + (seconds ?? 60) * 1000;
 }
