@@ -11,7 +11,6 @@ och rapporterna.
 
 from __future__ import annotations
 
-import io
 import math
 from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -20,6 +19,7 @@ import pytest
 from sqlalchemy import select
 
 import app.models as M
+from app.db import utcnow
 from app.models.enums import (
     BatchStatus,
     Category,
@@ -274,6 +274,25 @@ def test_incomplete_period_is_only_reported_for_a_complete_journal(db, user, veh
     cov = summary(db, vehicle)["coverage"]
     assert cov["status"] == "incomplete" and cov["label"] == "Ofullständig period"
     assert "1 öppna luckor (60 km)" in cov["explanation"]
+
+
+def test_reconciled_period_is_still_business_only(db, user, vehicle, trips):
+    # Samma underlag som test_dashboard.test_reconciled_period_is_complete: mätarställningen stämmer med journalen.
+    db.add(M.VehicleOdometerSnapshot(vehicle_id=vehicle.id, at=SEPT.start, odometer_km=10000, source="manual"))
+    trips.trip(A, C, category=Category.WORK, purpose="Kundbesök", km=20.0)
+    trips.trip(C, A, category=Category.PRIVATE, km=20.0, gap_minutes=60)
+    db.add(M.VehicleOdometerSnapshot(vehicle_id=vehicle.id, at=SEPT.end, odometer_km=10040, source="manual"))
+    db.flush()
+    out = summary(db, vehicle)
+    cov = out["coverage"]
+    assert cov["status"] == "business_only" and cov["label"] == "Endast tjänsteresor redovisas"
+    assert cov["reconciled"] is True and cov["odometer_delta_km"] == 40.0 and cov["unreconciled_km"] == 0.0
+    assert out["unjournaled"] == {
+        "open_gap_km": 0.0, "open_gap_mil": 0.0, "open_gap_count": 0, "expected": True,
+        "label": "Övrig körning (redovisas inte)",
+        "note": "Körning mellan de redovisade tjänsteresorna. Den är privat och ingår inte i underlaget.",
+    }
+    assert (out["reimbursement"]["mil"], out["reimbursement"]["amount"]) == (2.0, 50.0)  # bara tjänsteresan
 
 
 def test_reimbursement_matches_hand_computed_values(db, user, vehicle, trips):
@@ -609,6 +628,14 @@ def test_export_is_complete_despite_gaps_and_preliminary_trips(db, user, vehicle
     assert {"open_gaps", "incomplete_period", "preliminary_classification"} <= {w["code"] for w in job.warnings}
 
 
+def test_empty_period_export_is_not_an_error(db, user, vehicle, actor):
+    # Jfr test_export.test_empty_period_export: utan avstämning mot mätarställningen finns inget fel i en tom period.
+    job = export_svc.create_export(db, user_id=user.id, vehicle=vehicle, start=SEPT.start, end=SEPT.end, actor=actor,
+                                   tz=TZ, now=NOW)
+    assert job.status == "done" and job.is_complete and job.summary["trips"] == 0
+    assert [(w["code"], w["severity"]) for w in job.warnings] == [("no_trips", "warning")]
+
+
 def test_precheck_api_reports_scope(client, db, vehicle, trips):
     t1, _ = two_work_trips_with_gap(db, vehicle, trips)
     missing = trips.trip(A, D, category=Category.WORK, km=5.0, gap_minutes=600)  # godkänd tjänsteresa utan syfte
@@ -697,11 +724,17 @@ def test_other_anomalies_are_kept_when_only_business_trips_are_reported(db, user
     for i, r in enumerate(raws):
         r.fuel_liters = round(20.0 * (0.065 + 0.001 * (i % 5)), 3)
     raws[5].fuel_liters = 20.0 * 0.40
+    # Fordonsrapporter: orimligt hopp (+1 600 km på två timmar) och därefter lägre mätarställning.
+    observation(db, vehicle, NOW - timedelta(days=4), 10700)
+    observation(db, vehicle, NOW - timedelta(days=4, hours=-2), 12300)
     db.flush()
 
     result = scan(db, user, vehicle)
     assert {"odometer_mismatch", "odometer_backwards", "possible_duplicate", "time_overlap",
-            "abnormal_consumption"} <= set(result["created"])
+            "abnormal_consumption", "odometer_jump"} <= set(result["created"])
+    assert result["created"]["odometer_jump"] == 1
+    # Bakåt inom en resa, mellan två resor (efter den felaktiga sträckan) och i en fordonsrapport.
+    assert result["created"]["odometer_backwards"] == 3
     assert "large_gap" not in result["found"] and "missed_trips" not in result["found"]
     kinds = {i.data.get("type") for i in review_items(db, vehicle, ReviewKind.ANOMALY)}
     assert not kinds & {"large_gap", "missed_trips"}
@@ -748,6 +781,31 @@ def test_dismissed_gap_anomaly_is_not_reopened_by_a_scope_change(db, user, vehic
     set_scope(db, user, COMPLETE)
     scan(db, user, vehicle)
     assert large.status == ReviewState.DISMISSED and large.resolution == {"dismissed": True}
+
+
+def test_anomaly_scan_api_follows_scope(client, db, vehicle, trips):
+    trips.trip(A, C, category=Category.WORK, purpose="Kundbesök", km=10.0)
+    trips.skip(hours=5, km=700)
+    trips.trip(C, A, category=Category.WORK, purpose="Retur", km=10.0)
+    gaps.recompute(db, vehicle.id)
+    observation(db, vehicle, utcnow() - timedelta(days=2), 10720)
+    observation(db, vehicle, utcnow() - timedelta(hours=5), 12160)
+    db.commit()
+
+    body = client.post(f"{API}/dashboard/anomalies/scan").json()
+    assert body["scope"] == "business_only" and body["created_total"] == 0 and body["found"] == {}
+    assert (body["closed"], body["closed_total"]) == ({}, 0)
+
+    assert client.patch(f"{API}/settings/general", json={"journal_scope": "complete"}).status_code == 200
+    body = client.post(f"{API}/dashboard/anomalies/scan").json()
+    assert body["scope"] == "complete" and body["created"] == {"large_gap": 1, "missed_trips": 1}
+    assert client.get(f"{API}/review").json()["open_counts"]["anomaly"] == 2
+
+    # Bytet till "endast tjänsteresor" stänger ärendena direkt; nästa sökning skapar inga nya.
+    assert client.patch(f"{API}/settings/general", json={"journal_scope": "business_only"}).status_code == 200
+    assert client.get(f"{API}/review").json()["open_counts"]["anomaly"] == 0
+    body = client.post(f"{API}/dashboard/anomalies/scan").json()
+    assert body["created_total"] == 0 and body["closed_total"] == 0 and body["found"] == {}
 
 
 # ----------------------------------------------------------------------------- import
@@ -952,4 +1010,3 @@ def test_reports_api_exposes_scope(client, db, vehicle, trips):
     assert weekly["journal_scope"] == "business_only" and "dataluckor" not in weekly["message"]
     daily = client.get(f"{API}/reports/daily", params={"day": "2026-09-14"}).json()
     assert daily["journal_scope"] == "business_only" and daily["all_clear"] is True
-    assert io.BytesIO is not None

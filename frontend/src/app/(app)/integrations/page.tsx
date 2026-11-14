@@ -1,8 +1,8 @@
 import type { Metadata } from "next";
-import { PlaceholderPage } from "@/components/placeholder-page";
+import { IntegrationsView } from "@/components/integrations/integrations-view";
 
 export const metadata: Metadata = { title: "Integrationer" };
 
-export default function Page() {
-  return <PlaceholderPage title="Integrationer" description="Volvo Cars, Outlook, Home Assistant och AI." />;
+export default function IntegrationsPage() {
+  return <IntegrationsView />;
 }

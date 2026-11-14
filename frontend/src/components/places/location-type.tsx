@@ -47,6 +47,11 @@ export function typeLabel(type: string | null | undefined): string {
   return label(LOCATION_TYPE_LABELS, type);
 }
 
+/** Som typeLabel, men "Okänd typ" i löptext där bara "Okänd" vore otydligt. */
+export function typeText(type: string | null | undefined): string {
+  return !type || type === "unknown" ? "Okänd typ" : typeLabel(type);
+}
+
 export function LocationTypeIcon({ type, className }: { type: string; className?: string }) {
   const Icon = ICONS[type] ?? MapPin;
   return <Icon className={className} aria-hidden />;

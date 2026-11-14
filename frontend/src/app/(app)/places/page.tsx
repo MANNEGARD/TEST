@@ -1,8 +1,13 @@
 import type { Metadata } from "next";
-import { PlaceholderPage } from "@/components/placeholder-page";
+import { Suspense } from "react";
+import { PlacesView } from "@/components/places/places-view";
 
 export const metadata: Metadata = { title: "Platser" };
 
-export default function Page() {
-  return <PlaceholderPage title="Platser" description="Kända platser, förslag och regler per plats." />;
+export default function PlacesPage() {
+  return (
+    <Suspense>
+      <PlacesView />
+    </Suspense>
+  );
 }
