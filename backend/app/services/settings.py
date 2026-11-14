@@ -17,11 +17,28 @@ from sqlalchemy.orm import Session
 
 from app.models import Setting
 
+# Journalens omfång.
+#   business_only – egen bil med milersättning: endast tjänsteresor redovisas. Körning
+#                   mellan de redovisade resorna är privat och är varken fel eller varning.
+#   complete      – fullständig körjournal (t.ex. förmånsbil): all körning ska redovisas
+#                   och luckor i mätarställningen är brister.
+SCOPE_BUSINESS_ONLY = "business_only"
+SCOPE_COMPLETE = "complete"
+JOURNAL_SCOPES = (SCOPE_BUSINESS_ONLY, SCOPE_COMPLETE)
+
+LAYOUT_SIMPLE = "simple"
+LAYOUT_DETAILED = "detailed"
+EXPORT_LAYOUTS = (LAYOUT_SIMPLE, LAYOUT_DETAILED)
+
+# Skatteverkets schablonbelopp för tjänsteresor med egen bil, inkomståren 2025 och 2026.
+DEFAULT_RATE_PER_MIL = 25.0
+
 DEFAULTS: dict[str, dict[str, Any]] = {
     "general": {
         "timezone": "Europe/Stockholm",
         "driver_name": "",
         "employer_name": "",
+        "journal_scope": SCOPE_BUSINESS_ONLY,  # business_only | complete
     },
     "merge": {
         "auto_max_minutes": 15,  # Regel A: ≤ 15 min → automatisk sammanslagning
@@ -44,7 +61,7 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "use_llm_for_purpose": True,
     },
     "tax": {
-        "car_benefit": True,  # bilförmån/förmånsbil
+        "car_benefit": False,  # bilförmån/förmånsbil (standard: egen bil)
         "home_is_workplace": False,  # bostaden är tjänsteställe
         "commute_rule_enabled": True,  # tillämpa regeln bostad ↔ tjänsteställe
         "require_approval_when_uncertain": True,
@@ -102,6 +119,9 @@ DEFAULTS: dict[str, dict[str, Any]] = {
     "export": {
         "include_private_addresses": False,  # privata resor redovisas utan detaljadresser
         "include_change_history": True,
+        "layout": LAYOUT_SIMPLE,  # simple (enkelt underlag) | detailed (fullständig arbetsbok)
+        "rate_per_mil": DEFAULT_RATE_PER_MIL,  # milersättning i kronor per mil
+        "show_amount": True,  # visa beräknat ersättningsbelopp
     },
     "costs": {
         "fuel_price_per_liter": None,
@@ -129,6 +149,13 @@ _BOUNDS: dict[tuple[str, str], tuple[float, float]] = {
     ("volvo", "settle_minutes"): (1, 240),
     ("volvo", "position_threshold_m"): (20, 5000),
     ("calendar", "min_match_score"): (0.0, 1.0),
+    ("export", "rate_per_mil"): (0, 1000),
+}
+
+# Inställningar som bara får anta vissa värden.
+_CHOICES: dict[tuple[str, str], tuple[str, ...]] = {
+    ("general", "journal_scope"): JOURNAL_SCOPES,
+    ("export", "layout"): EXPORT_LAYOUTS,
 }
 
 
@@ -142,6 +169,10 @@ def _validate_time(value: Any, key: str) -> None:
     hh, mm = value.split(":")
     if not (hh.isdigit() and mm.isdigit() and 0 <= int(hh) <= 23 and 0 <= int(mm) <= 59):
         raise SettingsError(f"{key} måste anges som HH:MM.")
+
+
+def _one_of(choices: tuple[str, ...]) -> str:
+    return choices[0] if len(choices) == 1 else ", ".join(choices[:-1]) + " eller " + choices[-1]
 
 
 def _validate(section: str, values: dict[str, Any]) -> None:
@@ -164,6 +195,9 @@ def _validate(section: str, values: dict[str, Any]) -> None:
                 raise SettingsError(f"{section}.{key} måste vara text.")
             if key.endswith(("_time", "_start", "_end")):
                 _validate_time(value, f"{section}.{key}")
+            choices = _CHOICES.get((section, key))
+            if choices and value not in choices:
+                raise SettingsError(f"{section}.{key} måste vara {_one_of(choices)}.")
         elif isinstance(default, dict) and not isinstance(value, dict):
             raise SettingsError(f"{section}.{key} måste vara ett objekt.")
         elif isinstance(default, list) and not isinstance(value, list):
@@ -227,3 +261,22 @@ def update_section(db: Session, user_id: uuid.UUID, section: str, values: dict[s
 
 def user_timezone(db: Session, user_id: uuid.UUID) -> ZoneInfo:
     return ZoneInfo(get_section(db, user_id, "general")["timezone"])
+
+
+def journal_scope(db: Session, user_id: uuid.UUID) -> str:
+    """Journalens omfång för användaren: ``business_only`` (standard) eller ``complete``."""
+    value = get_section(db, user_id, "general").get("journal_scope")
+    return value if value in JOURNAL_SCOPES else DEFAULTS["general"]["journal_scope"]
+
+
+def is_business_only(db: Session, user_id: uuid.UUID) -> bool:
+    return journal_scope(db, user_id) == SCOPE_BUSINESS_ONLY
+
+
+def reimbursement_settings(db: Session, user_id: uuid.UUID) -> tuple[float, bool]:
+    """(kronor per mil, visa belopp) för milersättningen."""
+    export = get_section(db, user_id, "export")
+    rate = export.get("rate_per_mil")
+    if isinstance(rate, bool) or not isinstance(rate, (int, float)) or not (0 <= rate <= 1000):
+        rate = DEFAULT_RATE_PER_MIL
+    return float(rate), bool(export.get("show_amount", True))

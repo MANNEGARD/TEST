@@ -32,6 +32,8 @@ from app.services.trips import segments as seg
 
 KM_EPS = 0.05
 PRELIMINARY = (ReviewStatus.AUTO, ReviewStatus.PROPOSED)
+# Resor vars klassning är avgjord: godkänd av föraren eller källmärkt i en importerad körjournal.
+REPORTED = (ReviewStatus.APPROVED, ReviewStatus.IMPORTED)
 BOUNDARY_WINDOW = timedelta(hours=36)
 
 
@@ -312,6 +314,37 @@ def totals_for(trips: Iterable[LogicalTrip]) -> Totals:
     for trip in trips:
         t.add_trip(trip)
     return t
+
+
+# ----------------------------------------------------------------------------- milersättning
+
+
+def reimbursement(trips: Iterable[LogicalTrip], *, rate_per_mil: float, show_amount: bool = True) -> dict[str, Any]:
+    """Underlag för milersättning: tjänstemil × kronor per mil.
+
+    Endast tjänste-km (per segment) från godkända eller importerade resor räknas.
+    Tjänste-km från preliminärt klassade resor (auto/förslag) särredovisas och ingår
+    aldrig i beloppet. Privat och oavgjord körning räknas inte alls.
+    """
+    km = preliminary_km = 0.0
+    for trip in trips:
+        if trip.review_status in REPORTED:
+            km += segment_km(trip)["work"]
+        elif trip.review_status in PRELIMINARY:
+            preliminary_km += segment_km(trip)["work"]
+    mil = round(km / 10.0, 2)
+    preliminary_mil = round(preliminary_km / 10.0, 2)
+    return {
+        "rate_per_mil": rate_per_mil,
+        "show_amount": show_amount,
+        "mil": mil,
+        "km": round(km, 1),
+        "amount": round(mil * rate_per_mil, 2),
+        "preliminary_mil": preliminary_mil,
+        "preliminary_amount": round(preliminary_mil * rate_per_mil, 2),
+        "currency": "SEK",
+        "note": "Tjänstemil × ersättning per mil. Endast godkända och importerade tjänsteresor räknas.",
+    }
 
 
 # ----------------------------------------------------------------------------- luckor

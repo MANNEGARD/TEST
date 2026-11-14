@@ -148,13 +148,28 @@ def refresh(principal: PrincipalDep, db: DbDep, vehicle_id: uuid.UUID | None = N
     return {k: v for k, v in result.items() if isinstance(v, (int, float, str))}
 
 
-@router.get("/gaps", summary="Dataluckor: kilometer som saknar journalpost")
+@router.get("/gaps", summary="Kilometer i mätarställningen mellan de journalförda resorna")
 def list_gaps(principal: PrincipalDep, db: DbDep, vehicle_id: uuid.UUID | None = None,
               only_open: bool = False) -> dict[str, Any]:
+    """Luckor i mätarställningen.
+
+    ``expected`` är sant när endast tjänsteresor redovisas (``scope`` = ``business_only``):
+    luckorna är då privat körning som inte ska åtgärdas, och listan kan döljas.
+    """
     vehicle = get_vehicle(db, principal, vehicle_id)
+    scope = settings_svc.journal_scope(db, principal.user.id)
+    expected = scope == settings_svc.SCOPE_BUSINESS_ONLY
     rows = gaps.list_gaps(db, vehicle.id, only_open=only_open)
     open_rows = [g for g in rows if g.status == GapStatus.OPEN]
     return {
+        "scope": scope,
+        "expected": expected,
+        "label": "Övrig körning (redovisas inte)" if expected else "Dataluckor",
+        "note": (
+            "Körning mellan de redovisade tjänsteresorna. Den är privat och behöver inte åtgärdas."
+            if expected
+            else "Kilometer i mätarställningen som saknar journalpost."
+        ),
         "items": [GapOut.model_validate(g).model_dump(mode="json") for g in rows],
         "open_count": len(open_rows),
         "open_km": round(sum(g.km for g in open_rows), 1),

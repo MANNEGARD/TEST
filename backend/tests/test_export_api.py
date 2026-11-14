@@ -33,7 +33,7 @@ def seed(db, trips, vehicle):
     return t1, t2
 
 
-def test_precheck(client, db, vehicle, trips):
+def test_precheck(complete_scope, client, db, vehicle, trips):
     seed(db, trips, vehicle)
     r = client.get("/api/v1/exports/checks", params=PERIOD)
     assert r.status_code == 200, r.text
@@ -79,7 +79,7 @@ def test_create_list_download_delete(client, db, vehicle, trips):
     assert client.get("/api/v1/exports").json() == []
 
 
-def test_create_validation_and_selection(client, db, vehicle, trips):
+def test_create_validation_and_selection(complete_scope, client, db, vehicle, trips):
     t1, _ = seed(db, trips, vehicle)
     assert client.post("/api/v1/exports", json={}).status_code == 422
     assert client.post("/api/v1/exports", json={"from": "2026-09-30", "to": "2026-09-01"}).status_code == 422

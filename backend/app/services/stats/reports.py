@@ -12,9 +12,11 @@ from sqlalchemy.orm import Session
 from app.db import utcnow
 from app.models import LogicalTrip, ReviewItem, Vehicle
 from app.models.enums import CATEGORY_LABELS_SV, Category, ReviewState, ReviewStatus
+from app.services import settings as settings_svc
 from app.services.classify.purpose import NEEDS_CONFIRMATION_SUFFIX
 from app.services.places.normalize import fold
 from app.services.stats import common, dashboard
+from app.services.trips import segments as seg
 
 _UNREVIEWED = (ReviewStatus.NEEDS_REVIEW, ReviewStatus.PROPOSED, ReviewStatus.AUTO)
 
@@ -66,8 +68,12 @@ def weekly_report(
     """Veckans tjänstemil, privata mil, förbrukning, destinationer och öppna frågor.
 
     ``week_start`` normaliseras till veckans måndag; utelämnas den används innevarande vecka.
+    När endast tjänsteresor redovisas (``business_only``) nämns inte luckor i mätarställningen
+    i meddelandet – de är privat körning.
     """
     now = now or utcnow()
+    scope = settings_svc.journal_scope(db, vehicle.owner_user_id)
+    gaps_matter = scope != settings_svc.SCOPE_BUSINESS_ONLY
     day = week_start or now.astimezone(tz).date()
     monday = day - timedelta(days=day.weekday())
     start, end = common.local_midnight(monday, tz), common.local_midnight(monday + timedelta(days=7), tz)
@@ -87,12 +93,13 @@ def weekly_report(
     message = f"Veckans körjournal: {parts[0]}, {parts[1]} och {tail}."
     if totals.undecided_km > common.KM_EPS:
         message += f" {sv_number(totals.undecided_km / 10)} mil är inte klassade."
-    if gaps:
+    if gaps and gaps_matter:
         message += f" {len(gaps)} dataluckor ({sv_number(sum(g.km for g in gaps), 0)} km) saknar journalpost."
 
     return {
         "vehicle_id": str(vehicle.id),
         "is_demo": vehicle.is_demo,
+        "journal_scope": scope,
         "week": {"year": iso.year, "week": iso.week, "start": monday.isoformat(),
                  "end": (monday + timedelta(days=6)).isoformat()},
         "period": {"start": start, "end": end},
@@ -119,8 +126,14 @@ def daily_reconciliation(
     day: date | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
-    """Dagens resor, saknade syften och klassificeringsproblem."""
+    """Dagens resor, saknade syften och klassificeringsproblem.
+
+    När endast tjänsteresor redovisas (``business_only``) räknas luckor i mätarställningen
+    inte som något att åtgärda, och helt privata resor flaggas inte för misstänkt datalucka.
+    """
     now = now or utcnow()
+    scope = settings_svc.journal_scope(db, vehicle.owner_user_id)
+    gaps_matter = scope != settings_svc.SCOPE_BUSINESS_ONLY
     day = day or now.astimezone(tz).date()
     start, end = common.local_midnight(day, tz), common.local_midnight(day + timedelta(days=1), tz)
     trips = common.load_trips(db, vehicle.id, start, end)
@@ -146,7 +159,7 @@ def daily_reconciliation(
         flags = set(t.quality_flags or [])
         if "missing_odometer" in flags:
             issues.append("Mätarställning saknas")
-        if "possible_missed_trips" in flags:
+        if "possible_missed_trips" in flags and (gaps_matter or not seg.is_private_only(t)):
             issues.append("Misstänkt datalucka")
         if issues:
             problems.append({**_trip_brief(t, tz), "issues": issues})
@@ -162,10 +175,11 @@ def daily_reconciliation(
             ).all()
         )
     gaps = common.open_gaps(db, vehicle.id, start, end)
+    unresolved_gaps = bool(gaps) and gaps_matter
     missing = sum(1 for t in trips if purpose_missing(t))
     if not trips:
         message = "Inga resor registrerade idag."
-    elif not problems and not gaps:
+    elif not problems and not unresolved_gaps:
         message = f"Dagens {totals.trips} resor ({sv_number(totals.total_km / 10)} mil) är klara."
     else:
         message = (
@@ -177,6 +191,7 @@ def daily_reconciliation(
     return {
         "vehicle_id": str(vehicle.id),
         "is_demo": vehicle.is_demo,
+        "journal_scope": scope,
         "day": day.isoformat(),
         "period": {"start": start, "end": end},
         "distance": totals.distance_dict(),
@@ -186,6 +201,6 @@ def daily_reconciliation(
         "missing_purpose": missing,
         "open_review_items": open_items,
         "data_gaps": {"count": len(gaps), "km": round(sum(g.km for g in gaps), 1)},
-        "all_clear": bool(trips) and not problems and not gaps,
+        "all_clear": bool(trips) and not problems and not unresolved_gaps,
         "message": message,
     }

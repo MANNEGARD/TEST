@@ -281,7 +281,7 @@ def test_mixed_trip_is_allocated_per_segment(db, user, vehicle, actor, trips):
     assert job.summary["work_km"] == pytest.approx(30.0) and job.summary["private_km"] == pytest.approx(12.0)
 
 
-def test_incomplete_history_is_never_marked_complete(db, user, vehicle, actor, trips):
+def test_incomplete_history_is_never_marked_complete(db, user, vehicle, actor, trips, complete_scope):
     # Ingen avläsning vid periodens gränser, en öppen lucka och en preliminär klassning.
     trips.trip(A, C, category=Category.WORK, purpose="Kundbesök", km=12.0)
     trips.skip(hours=3, km=50)
@@ -377,7 +377,7 @@ def test_demo_vehicle_export_is_watermarked(db, user, vehicle, actor, trips):
     assert any(w["code"] == "demo_data" for w in job.warnings)
 
 
-def test_empty_period_export(db, user, vehicle, actor):
+def test_empty_period_export(db, user, vehicle, actor, complete_scope):
     job, path = export(db, user, vehicle, actor)
     assert job.status == "done" and not job.is_complete
     _, wv = books(path)
@@ -410,7 +410,7 @@ def test_energy_sheet_and_refuel_notes(db, user, vehicle, actor, trips):
 # ----------------------------------------------------------------------------- kontroller
 
 
-def test_checks_detect_problems(db, user, vehicle, actor, trips):
+def test_checks_detect_problems(db, user, vehicle, actor, trips, complete_scope):
     t_missing = trips.trip(A, C, category=Category.WORK, km=5.0)  # tjänsteresa utan syfte
     trips.trip(C, D, category=Category.UNDECIDED, km=5.0, gap_minutes=30)
     trips.trip(D, A, category=Category.WORK, purpose="Förslag", purpose_confirmed=False, km=5.0, gap_minutes=30)
@@ -437,7 +437,7 @@ def test_checks_detect_problems(db, user, vehicle, actor, trips):
                                                       key=lambda s: {"error": 0, "warning": 1, "info": 2}[s])
 
 
-def test_checks_pass_for_complete_month_and_detect_unreconciled_km(db, user, vehicle, actor, trips):
+def test_checks_pass_for_complete_month_and_detect_unreconciled_km(db, user, vehicle, actor, trips, complete_scope):
     complete_month(db, trips, vehicle)
     result = checks_mod.run_checks(db, vehicle=vehicle, start=SEPT.start, end=SEPT.end, tz=TZ, now=NOW)
     assert checks_mod.is_complete(result), result
@@ -449,7 +449,7 @@ def test_checks_pass_for_complete_month_and_detect_unreconciled_km(db, user, veh
     assert rec["severity"] == "error" and rec["data"]["unexplained_km"] == pytest.approx(80.0)
 
 
-def test_selection_export(db, user, vehicle, actor, trips):
+def test_selection_export(db, user, vehicle, actor, trips, complete_scope):
     t1, t2, _ = complete_month(db, trips, vehicle)
     job = export_svc.create_export(db, user_id=user.id, vehicle=vehicle, start=None, end=None, trip_ids=[t1.id, t2.id],
                                    actor=actor, tz=TZ, now=NOW)

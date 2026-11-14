@@ -242,6 +242,7 @@ def _summarize(db: Session, batch: ImportBatch, vehicle: Vehicle, merge_settings
 
     starts = [r.parsed["started_at"] for r in new_rows if r.parsed.get("started_at")]
     ends = [r.parsed["ended_at"] for r in new_rows if r.parsed.get("ended_at")]
+    scope = settings_svc.journal_scope(db, batch.user_id)
     return {
         "files": [
             {
@@ -275,18 +276,34 @@ def _summarize(db: Session, batch: ImportBatch, vehicle: Vehicle, merge_settings
         "rows_with_stops_included": includes_stops,
         "suggested_coverage": suggested,
         "single_category_only": only_one_category,
-        "notes": _summary_notes(gap_count, gap_km, only_one_category, includes_stops),
+        "journal_scope": scope,
+        "notes": _summary_notes(gap_count, gap_km, only_one_category, includes_stops, scope=scope),
     }
 
 
-def _summary_notes(gap_count: int, gap_km: float, single_category: bool, includes_stops: int) -> list[str]:
+def _summary_notes(
+    gap_count: int,
+    gap_km: float,
+    single_category: bool,
+    includes_stops: int,
+    *,
+    scope: str = settings_svc.SCOPE_COMPLETE,
+) -> list[str]:
+    """Anteckningar till importens sammanställning.
+
+    När endast tjänsteresor redovisas (``business_only``) är luckor mellan resorna och
+    en enda kategori det förväntade – det beskrivs neutralt respektive inte alls.
+    """
+    business_only = scope == settings_svc.SCOPE_BUSINESS_ONLY
     out = []
-    if gap_count:
+    if gap_count and business_only:
+        out.append(f"Mellan resorna finns {gap_km:.0f} km som inte ingår i underlaget (övrig körning).")
+    elif gap_count:
         out.append(
             f"Mätarställningarna har {gap_count} luckor på totalt {gap_km:.0f} km mellan resorna. "
             "Underlaget är därför ett urval och inte en komplett fordonsjournal."
         )
-    if single_category:
+    if single_category and not business_only:
         out.append(
             "Alla resor har samma kategori. Underlaget används som positivt referensmaterial – "
             "det säger inget om hur övrig körning ska klassas."

@@ -101,14 +101,16 @@ def precheck(
     tz, start, end = _bounds(db, principal.user.id, date_from, date_to)
     if trip_ids is not None:
         start = end = None
-    result = checks_mod.run_checks(db, vehicle=vehicle, start=start, end=end, tz=tz, trip_ids=trip_ids)
+    scope = settings_svc.journal_scope(db, principal.user.id)
+    result = checks_mod.run_checks(db, vehicle=vehicle, start=start, end=end, tz=tz, trip_ids=trip_ids, scope=scope)
     db.commit()
     return {
         "vehicle_id": str(vehicle.id),
         "is_demo": vehicle.is_demo,
+        "scope": scope,
         "period": {"start": start, "end": end, "timezone": str(tz)},
         **checks_mod.summarize(result),
-        "status_label": "Fullständig" if checks_mod.is_complete(result) else "OFULLSTÄNDIG",
+        "status_label": checks_mod.status_label(result, scope),
         "checks": result,
     }
 

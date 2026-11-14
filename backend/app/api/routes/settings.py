@@ -13,11 +13,14 @@ from sqlalchemy import select
 
 from app.api.deps import DbDep, PrincipalDep, WebPrincipalDep, get_vehicle, owned_vehicle_ids
 from app.api.errors import ApiError, bad_request, not_found
-from app.models import AuditEvent, KnownLocation, WorkplacePeriod
+from app.models import AuditEvent, KnownLocation, Vehicle, WorkplacePeriod
 from app.schemas.common import AuditOut
 from app.services import audit, backup, privacy
 from app.services import settings as settings_svc
 from app.services.learning import feedback
+from app.services.stats import anomalies
+from app.services.trips import pipeline
+from app.services.trips import segments as seg
 
 router = APIRouter(tags=["Settings"])
 
@@ -39,6 +42,24 @@ class DeleteHistory(BaseModel):
 def _reevaluate(db, principal) -> None:
     for vid in owned_vehicle_ids(db, principal.user.id):
         feedback.after_decisions(db, user_id=principal.user.id, vehicle_id=vid, actor=audit.SYSTEM)
+
+
+def _apply_journal_scope(db, principal) -> None:
+    """Låter granskningscentret följa journalens omfång direkt när det ändras.
+
+    Med endast tjänsteresor (business_only) stängs ärenden som enbart beror på luckor i
+    mätarställningen; resornas egna ärenden stäms av mot det nya omfånget.
+    """
+    scope = settings_svc.journal_scope(db, principal.user.id)
+    for vid in owned_vehicle_ids(db, principal.user.id):
+        vehicle = db.get(Vehicle, vid)
+        if vehicle is None:
+            continue
+        if scope == settings_svc.SCOPE_BUSINESS_ONLY:
+            anomalies.close_gap_anomalies(db, vehicle)
+        for trip in seg.active_trips(db, vid):
+            pipeline.sync_trip_review_items(db, trip, scope=scope)
+    db.flush()
 
 
 def _workplace_out(db, wp: WorkplacePeriod) -> dict[str, Any]:
@@ -63,6 +84,8 @@ def update_settings(section: str, body: dict[str, Any], principal: WebPrincipalD
                  before={k: before.get(k) for k in body}, after=body)
     if section in ("tax", "ai", "calendar", "abbreviations"):
         _reevaluate(db, principal)  # påverkar förslag för oavgjorda resor
+    if section == "general" and before.get("journal_scope") != updated.get("journal_scope"):
+        _apply_journal_scope(db, principal)
     db.commit()
     return updated
 

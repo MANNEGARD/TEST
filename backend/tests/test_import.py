@@ -322,7 +322,7 @@ def test_undo_import_voids_trips_and_allows_reimport(db, user, vehicle, actor):
     assert again.summary["rows_new"] == batch.summary["rows_total"]
 
 
-def test_import_never_marks_selection_as_complete_journal(db, user, vehicle, actor):
+def test_import_never_marks_selection_as_complete_journal(db, user, vehicle, actor, complete_scope):
     batch = imp.create_preview(db, user_id=user.id, vehicle=vehicle, files=fx.sample_files(), actor=actor)
     result = imp.commit(db, batch, actor=actor)
     assert batch.coverage == Coverage.SELECTION

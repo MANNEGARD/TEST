@@ -348,6 +348,11 @@ export interface DashboardSummary {
     place: { id: string; name: string; type: string; distance_m: number } | null;
     source: string;
   } | null;
+  /**
+   * Beräknad milersättning (läggs till av backend). Visas bara när fältet finns –
+   * frontend räknar aldrig fram ett eget belopp.
+   */
+  reimbursement?: { rate_per_mil: number | null; mil: number | null; amount: number | null; currency?: string; note?: string } | null;
   sync: {
     provider: string;
     status: string;

@@ -62,6 +62,12 @@ def segment_category(trip: LogicalTrip, seg: TripSegment) -> str:
     return seg.category_override or trip.category
 
 
+def is_private_only(trip: LogicalTrip) -> bool:
+    """Resan består enbart av privat körning (ingen tjänste- eller oavgjord sträcka)."""
+    cats = {segment_category(trip, s) for s in trip.segments}
+    return cats == {Category.PRIVATE}
+
+
 def _sum_quality(values: Sequence[tuple[float | None, str]]) -> tuple[float | None, str]:
     """Summerar mätvärden och anger kvalitet: verified, estimated, partial eller unknown."""
     known = [(v, q) for v, q in values if v is not None and q != "unknown"]

@@ -6,7 +6,7 @@
  * skript (THEME_INIT_SCRIPT, körs i <head>) gör samma sak före första målningen.
  */
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useSyncExternalStore, type ReactNode } from "react";
 
 export type ThemePreference = "system" | "light" | "dark";
 export type ResolvedTheme = "light" | "dark";
@@ -23,8 +23,21 @@ interface ThemeContextValue {
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
 
-function systemTheme(): ResolvedTheme {
-  return typeof window !== "undefined" && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+// Externa källor (localStorage + systemets färgschema) läses med useSyncExternalStore
+// så att serverrenderingen ("system"/ljust) och hydreringen alltid stämmer överens.
+const listeners = new Set<() => void>();
+function emit() {
+  for (const l of listeners) l();
+}
+
+function subscribePreference(cb: () => void) {
+  listeners.add(cb);
+  const onStorage = (e: StorageEvent) => e.key === THEME_STORAGE_KEY && cb();
+  window.addEventListener("storage", onStorage);
+  return () => {
+    listeners.delete(cb);
+    window.removeEventListener("storage", onStorage);
+  };
 }
 
 function readPreference(): ThemePreference {
@@ -36,19 +49,19 @@ function readPreference(): ThemePreference {
   }
 }
 
+function subscribeSystem(cb: () => void) {
+  const mq = window.matchMedia("(prefers-color-scheme: dark)");
+  mq.addEventListener("change", cb);
+  return () => mq.removeEventListener("change", cb);
+}
+
+function readSystem(): ResolvedTheme {
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [preference, setPref] = useState<ThemePreference>(() =>
-    typeof window === "undefined" ? "system" : readPreference(),
-  );
-  const [system, setSystem] = useState<ResolvedTheme>(() => (typeof window === "undefined" ? "light" : systemTheme()));
-
-  useEffect(() => {
-    const mq = window.matchMedia("(prefers-color-scheme: dark)");
-    const onChange = () => setSystem(mq.matches ? "dark" : "light");
-    mq.addEventListener("change", onChange);
-    return () => mq.removeEventListener("change", onChange);
-  }, []);
-
+  const preference = useSyncExternalStore(subscribePreference, readPreference, () => "system" as ThemePreference);
+  const system = useSyncExternalStore(subscribeSystem, readSystem, () => "light" as ResolvedTheme);
   const resolved: ResolvedTheme = preference === "system" ? system : preference;
 
   useEffect(() => {
@@ -58,12 +71,12 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, [resolved]);
 
   const setPreference = useCallback((p: ThemePreference) => {
-    setPref(p);
     try {
       window.localStorage.setItem(THEME_STORAGE_KEY, p);
     } catch {
       /* ignorera */
     }
+    emit();
   }, []);
 
   const value = useMemo(() => ({ preference, resolved, setPreference }), [preference, resolved, setPreference]);

@@ -3,6 +3,14 @@
 En export får bara kallas "Fullständig" när ingen kontroll med allvarlighetsgrad
 ``error`` slår till. Kontrollerna gör inga antaganden: saknas underlag redovisas det
 som en brist, det fylls aldrig i.
+
+Kontrollerna beror på journalens omfång (inställningen ``general.journal_scope``):
+
+* ``complete`` – fullständig körjournal. All körning ska vara journalförd, så luckor i
+  mätarställningen och oavstämda perioder är fel.
+* ``business_only`` – egen bil med milersättning. Bara godkända tjänsteresor ingår i
+  underlaget. Körningen mellan dem är privat och ger inga anmärkningar; det gör inte
+  privata resor heller. Fel är sådant som gör de redovisade tjänsteresorna felaktiga.
 """
 
 from __future__ import annotations
@@ -17,7 +25,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import ImportBatch, LogicalTrip, Vehicle
-from app.models.enums import Coverage, GapStatus, ReviewStatus, TimeQuality, TripSource
+from app.models.enums import Category, Coverage, GapStatus, ReviewStatus, TimeQuality, TripSource
 from app.services import settings as settings_svc
 from app.services.stats import common
 from app.services.stats.reports import purpose_missing, purpose_unconfirmed
@@ -46,6 +54,14 @@ def is_complete(checks: list[dict[str, Any]]) -> bool:
     return not any(c["severity"] == ERROR for c in checks)
 
 
+def status_label(checks: list[dict[str, Any]], scope: str) -> str:
+    """Kort statusetikett. Ordet "fullständig" används bara för en fullständig körjournal."""
+    complete = is_complete(checks)
+    if scope == settings_svc.SCOPE_BUSINESS_ONLY:
+        return "Klart att redovisa" if complete else "Fel behöver åtgärdas"
+    return "Fullständig" if complete else "OFULLSTÄNDIG"
+
+
 def summarize(checks: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "is_complete": is_complete(checks),
@@ -53,6 +69,193 @@ def summarize(checks: list[dict[str, Any]]) -> dict[str, Any]:
         "warnings": sum(1 for c in checks if c["severity"] == WARNING),
         "infos": sum(1 for c in checks if c["severity"] == INFO),
     }
+
+
+def _is_negative(t: LogicalTrip) -> bool:
+    return (
+        t.distance_km < 0
+        or (t.odometer_start is not None and t.odometer_end is not None and t.odometer_end < t.odometer_start)
+        or any(s.distance_km < 0 for s in t.segments)
+    )
+
+
+def _sum_mismatch(t: LogicalTrip) -> bool:
+    seg_sum = sum(s.distance_km for s in t.segments)
+    raw_sum = sum(r.distance_km for r in seg.ordered_raws(t))
+    cached = t.work_km + t.private_km + t.undecided_km
+    return (
+        abs(seg_sum - t.distance_km) > common.KM_EPS
+        or abs(raw_sum - seg_sum) > common.KM_EPS
+        or abs(cached - seg_sum) > common.KM_EPS
+    )
+
+
+def _odometer_differs(t: LogicalTrip) -> bool:
+    return (
+        t.odometer_start is not None and t.odometer_end is not None and not t.has_gap
+        and abs((t.odometer_end - t.odometer_start) - t.distance_km) > max(3.0, 0.1 * t.distance_km)
+    )
+
+
+def _uncertain(t: LogicalTrip) -> bool:
+    flags = set(t.quality_flags or [])
+    return bool(
+        not t.is_complete
+        or flags & {"possible_missed_trips", "start_time_uncertain", "end_time_uncertain"}
+        or t.start_time_quality in (TimeQuality.BOUNDED, TimeQuality.UNKNOWN, TimeQuality.ESTIMATED)
+        or t.source == TripSource.VOLVO_API
+    )
+
+
+def _overlap_pairs(physical: list[LogicalTrip]) -> list[tuple[LogicalTrip, LogicalTrip]]:
+    """På varandra följande resor som överlappar i tid (mer än en minut)."""
+    timed = [t for t in physical if t.started_at is not None and t.ended_at is not None]
+    return [
+        (a, b) for a, b in zip(timed, timed[1:], strict=False)
+        if (b.started_at - a.ended_at).total_seconds() < -60  # type: ignore[operator]
+    ]
+
+
+def _duplicate_pairs(physical: list[LogicalTrip]) -> list[tuple[LogicalTrip, LogicalTrip]]:
+    """Resor med samma starttid (minut), mätarställning och körsträcka."""
+    seen: dict[tuple[Any, ...], LogicalTrip] = {}
+    pairs: list[tuple[LogicalTrip, LogicalTrip]] = []
+    for t in physical:
+        if t.started_at is None:
+            continue
+        key = (t.started_at.replace(second=0, microsecond=0), t.odometer_start, t.odometer_end, round(t.distance_km, 1))
+        if key in seen:
+            pairs.append((seen[key], t))
+        else:
+            seen[key] = t
+    return pairs
+
+
+def _unique(pairs: Iterable[tuple[LogicalTrip, LogicalTrip]]) -> list[LogicalTrip]:
+    return list({t.id: t for pair in pairs for t in pair}.values())
+
+
+def _has_work(t: LogicalTrip) -> bool:
+    """Resan innehåller tjänstekörning (hela resan eller en delsträcka)."""
+    return t.work_km > common.KM_EPS or any(seg.segment_category(t, s) == Category.WORK for s in t.segments)
+
+
+def _business_only_checks(vehicle: Vehicle, trips: list[LogicalTrip]) -> list[dict[str, Any]]:
+    """Kontroller när endast tjänsteresor redovisas (egen bil, milersättning).
+
+    Underlaget består av tjänsteresor som är godkända eller importerade. Luckor i
+    mätarställningen, privata resor och urval av resor ger inga anmärkningar.
+    """
+    out: list[dict[str, Any]] = []
+    physical = [t for t in trips if not common.is_gap_fill(t)]
+    business = [t for t in trips if _has_work(t)]
+    reported = [t for t in business if t.review_status in common.REPORTED]
+    reported_ids = {t.id for t in reported}
+
+    if vehicle.is_demo:
+        out.append(
+            _check("demo_data", ERROR, "Demonstrationsdata",
+                   "Fordonet innehåller påhittade demonstrationsdata. Exporten är inte ett riktigt underlag.", count=1)
+        )
+    if not reported:
+        out.append(
+            _check("no_trips", WARNING, "Inga tjänsteresor att redovisa",
+                   "Perioden innehåller inga resor." if not trips
+                   else "Perioden innehåller inga godkända tjänsteresor.", count=1)
+        )
+
+    # --- sådant som ännu inte ingår i underlaget (blockerar inte) ---------------------
+    undecided = [t for t in trips if t.undecided_km > common.KM_EPS]
+    if undecided:
+        km = sum(t.undecided_km for t in undecided)
+        out.append(
+            _check("undecided_category", WARNING, "Resor utan avgjord kategori",
+                   f"{len(undecided)} resor ({km:.1f} km) är varken klassade som arbete eller privat. "
+                   "De tas inte med i underlaget förrän kategorin har avgjorts.", undecided, km=round(km, 1))
+        )
+    preliminary = [
+        t for t in business if t.review_status not in common.REPORTED and t.undecided_km <= common.KM_EPS
+    ]
+    if preliminary:
+        km = sum(t.work_km for t in preliminary)
+        out.append(
+            _check("preliminary_classification", WARNING, "Preliminära klassningar är inte godkända",
+                   f"{len(preliminary)} tjänsteresor ({km:.1f} km) har en preliminär klassning som inte godkänts "
+                   "av föraren. De tas inte med i underlaget förrän de har godkänts.", preliminary, km=round(km, 1))
+        )
+
+    # --- fel i de redovisade tjänsteresorna -------------------------------------------
+    missing = [t for t in reported if purpose_missing(t)]
+    if missing:
+        out.append(
+            _check("missing_purpose", ERROR, "Syfte saknas för tjänsteresor",
+                   f"{len(missing)} godkända tjänsteresor saknar ärende/syfte.", missing)
+        )
+    unconfirmed = [t for t in reported if purpose_unconfirmed(t)]
+    if unconfirmed:
+        out.append(
+            _check("unconfirmed_purpose", ERROR, "Föreslagna syften är inte bekräftade",
+                   f"{len(unconfirmed)} godkända tjänsteresor har ett automatiskt föreslaget syfte som inte "
+                   "bekräftats.", unconfirmed)
+        )
+    negative = [t for t in reported if _is_negative(t)]
+    if negative:
+        out.append(
+            _check("negative_distance", ERROR, "Negativa körsträckor",
+                   f"{len(negative)} tjänsteresor har negativ körsträcka eller mätarställning som går bakåt.",
+                   negative)
+        )
+    mismatch = [t for t in reported if _sum_mismatch(t)]
+    if mismatch:
+        out.append(
+            _check("sum_mismatch", ERROR, "Summeringar stämmer inte",
+                   f"{len(mismatch)} tjänsteresor har delsträckor vars summa inte motsvarar resans körsträcka.",
+                   mismatch)
+        )
+    # Överlapp och dubbletter räknas när minst en av resorna ingår i underlaget.
+    overlaps = _unique((a, b) for a, b in _overlap_pairs(physical) if a.id in reported_ids or b.id in reported_ids)
+    if overlaps:
+        out.append(
+            _check("overlapping_trips", ERROR, "Överlappande resor",
+                   f"{len(overlaps)} resor överlappar varandra i tid, varav minst en redovisad tjänsteresa.",
+                   overlaps)
+        )
+    dups = _unique((a, b) for a, b in _duplicate_pairs(physical) if a.id in reported_ids or b.id in reported_ids)
+    if dups:
+        out.append(
+            _check("duplicates", ERROR, "Dubbletter",
+                   f"{len(dups)} resor ser ut att vara dubbletter, varav minst en redovisad tjänsteresa.", dups)
+        )
+
+    # --- upplysningar om de redovisade tjänsteresorna ---------------------------------
+    no_odo = [t for t in reported if t.odometer_start is None or t.odometer_end is None]
+    if no_odo:
+        out.append(
+            _check("missing_odometer", WARNING, "Mätarställning saknas",
+                   f"{len(no_odo)} tjänsteresor saknar mätarställning vid start eller slut. Körsträckan redovisas "
+                   "ändå, men mätarställningen gör den lättare att styrka.", no_odo)
+        )
+    odo_diff = [t for t in reported if not common.is_gap_fill(t) and _odometer_differs(t)]
+    if odo_diff:
+        out.append(
+            _check("odometer_distance_mismatch", WARNING, "Körsträcka avviker från mätarställning",
+                   f"{len(odo_diff)} tjänsteresor har en körsträcka som avviker tydligt från skillnaden i "
+                   "mätarställning.", odo_diff)
+        )
+    uncertain = [t for t in reported if not common.is_gap_fill(t) and _uncertain(t)]
+    if uncertain:
+        out.append(
+            _check("uncertain_quality", WARNING, "Resor med osäker datakvalitet",
+                   f"{len(uncertain)} tjänsteresor är rekonstruerade eller har osäkra tidpunkter/uppgifter.",
+                   uncertain)
+        )
+    return out
+
+
+def _sorted(checks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    order = {ERROR: 0, WARNING: 1, INFO: 2}
+    checks.sort(key=lambda c: order[c["severity"]])
+    return checks
 
 
 def run_checks(
@@ -64,12 +267,24 @@ def run_checks(
     tz: ZoneInfo,
     trip_ids: Iterable[uuid.UUID] | None = None,
     now: datetime | None = None,
+    scope: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Kör alla exportkontroller för perioden (eller för ett urval av resor)."""
+    """Kör alla exportkontroller för perioden (eller för ett urval av resor).
+
+    ``scope`` är journalens omfång (``business_only`` eller ``complete``). Utelämnas det
+    används användarens inställning ``general.journal_scope``.
+    """
     user_id = vehicle.owner_user_id
-    tol = float(settings_svc.get_section(db, user_id, "merge")["odometer_tolerance_km"])
+    if scope is None:
+        scope = settings_svc.journal_scope(db, user_id)
+    if scope not in settings_svc.JOURNAL_SCOPES:
+        raise ValueError(f"Okänt journalomfång: {scope}")
     selection = trip_ids is not None
     trips = common.load_trips(db, vehicle.id, start, end, trip_ids=trip_ids)
+    if scope == settings_svc.SCOPE_BUSINESS_ONLY:
+        return _sorted(_business_only_checks(vehicle, trips))
+
+    tol = float(settings_svc.get_section(db, user_id, "merge")["odometer_tolerance_km"])
     physical = [t for t in trips if not common.is_gap_fill(t)]
     out: list[dict[str, Any]] = []
 
@@ -124,34 +339,19 @@ def run_checks(
             _check("missing_odometer", ERROR, "Mätarställning saknas",
                    f"{len(no_odo)} resor saknar mätarställning vid start eller slut.", no_odo)
         )
-    negative = [
-        t for t in trips
-        if t.distance_km < 0
-        or (t.odometer_start is not None and t.odometer_end is not None and t.odometer_end < t.odometer_start)
-        or any(s.distance_km < 0 for s in t.segments)
-    ]
+    negative = [t for t in trips if _is_negative(t)]
     if negative:
         out.append(
             _check("negative_distance", ERROR, "Negativa körsträckor",
                    f"{len(negative)} resor har negativ körsträcka eller mätarställning som går bakåt.", negative)
         )
-    mismatch = []
-    for t in trips:
-        seg_sum = sum(s.distance_km for s in t.segments)
-        raw_sum = sum(r.distance_km for r in seg.ordered_raws(t))
-        cached = t.work_km + t.private_km + t.undecided_km
-        if abs(seg_sum - t.distance_km) > common.KM_EPS or abs(raw_sum - seg_sum) > common.KM_EPS or abs(cached - seg_sum) > common.KM_EPS:
-            mismatch.append(t)
+    mismatch = [t for t in trips if _sum_mismatch(t)]
     if mismatch:
         out.append(
             _check("sum_mismatch", ERROR, "Summeringar stämmer inte",
                    f"{len(mismatch)} resor har delsträckor vars summa inte motsvarar resans körsträcka.", mismatch)
         )
-    odo_diff = [
-        t for t in physical
-        if t.odometer_start is not None and t.odometer_end is not None and not t.has_gap
-        and abs((t.odometer_end - t.odometer_start) - t.distance_km) > max(3.0, 0.1 * t.distance_km)
-    ]
+    odo_diff = [t for t in physical if _odometer_differs(t)]
     if odo_diff:
         out.append(
             _check("odometer_distance_mismatch", WARNING, "Körsträcka avviker från mätarställning",
@@ -160,42 +360,18 @@ def run_checks(
         )
 
     # --- överlapp och dubbletter ----------------------------------------------------
-    timed = [t for t in physical if t.started_at is not None and t.ended_at is not None]
-    overlaps: list[LogicalTrip] = []
-    for a, b in zip(timed, timed[1:], strict=False):
-        if (b.started_at - a.ended_at).total_seconds() < -60:  # type: ignore[operator]
-            overlaps += [a, b]
+    overlaps = _unique(_overlap_pairs(physical))
     if overlaps:
-        uniq = list({t.id: t for t in overlaps}.values())
         out.append(
             _check("overlapping_trips", ERROR, "Överlappande resor",
-                   f"{len(uniq)} resor överlappar varandra i tid.", uniq)
+                   f"{len(overlaps)} resor överlappar varandra i tid.", overlaps)
         )
-    seen: dict[tuple[Any, ...], LogicalTrip] = {}
-    dups: list[LogicalTrip] = []
-    for t in physical:
-        if t.started_at is None:
-            continue
-        key = (t.started_at.replace(second=0, microsecond=0), t.odometer_start, t.odometer_end, round(t.distance_km, 1))
-        if key in seen:
-            dups += [seen[key], t]
-        else:
-            seen[key] = t
+    dups = _unique(_duplicate_pairs(physical))
     if dups:
-        uniq = list({t.id: t for t in dups}.values())
-        out.append(_check("duplicates", ERROR, "Dubbletter", f"{len(uniq)} resor ser ut att vara dubbletter.", uniq))
+        out.append(_check("duplicates", ERROR, "Dubbletter", f"{len(dups)} resor ser ut att vara dubbletter.", dups))
 
     # --- datakvalitet ---------------------------------------------------------------
-    uncertain = []
-    for t in physical:
-        flags = set(t.quality_flags or [])
-        if (
-            not t.is_complete
-            or flags & {"possible_missed_trips", "start_time_uncertain", "end_time_uncertain"}
-            or t.start_time_quality in (TimeQuality.BOUNDED, TimeQuality.UNKNOWN, TimeQuality.ESTIMATED)
-            or t.source == TripSource.VOLVO_API
-        ):
-            uncertain.append(t)
+    uncertain = [t for t in physical if _uncertain(t)]
     if uncertain:
         out.append(
             _check("uncertain_quality", WARNING, "Resor med osäker datakvalitet",
@@ -284,6 +460,4 @@ def run_checks(
                    "Exporten innehåller endast ett urval av resor och kan inte stämmas av mot mätarställningen.", count=1)
         )
 
-    order = {ERROR: 0, WARNING: 1, INFO: 2}
-    out.sort(key=lambda c: order[c["severity"]])
-    return out
+    return _sorted(out)

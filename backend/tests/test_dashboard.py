@@ -38,7 +38,7 @@ def build_week(db, trips):
     return t1, t2, t3, t4
 
 
-def test_summary_matches_hand_computed_values(db, user, vehicle, trips):
+def test_summary_matches_hand_computed_values(db, user, vehicle, trips, complete_scope):
     build_week(db, trips)
     out = summary(db, vehicle)
     d = out["distance"]
@@ -116,7 +116,7 @@ def test_resolve_period_handles_dst_and_validation():
         common.resolve_period("decade", tz=TZ)
 
 
-def test_open_gaps_are_reported_and_private_is_not_derived(db, user, vehicle, trips):
+def test_open_gaps_are_reported_and_private_is_not_derived(db, user, vehicle, trips, complete_scope):
     trips.trip(A, C, category=Category.WORK, purpose="Kundbesök", km=20.0)
     trips.skip(hours=2, km=60)
     trips.trip(C, A, category=Category.WORK, purpose="Retur", km=20.0)
@@ -137,7 +137,7 @@ def test_open_gaps_are_reported_and_private_is_not_derived(db, user, vehicle, tr
     assert "1 dataluckor (60 km) saknar journalpost" in weekly["message"]
 
 
-def test_reconciled_period_is_complete(db, user, vehicle, trips):
+def test_reconciled_period_is_complete(db, user, vehicle, trips, complete_scope):
     db.add(M.VehicleOdometerSnapshot(vehicle_id=vehicle.id, at=SEPT.start, odometer_km=10000, source="manual"))
     trips.trip(A, C, category=Category.WORK, purpose="Kundbesök", km=20.0)
     trips.trip(C, A, category=Category.PRIVATE, km=20.0, gap_minutes=60)

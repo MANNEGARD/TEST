@@ -40,6 +40,7 @@ from app.models.enums import (  # noqa: E402
 )
 from app.security import passwords, ratelimit  # noqa: E402
 from app.services import audit  # noqa: E402
+from app.services import settings as settings_svc  # noqa: E402
 from app.services.places import registry as places  # noqa: E402
 from app.services.trips import segments as seg  # noqa: E402
 
@@ -108,6 +109,18 @@ def vehicle(db: Session, user: M.User) -> M.Vehicle:
 @pytest.fixture()
 def actor(user: M.User) -> audit.Actor:
     return audit.user_actor(user.id)
+
+
+@pytest.fixture()
+def complete_scope(db: Session, user: M.User) -> None:
+    """Kör testet som fullständig körjournal (t.ex. förmånsbil).
+
+    Standardomfånget är ``business_only`` (endast tjänsteresor redovisas, luckor är privat
+    körning). Tester som prövar avstämning mot mätarställningen begär den här fixturen.
+    I API-tester ska den stå före ``client`` så att inställningen sparas med användaren.
+    """
+    settings_svc.update_section(db, user.id, "general", {"journal_scope": settings_svc.SCOPE_COMPLETE})
+    db.flush()
 
 
 @pytest.fixture()

@@ -83,7 +83,7 @@ def test_negative_elapsed_time(db, user, vehicle, trips):
     assert scan(db, user, vehicle)["created"]["time_conflict"] == 1
 
 
-def test_large_gap(db, user, vehicle):
+def test_large_gap(db, user, vehicle, complete_scope):
     db.add(M.DataGap(vehicle_id=vehicle.id, kind=GapKind.ODOMETER, dedupe_key="odo:1000:1700", odometer_start=1000,
                      odometer_end=1700, km=700.0, status=GapStatus.OPEN))
     db.add(M.DataGap(vehicle_id=vehicle.id, kind=GapKind.ODOMETER, dedupe_key="odo:2000:2050", odometer_start=2000,
@@ -113,7 +113,7 @@ def test_too_few_samples_no_consumption_anomaly():
     assert anomalies.robust_outliers([5.0] * 25 + [50.0]) == [25]
 
 
-def test_observation_jump_backwards_and_missed_trips(db, user, vehicle, trips):
+def test_observation_jump_backwards_and_missed_trips(db, user, vehicle, trips, complete_scope):
     trips.trip(km=10.0)  # journalen slutar på 10010 km
     obs(db, vehicle, NOW - timedelta(days=3), 10010)
     obs(db, vehicle, NOW - timedelta(days=3, hours=-2), 11500)  # +1490 km på 2 h

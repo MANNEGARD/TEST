@@ -67,7 +67,8 @@ export function NavList({ onNavigate }: { onNavigate?: () => void }) {
 
 export function Sidebar() {
   return (
-    <aside className="fixed inset-y-0 left-0 z-30 hidden w-60 flex-col border-r border-border bg-surface lg:flex">
+    <aside className="hidden w-60 shrink-0 border-r border-border bg-surface lg:block">
+      <div className="sticky top-0 flex h-dvh flex-col">
       <div className="flex h-14 items-center border-b border-border px-4">
         <Link href="/" className="rounded-md focus-visible:outline-2 focus-visible:outline-ring" aria-label="SMGD DriveLog – Översikt">
           <Logo />
@@ -80,6 +81,7 @@ export function Sidebar() {
         Självhostad körjournal.
         <br />
         Dina uppgifter lämnar aldrig servern.
+      </div>
       </div>
     </aside>
   );

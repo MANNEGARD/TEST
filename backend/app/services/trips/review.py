@@ -25,11 +25,14 @@ def upsert(
     logical_trip_id: uuid.UUID | None = None,
     data: dict[str, Any] | None = None,
     reopen: bool = False,
+    reopen_reason: str | None = None,
 ) -> tuple[ReviewItem, bool]:
     """Skapar ärendet om det saknas. Returnerar (ärende, skapades_nu).
 
     Ett ärende som användaren redan avgjort eller avfärdat öppnas inte igen om inte
-    ``reopen`` anges – samma fråga ska inte ställas två gånger.
+    ``reopen`` anges – samma fråga ska inte ställas två gånger. Med ``reopen_reason``
+    öppnas ärendet igen bara om systemet självt stängde det med just den orsaken
+    (``resolution["reason"]``), aldrig om användaren har avgjort eller avfärdat det.
     """
     item = db.execute(
         select(ReviewItem).where(ReviewItem.vehicle_id == vehicle_id, ReviewItem.dedupe_key == dedupe_key)
@@ -51,7 +54,11 @@ def upsert(
         item.title, item.detail = title, detail
         item.logical_trip_id = logical_trip_id
         item.data = data or item.data
-    elif reopen:
+    elif reopen or (
+        reopen_reason is not None
+        and item.status == ReviewState.RESOLVED
+        and (item.resolution or {}).get("reason") == reopen_reason
+    ):
         item.status = ReviewState.OPEN
         item.title, item.detail = title, detail
         item.logical_trip_id = logical_trip_id
@@ -134,6 +141,10 @@ def wake_snoozed(db: Session, now: datetime | None = None) -> int:
         item.snoozed_until = None
     db.flush()
     return len(items)
+
+
+# Orsak när ett ärende stängs för att journalen bara omfattar tjänsteresor (business_only).
+SCOPE_REASON = "journal_scope"
 
 
 def trip_key(kind: str, trip_id: uuid.UUID) -> str:

@@ -2,6 +2,11 @@
 
 Ordningen är: sammanslagningsregler → dataluckor → platsstatistik → mönster →
 klassificering av oavgjorda resor → granskningsärenden → ev. notiser.
+
+Luckor i mätarställningen mellan resorna ger aldrig granskningsärenden här – de
+räknas bara fram (``gaps.recompute``). I omfånget ``business_only`` är de privat
+körning; då skapas inte heller ärendet "misstänkt datalucka" för resor som är helt
+privata, eftersom privat körning inte redovisas.
 """
 
 from __future__ import annotations
@@ -33,9 +38,22 @@ def _route(trip: LogicalTrip) -> str:
     return f"{trip.start_address or 'Okänd start'} → {trip.end_address or 'okänt mål'}"
 
 
-def sync_trip_review_items(db: Session, trip: LogicalTrip, *, by: str = "system") -> list[str]:
-    """Skapar/stänger granskningsärenden utifrån resans aktuella läge. Idempotent."""
+def _trip_scope(db: Session, trip: LogicalTrip) -> str:
+    vehicle = db.get(Vehicle, trip.vehicle_id)
+    if vehicle is None:
+        return settings_svc.SCOPE_COMPLETE
+    return settings_svc.journal_scope(db, vehicle.owner_user_id)
+
+
+def sync_trip_review_items(
+    db: Session, trip: LogicalTrip, *, by: str = "system", scope: str | None = None
+) -> list[str]:
+    """Skapar/stänger granskningsärenden utifrån resans aktuella läge. Idempotent.
+
+    ``scope`` är journalens omfång; utelämnas det slås användarens inställning upp vid behov.
+    """
     wanted: dict[str, tuple[str, str | None]] = {}
+    out_of_scope: set[str] = set()  # ärenden som inte är aktuella i journalens omfång
     if trip.state == LogicalState.ACTIVE:
         approved = trip.review_status in (ReviewStatus.APPROVED, ReviewStatus.IMPORTED)
         if trip.has_mixed_categories and not approved:
@@ -61,11 +79,15 @@ def sync_trip_review_items(db: Session, trip: LogicalTrip, *, by: str = "system"
         if "missing_odometer" in flags:
             wanted[ReviewKind.MISSING_ODOMETER] = (f"Mätarställning saknas: {_route(trip)}", None)
         if "possible_missed_trips" in flags:
-            wanted[ReviewKind.DATA_GAP] = (
-                f"Misstänkt datalucka: {_route(trip)}",
-                "Mätarställningen visar längre körsträcka än vad positionerna förklarar. "
-                "Flera körningar kan ha skett. Komplettera gärna med Volvos körjournal.",
-            )
+            # Privat körning redovisas inte när endast tjänsteresor ingår i journalen.
+            if seg.is_private_only(trip) and (scope or _trip_scope(db, trip)) == settings_svc.SCOPE_BUSINESS_ONLY:
+                out_of_scope.add(ReviewKind.DATA_GAP)
+            else:
+                wanted[ReviewKind.DATA_GAP] = (
+                    f"Misstänkt datalucka: {_route(trip)}",
+                    "Mätarställningen visar längre körsträcka än vad positionerna förklarar. "
+                    "Flera körningar kan ha skett. Komplettera gärna med Volvos körjournal.",
+                )
     created: list[str] = []
     for kind in _TRIP_KINDS:
         key = review.trip_key(kind, trip.id)
@@ -81,9 +103,15 @@ def sync_trip_review_items(db: Session, trip: LogicalTrip, *, by: str = "system"
                 logical_trip_id=trip.id,
                 data={"trip_id": str(trip.id)},
                 reopen=kind in (ReviewKind.CATEGORY, ReviewKind.PURPOSE, ReviewKind.TAX_UNCERTAIN, ReviewKind.MIXED_ALLOCATION),
+                # Ett ärende som stängdes enbart p.g.a. journalens omfång blir aktuellt igen.
+                reopen_reason=review.SCOPE_REASON,
             )
             if was_created:
                 created.append(kind)
+        elif kind in out_of_scope:
+            review.resolve_by_key(
+                db, trip.vehicle_id, key, by="system", resolution={"auto": True, "reason": review.SCOPE_REASON}
+            )
         else:
             review.resolve_by_key(db, trip.vehicle_id, key, by=by, resolution={"auto": True})
     return created
@@ -106,6 +134,7 @@ def after_trips_changed(
     from app.services.learning import patterns
 
     merge_cfg = settings_svc.get_section(db, user_id, "merge")
+    scope = settings_svc.journal_scope(db, user_id)
     out: dict[str, Any] = {"origin": origin}
 
     merge_result = merge.evaluate_vehicle(
@@ -137,7 +166,7 @@ def after_trips_changed(
 
     new_trip_items: list[tuple[LogicalTrip, list[str]]] = []
     for trip in seg.active_trips(db, vehicle.id):
-        created = sync_trip_review_items(db, trip)
+        created = sync_trip_review_items(db, trip, scope=scope)
         if created:
             new_trip_items.append((trip, created))
     out["new_review_trips"] = len(new_trip_items)

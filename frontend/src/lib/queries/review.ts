@@ -6,6 +6,17 @@ import type { Gap, GapList, ReviewItem, ReviewList, Trip } from "../types";
 import { useVehicle } from "../vehicle";
 import { invalidateJournalData, qk } from "./keys";
 
+/**
+ * Ärendetyper som inte visas i granskningen. Användningsfallet är milersättning:
+ * luckor i mätarställningen är privat körning – inte fel – och visas därför inte.
+ */
+export const HIDDEN_REVIEW_KINDS: readonly string[] = ["data_gap"];
+
+export function visibleOpenCount(list: ReviewList | undefined): number | undefined {
+  if (!list) return undefined;
+  return Object.entries(list.open_counts).reduce((sum, [k, n]) => (HIDDEN_REVIEW_KINDS.includes(k) ? sum : sum + n), 0);
+}
+
 export function useReviewItems(params: { kind?: string[]; status?: string; limit?: number } = {}) {
   const { vehicleId } = useVehicle();
   const query = { status: "open", limit: 200, ...params, vehicle_id: vehicleId };
@@ -19,7 +30,7 @@ export function useReviewItems(params: { kind?: string[]; status?: string; limit
 /** Antal öppna ärenden (för sidomenyns märke). Delar cache med listan. */
 export function useOpenReviewCount() {
   const { data } = useReviewItems();
-  return data?.open_total;
+  return visibleOpenCount(data);
 }
 
 export function useGaps(onlyOpen = false) {

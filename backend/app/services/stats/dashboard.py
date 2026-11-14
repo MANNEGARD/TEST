@@ -6,6 +6,8 @@ Principer:
 * Preliminära AI-/regelklassningar särredovisas och presenteras aldrig som godkända.
 * Öppna dataluckor redovisas som ej journalförda km. Privat körning härleds aldrig
   som "total körning minus tjänsteresor" om perioden inte är avstämd.
+* I omfånget ``business_only`` (egen bil, milersättning) redovisas bara tjänsteresor.
+  Körningen mellan dem är privat: den visas neutralt och är varken fel eller varning.
 * Bensin/el: endast uppmätta värden per resa räknas som verifierade; snitt per 100 km
   beräknas bara över sträcka som har verifierade värden.
 """
@@ -51,6 +53,11 @@ from app.services.stats.common import EnergyAcc, Totals
 from app.services.trips import segments as seg
 
 MAX_BUCKETS = 800
+
+BUSINESS_ONLY_LABEL = "Endast tjänsteresor redovisas"
+BUSINESS_ONLY_EXPLANATION = (
+    "Körningen mellan de redovisade tjänsteresorna är privat och ingår inte i underlaget."
+)
 _MONTHS_SV = ["jan", "feb", "mar", "apr", "maj", "jun", "jul", "aug", "sep", "okt", "nov", "dec"]
 
 
@@ -110,8 +117,14 @@ def coverage(
     end: datetime | None,
     *,
     now: datetime | None = None,
+    scope: str | None = None,
 ) -> dict[str, Any]:
-    """Datatäckning för perioden: komplett journal, importerat urval eller ofullständig."""
+    """Datatäckning för perioden.
+
+    ``complete``: komplett journal, importerat urval eller ofullständig period.
+    ``business_only``: endast tjänsteresor redovisas – luckor bedöms inte.
+    """
+    scope = scope or settings_svc.journal_scope(db, user_id)
     tol = float(settings_svc.get_section(db, user_id, "merge")["odometer_tolerance_km"])
     gaps = common.open_gaps(db, vehicle.id, start, end)
     gap_km = round(sum(g.km for g in gaps), 1)
@@ -148,6 +161,8 @@ def coverage(
     )
     if not trips:
         status, explanation = "no_data", "Inga journalförda resor i perioden."
+    elif scope == settings_svc.SCOPE_BUSINESS_ONLY:
+        status, explanation = settings_svc.SCOPE_BUSINESS_ONLY, BUSINESS_ONLY_EXPLANATION
     elif reconciled:
         status = Coverage.COMPLETE
         explanation = "Mätarställningen vid periodens början och slut stämmer med de journalförda resorna."
@@ -176,11 +191,13 @@ def coverage(
 
     label = {
         "no_data": "Inga data",
+        settings_svc.SCOPE_BUSINESS_ONLY: BUSINESS_ONLY_LABEL,
         Coverage.COMPLETE: COVERAGE_LABELS_SV[Coverage.COMPLETE],
         Coverage.SELECTION: COVERAGE_LABELS_SV[Coverage.SELECTION],
         Coverage.INCOMPLETE: COVERAGE_LABELS_SV[Coverage.INCOMPLETE],
     }[status]
     return {
+        "scope": scope,
         "status": str(status),
         "label": label,
         "explanation": explanation,
@@ -267,6 +284,27 @@ def review_counts(db: Session, vehicle: Vehicle) -> dict[str, Any]:
 # ----------------------------------------------------------------------------- sammanfattning
 
 
+def unjournaled(cov: dict[str, Any], scope: str) -> dict[str, Any]:
+    """Kilometer i mätarställningen mellan de journalförda resorna.
+
+    I omfånget ``business_only`` är de förväntade (privat körning) och märks neutralt
+    så att gränssnittet kan tona ner eller dölja dem.
+    """
+    expected = scope == settings_svc.SCOPE_BUSINESS_ONLY
+    return {
+        "open_gap_km": cov["open_gap_km"],
+        "open_gap_mil": common.km_to_mil(cov["open_gap_km"]),
+        "open_gap_count": cov["open_gap_count"],
+        "expected": expected,
+        "label": "Övrig körning (redovisas inte)" if expected else "Ej journalförda km",
+        "note": (
+            "Körning mellan de redovisade tjänsteresorna. Den är privat och ingår inte i underlaget."
+            if expected
+            else "Kilometer i mätarställningen som saknar journalpost. Ingår inte i någon kategori."
+        ),
+    }
+
+
 def summary(
     db: Session,
     *,
@@ -278,11 +316,14 @@ def summary(
 ) -> dict[str, Any]:
     """Dashboardens nyckeltal för en period."""
     user_id = vehicle.owner_user_id
+    scope = settings_svc.journal_scope(db, user_id)
     trips = common.load_trips(db, vehicle.id, start, end)
     totals = common.totals_for(trips)
-    cov = coverage(db, vehicle, user_id, trips, start, end, now=now)
+    cov = coverage(db, vehicle, user_id, trips, start, end, now=now, scope=scope)
     costs = _costs(db, vehicle, user_id, start, end, totals)
+    rate, show_amount = settings_svc.reimbursement_settings(db, user_id)
     return {
+        "journal_scope": scope,
         "vehicle": {
             "id": str(vehicle.id),
             "name": vehicle.name,
@@ -291,12 +332,8 @@ def summary(
         },
         "period": {"start": start, "end": end, "timezone": str(tz)},
         "distance": totals.distance_dict(),
-        "unjournaled": {
-            "open_gap_km": cov["open_gap_km"],
-            "open_gap_mil": common.km_to_mil(cov["open_gap_km"]),
-            "open_gap_count": cov["open_gap_count"],
-            "note": "Kilometer i mätarställningen som saknar journalpost. Ingår inte i någon kategori.",
-        },
+        "unjournaled": unjournaled(cov, scope),
+        "reimbursement": common.reimbursement(trips, rate_per_mil=rate, show_amount=show_amount),
         "trips": {
             "total": totals.trips,
             "by_category": totals.by_kind,
@@ -575,6 +612,7 @@ __all__ = [
     "routes",
     "summary",
     "timeseries",
+    "unjournaled",
     "vehicle_status",
     "UTC",
 ]

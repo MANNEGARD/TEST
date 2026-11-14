@@ -2,6 +2,11 @@
 
 Sökningen är idempotent: ärendena har stabila nycklar, och ett ärende som användaren
 avgjort eller avfärdat öppnas inte igen.
+
+I omfånget ``business_only`` (endast tjänsteresor redovisas) är luckor i mätarställningen
+privat körning. Avvikelser som enbart bygger på sådana luckor – stora kilometergap och
+"missade resor" mellan journalen och fordonets mätarställning – skapas då inte, och
+redan öppna sådana ärenden stängs. Övriga avvikelser påverkas inte av omfånget.
 """
 
 from __future__ import annotations
@@ -38,8 +43,12 @@ MISSED_TRIP_SETTLE = timedelta(hours=2)
 _MAD_SCALE = 1.4826
 
 
+# Nyckelprefix för avvikelser som enbart bygger på luckor i mätarställningen.
+GAP_ANOMALY_PREFIXES = {"large_gap": "anomaly:large_gap:", "missed_trips": "anomaly:missed:"}
+
+
 def _upsert(db: Session, vehicle: Vehicle, key: str, title: str, detail: str, data: dict[str, Any],
-            trip_id: uuid.UUID | None = None) -> bool:
+            trip_id: uuid.UUID | None = None, reopen_reason: str | None = None) -> bool:
     _, created = review.upsert(
         db,
         vehicle_id=vehicle.id,
@@ -49,8 +58,32 @@ def _upsert(db: Session, vehicle: Vehicle, key: str, title: str, detail: str, da
         detail=detail,
         logical_trip_id=trip_id,
         data=data,
+        reopen_reason=reopen_reason,
     )
     return created
+
+
+def close_gap_anomalies(db: Session, vehicle: Vehicle) -> dict[str, int]:
+    """Stänger öppna (och uppskjutna) avvikelser som enbart bygger på luckor i mätarställningen.
+
+    Används i omfånget ``business_only``. Ärendena stängs med orsaken ``journal_scope`` så
+    att de kan öppnas igen om användaren går över till fullständig körjournal.
+    """
+    closed: dict[str, int] = {}
+    for kind, prefix in GAP_ANOMALY_PREFIXES.items():
+        items = db.execute(
+            select(ReviewItem).where(
+                ReviewItem.vehicle_id == vehicle.id,
+                ReviewItem.kind == ReviewKind.ANOMALY,
+                ReviewItem.status.in_((ReviewState.OPEN, ReviewState.SNOOZED)),
+                ReviewItem.dedupe_key.like(f"{prefix}%"),
+            )
+        ).scalars().all()
+        for item in items:
+            review.resolve(db, item, by="system", resolution={"auto": True, "reason": review.SCOPE_REASON})
+        if items:
+            closed[kind] = len(items)
+    return closed
 
 
 def _raws(db: Session, vehicle: Vehicle) -> list[RawTrip]:
@@ -81,6 +114,9 @@ def robust_outliers(values: list[float], *, z_limit: float = MAD_Z_LIMIT, min_ab
 def scan_vehicle(db: Session, vehicle: Vehicle, *, user_id: uuid.UUID, now: datetime | None = None) -> dict[str, Any]:
     """Söker efter avvikelser för ett fordon. Returnerar antal nya ärenden per typ."""
     now = now or utcnow()
+    scope = settings_svc.journal_scope(db, user_id)
+    # Luckor i mätarställningen är privat körning när endast tjänsteresor redovisas.
+    gaps_are_expected = scope == settings_svc.SCOPE_BUSINESS_ONLY
     tol = float(settings_svc.get_section(db, user_id, "merge")["odometer_tolerance_km"])
     volvo_cfg = settings_svc.get_section(db, user_id, "volvo")
     created: dict[str, int] = {}
@@ -93,20 +129,22 @@ def scan_vehicle(db: Session, vehicle: Vehicle, *, user_id: uuid.UUID, now: date
 
     raws = _raws(db, vehicle)
 
-    # 1. Ovanligt stora kilometergap
-    for gap in db.execute(
+    # 1. Ovanligt stora kilometergap (inte när luckor är förväntad privat körning)
+    large_gaps = [] if gaps_are_expected else db.execute(
         select(DataGap).where(
             DataGap.vehicle_id == vehicle.id, DataGap.is_current.is_(True), DataGap.status == GapStatus.OPEN,
             DataGap.km >= LARGE_GAP_KM,
         )
-    ).scalars():
+    ).scalars().all()
+    for gap in large_gaps:
         hit(
             "large_gap",
             _upsert(
-                db, vehicle, f"anomaly:large_gap:{gap.dedupe_key}",
+                db, vehicle, f"{GAP_ANOMALY_PREFIXES['large_gap']}{gap.dedupe_key}",
                 f"Ovanligt stort kilometergap: {gap.km:.0f} km",
                 f"Mellan mätarställning {gap.odometer_start:.0f} och {gap.odometer_end:.0f} km saknas journalposter.",
                 {"type": "large_gap", "gap_id": str(gap.id), "km": gap.km},
+                reopen_reason=review.SCOPE_REASON,
             ),
         )
 
@@ -253,7 +291,7 @@ def scan_vehicle(db: Session, vehicle: Vehicle, *, user_id: uuid.UUID, now: date
                     {"type": "odometer_jump", "observation_id": str(b.id), "km": delta},
                 ),
             )
-    if observations and raws:
+    if observations and raws and not gaps_are_expected:
         last_obs = observations[-1]
         journal_max = max((r.odometer_end for r in raws if r.odometer_end is not None), default=None)
         seen = last_obs.last_seen_at or last_obs.fetched_at
@@ -267,11 +305,12 @@ def scan_vehicle(db: Session, vehicle: Vehicle, *, user_id: uuid.UUID, now: date
             hit(
                 "missed_trips",
                 _upsert(
-                    db, vehicle, f"anomaly:missed:{journal_max:.0f}:{last_obs.odometer_km:.0f}",
+                    db, vehicle, f"{GAP_ANOMALY_PREFIXES['missed_trips']}{journal_max:.0f}:{last_obs.odometer_km:.0f}",
                     f"Misstänkt missade resor: {km:.0f} km saknar journalpost",
                     f"Fordonet rapporterar {last_obs.odometer_km:.0f} km men journalen slutar på {journal_max:.0f} km. "
                     "Komplettera med Volvos körjournal eller registrera resorna manuellt.",
                     {"type": "missed_trips", "km": round(km, 1)},
+                    reopen_reason=review.SCOPE_REASON,
                 ),
             )
 
@@ -315,11 +354,16 @@ def scan_vehicle(db: Session, vehicle: Vehicle, *, user_id: uuid.UUID, now: date
         for item in stale_open:  # uppgifterna flödar igen
             review.resolve(db, item, by="system", resolution={"auto": True, "reason": "data_fresh"})
 
+    closed = close_gap_anomalies(db, vehicle) if gaps_are_expected else {}
+
     db.flush()
     return {
         "vehicle_id": str(vehicle.id),
         "scanned_at": now,
+        "scope": scope,
         "found": found,
         "created": created,
         "created_total": sum(created.values()),
+        "closed": closed,
+        "closed_total": sum(closed.values()),
     }

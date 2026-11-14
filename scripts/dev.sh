@@ -35,7 +35,7 @@ API_PID=$!
 
 cd "$ROOT/frontend"
 [[ -d node_modules ]] || npm install
-API_INTERNAL_URL=http://127.0.0.1:8000 npx next dev --port 3000 &
+API_INTERNAL_URL=http://127.0.0.1:8000 node_modules/.bin/next dev --port 3000 &
 WEB_PID=$!
 
 echo "Backend:  http://127.0.0.1:8000/api/v1   (data: $DATA_DIR)"

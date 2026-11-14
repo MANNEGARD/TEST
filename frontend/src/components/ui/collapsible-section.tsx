@@ -14,6 +14,7 @@ export function CollapsibleSection({
   children,
   className,
   id,
+  onToggle,
 }: {
   title: React.ReactNode;
   meta?: React.ReactNode;
@@ -22,9 +23,11 @@ export function CollapsibleSection({
   children: React.ReactNode;
   className?: string;
   id?: string;
+  /** Anropas när sektionen öppnas/stängs (t.ex. för att hämta data först vid behov). */
+  onToggle?: (open: boolean) => void;
 }) {
   return (
-    <details id={id} open={defaultOpen} className={cn("group rounded-lg border border-border bg-surface shadow-sm", className)}>
+    <details id={id} open={defaultOpen} onToggle={onToggle ? (e) => onToggle(e.currentTarget.open) : undefined} className={cn("group rounded-lg border border-border bg-surface shadow-sm", className)}>
       <summary className="flex cursor-pointer list-none items-center gap-3 rounded-lg px-5 py-3.5 select-none hover:bg-surface-2/50 focus-visible:outline-2 focus-visible:outline-ring [&::-webkit-details-marker]:hidden">
         <ChevronRight className="size-4 shrink-0 text-fg-subtle transition-transform group-open:rotate-90" aria-hidden />
         {icon ? <span className="text-fg-subtle [&_svg]:size-4">{icon}</span> : null}

@@ -56,6 +56,7 @@ export function PointMap({
   React.useEffect(() => {
     let disposed = false;
     let map: import("maplibre-gl").Map | null = null;
+    let observer: ResizeObserver | null = null;
     (async () => {
       const ml = await import("maplibre-gl");
       if (disposed || !ref.current) return;
@@ -83,6 +84,8 @@ export function PointMap({
         cooperativeGestures: true,
         fadeDuration: reduced ? 0 : 300,
       });
+      observer = new ResizeObserver(() => map?.resize());
+      observer.observe(ref.current);
       map.addControl(new ml.NavigationControl({ showCompass: false }), "top-right");
 
       map.on("load", () => {
@@ -105,6 +108,7 @@ export function PointMap({
       for (const p of points) {
         const el = document.createElement("div");
         const size = p.kind === "observation" ? 10 : 16;
+        el.className = "dl-marker";
         el.style.cssText = `width:${size}px;height:${size}px;border-radius:999px;background:${COLORS[p.kind]};border:2px solid ${resolved === "dark" ? "#151a21" : "#fff"};box-shadow:0 1px 3px rgba(0,0,0,.35);`;
         el.setAttribute("aria-label", p.label);
         el.setAttribute("role", "img");
@@ -122,6 +126,7 @@ export function PointMap({
     })();
     return () => {
       disposed = true;
+      observer?.disconnect();
       map?.remove();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

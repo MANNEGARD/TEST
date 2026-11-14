@@ -38,14 +38,14 @@ export function TripCard({
     >
       <header className="flex items-center gap-2">
         <Checkbox checked={selected} onCheckedChange={(v) => onSelect(v === true)} aria-label={`Markera resan ${formatDate(when)}`} />
-        <Link href={`/journal/${t.id}`} className="flex min-w-0 flex-1 items-baseline gap-1.5 rounded-sm focus-visible:outline-2 focus-visible:outline-ring">
-          <span className="text-xs text-fg-subtle">{formatWeekday(when, true)}</span>
-          <span className="font-mono text-[13px] font-medium">{formatDate(when)}</span>
-          <span className="font-mono text-xs text-fg-muted">
+        <Link href={`/journal/${t.id}`} className="flex min-w-0 flex-1 items-baseline gap-1.5 overflow-hidden whitespace-nowrap rounded-sm text-xs focus-visible:outline-2 focus-visible:outline-ring">
+          <span className="text-fg-subtle">{formatWeekday(when, true)}</span>
+          <span className="font-medium text-fg num">{formatDate(when)}</span>
+          <span className="truncate text-fg-muted num">
             <TripTime at={t.started_at} quality={t.start_time_quality} />–<TripTime at={t.ended_at} quality={t.end_time_quality} />
           </span>
         </Link>
-        <span className="font-mono text-[15px] font-semibold">
+        <span className="shrink-0 font-mono text-[15px] font-semibold">
           <QualityValue value={formatKm(t.distance_km)} quality={t.quality_flags.includes("distance_estimated") ? "estimated" : "actual"} explanation={distanceQualityNote(t)} />
         </span>
         <FavoriteStar active={t.is_favorite} onToggle={() => handlers.onFavorite(t)} className="-mr-1" />

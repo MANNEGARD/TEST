@@ -257,6 +257,11 @@ export const QUALITY_FLAG_LABELS: Record<string, string> = {
   possible_missed_trips: "Möjligen fler körningar",
   summary_of_gap: "Sammanfattning av lucka",
   user_entered: "Inmatad av användaren",
+  observed_in_motion: "Observerad under färd",
+  reconstructed: "Rekonstruerad ur fordonsrapporter",
+  start_time_uncertain: "Osäker starttid",
+  stop_times_uncertain: "Osäkra stopptider",
+  split_by_position_reports: "Uppdelad efter positionsrapporter",
 };
 
 export const EVIDENCE_DIRECTION_LABELS: Record<string, string> = {

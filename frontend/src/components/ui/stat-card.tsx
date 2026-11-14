@@ -55,7 +55,7 @@ export function StatCard({
         <Skeleton className="mt-3 h-7 w-24" />
       ) : (
         <div className="mt-2 flex items-baseline gap-1.5">
-          <span className="font-mono text-[26px] leading-none font-medium tracking-tight text-fg num">{value}</span>
+          <span className="font-mono text-[21px] leading-none font-medium tracking-tight text-fg num sm:text-[26px]">{value}</span>
           {unit ? <span className="text-sm text-fg-muted">{unit}</span> : null}
         </div>
       )}
@@ -64,7 +64,7 @@ export function StatCard({
     </>
   );
   const cls = cn(
-    "flex flex-col rounded-lg border border-border bg-surface p-4 shadow-sm",
+    "flex min-w-0 flex-col rounded-lg border border-border bg-surface p-3.5 shadow-sm sm:p-4",
     href && "transition-colors hover:border-border-strong focus-visible:outline-2 focus-visible:outline-ring",
     className,
   );
