@@ -224,3 +224,32 @@ export function formatChange(fraction: number | null | undefined): string {
 export function plural(n: number, one: string, many: string): string {
   return `${formatNumber(n, 0)} ${n === 1 ? one : many}`;
 }
+
+// ----------------------------------------------------------------------------- indata
+
+function tzOffsetMs(utcMs: number): number {
+  const p = parts(new Date(utcMs), {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  });
+  const asUtc = Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day), Number(p.hour), Number(p.minute), Number(p.second));
+  return asUtc - utcMs;
+}
+
+/**
+ * Lokalt datum + klockslag i användarens tidszon → ISO-8601 i UTC (med "Z").
+ * Används när användaren matar in tider (backend kräver tidszon).
+ */
+export function zonedToISO(dateISO: string, time: string): string {
+  const [y, m, d] = dateISO.split("-").map(Number);
+  const [hh, mm] = time.split(":").map(Number);
+  const guess = Date.UTC(y, m - 1, d, hh, mm);
+  let utc = guess - tzOffsetMs(guess);
+  utc = guess - tzOffsetMs(utc); // korrigera över sommartidsskifte
+  return new Date(utc).toISOString();
+}

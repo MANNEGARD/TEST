@@ -14,8 +14,9 @@ type S = components["schemas"];
 
 export type Trip = S["TripOut"];
 export type TripList = S["TripListOut"];
-export type TripUpdate = S["TripUpdate"];
-export type BulkUpdate = S["BulkUpdate"];
+/** Fält med standardvärde i backend (t.ex. approve=false) är valfria här. */
+export type TripUpdate = Partial<S["TripUpdate"]>;
+export type BulkUpdate = Partial<S["BulkUpdate"]> & { trip_ids: string[] };
 export type ManualTrip = S["ManualTrip"];
 export type Vehicle = S["VehicleOut"];
 export type LocationBrief = S["LocationBrief"];

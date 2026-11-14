@@ -22,25 +22,25 @@ export interface NavItem {
   icon: LucideIcon;
   mobile?: boolean;
   badge?: "review";
-  group: "main" | "data" | "system";
+  group: "main" | "system" | "more";
 }
 
 export const NAV_ITEMS: NavItem[] = [
   { href: "/", label: "Översikt", icon: LayoutDashboard, mobile: true, group: "main" },
   { href: "/journal", label: "Körjournal", icon: NotebookTabs, mobile: true, group: "main" },
   { href: "/review", label: "Granskning", icon: ClipboardCheck, mobile: true, badge: "review", group: "main" },
+  { href: "/export", label: "Export", icon: Download, mobile: true, group: "main" },
   { href: "/places", label: "Platser", icon: MapPin, group: "main" },
-  { href: "/energy", label: "Bränsle & energi", icon: Fuel, mobile: true, group: "main" },
-  { href: "/import", label: "Import", icon: Upload, group: "data" },
-  { href: "/export", label: "Export", icon: Download, group: "data" },
   { href: "/integrations", label: "Integrationer", icon: PlugZap, group: "system" },
   { href: "/settings", label: "Inställningar", icon: Settings, group: "system" },
+  { href: "/import", label: "Import", icon: Upload, group: "more" },
+  { href: "/energy", label: "Bränsle & energi", icon: Fuel, group: "more" },
 ];
 
 export const NAV_GROUP_LABELS: Record<NavItem["group"], string | null> = {
   main: null,
-  data: "Data",
   system: "System",
+  more: "Mer",
 };
 
 export function isActive(pathname: string, href: string): boolean {

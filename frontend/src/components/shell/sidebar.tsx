@@ -26,7 +26,7 @@ export function NavBadge({ count, className }: { count: number | undefined; clas
 export function NavList({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
   const reviewCount = useOpenReviewCount();
-  const groups = (["main", "data", "system"] as NavItem["group"][]).map((g) => ({
+  const groups = (["main", "system", "more"] as NavItem["group"][]).map((g) => ({
     group: g,
     items: NAV_ITEMS.filter((i) => i.group === g),
   }));

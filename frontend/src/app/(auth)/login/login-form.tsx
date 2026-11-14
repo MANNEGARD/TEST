@@ -8,7 +8,7 @@ import { retryUntil, useCountdown } from "@/components/auth/rate-limit";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
 import { ApiError, errorMessage } from "@/lib/api";
-import { useLogin, useMe, useSetupStatus } from "@/lib/queries/auth";
+import { useLogin, useSetupStatus } from "@/lib/queries/auth";
 
 function safeNext(next: string | null): string {
   if (!next || !next.startsWith("/") || next.startsWith("//") || next.startsWith("/login")) return "/";
@@ -20,7 +20,6 @@ export function LoginForm() {
   const params = useSearchParams();
   const next = safeNext(params.get("next"));
   const setup = useSetupStatus();
-  const me = useMe();
   const login = useLogin();
   const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
@@ -30,9 +29,6 @@ export function LoginForm() {
   React.useEffect(() => {
     if (setup.data?.needs_setup) router.replace("/setup");
   }, [setup.data, router]);
-  React.useEffect(() => {
-    if (me.data) router.replace(next);
-  }, [me.data, router, next]);
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
