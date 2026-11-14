@@ -41,7 +41,7 @@ inloggad på telefonen, och att DriveLog kan nås från Home Assistant.
 
 ## 2. Skapa en API-token i DriveLog
 
-1. Logga in i DriveLog och gå till **Inställningar → API-tokens**.
+1. Logga in i DriveLog och gå till **Integrationer → Home Assistant → Skapa API-token** (tokens kan också hanteras under *Inställningar → Säkerhet*).
 2. Skapa en token, t.ex. med namnet *Home Assistant*. Behörigheten ska vara **ha**.
 3. Kopiera token direkt – den visas bara en gång. DriveLog sparar bara ett hashvärde.
 
@@ -66,7 +66,7 @@ Om token senare återkallas eller byts visar Home Assistant ett
 
 ## Leveranslägen
 
-Välj läge i DriveLog under **Inställningar → Integrationer → Home Assistant**
+Välj läge i DriveLog under **Integrationer → Home Assistant**
 (inställningen `notifications.delivery_mode`).
 
 ### Pull-läge (rekommenderas)

@@ -31,7 +31,7 @@ Koden är uppdelad i tydligt separerade moduler under `backend/app/services/`:
 | `calendar/` | Microsoft Graph: OAuth, synk, matchning |
 | `volvo/` | OAuth, API-klient, insamlare, resedetektering, demoläge |
 | `ha/` | Notismotor, svarshantering, Home Assistant-klient |
-| `stats/`, `export/` | Dashboard, rapporter, avvikelser, Excel |
+| `stats/`, `export/` | Dashboard, milersättning, rapporter, avvikelser, Excel (enkel och detaljerad) |
 
 ## Tre nivåer av resedata
 
@@ -113,12 +113,22 @@ rapporteras i efterhand slås ihop retroaktivt. Dessutom gäller:
   lämnas för manuell hantering.
 - **Överlapp** i tid eller mätarställning slås aldrig ihop utan blir ett avvikelseärende.
 
-## Dataluckor
+## Vad som redovisas: journalomfång
 
-`data_gaps` beräknas ur de fysiska resornas mätarställningar och är oberoende av hur resorna
-grupperats. En lucka kan lämnas öppen, markeras som medvetet oredovisad eller intygas som
-privat körning – då skapas en sammanfattande privat post (utan påhittade tider) så att
-mätarställningarna går att stämma av. Öppna luckor redovisas alltid i dashboard och export.
+Inställningen `general.journal_scope` styr hur luckor i mätarställningen tolkas.
+
+| Omfång | Betydelse |
+| --- | --- |
+| `business_only` (standard) | Egen bil med milersättning. Endast tjänsteresor redovisas. Kilometer mellan två redovisade resor är privat körning: inga fel, inga varningar, inga ärenden, och exporten innehåller bara tjänsteresor |
+| `complete` | Fullständig körjournal, t.ex. förmånsbil. Alla resor redovisas och journalen stäms av mot mätarställningen; luckor är då något som ska redas ut |
+
+`data_gaps` beräknas i båda lägena ur de fysiska resornas mätarställningar, oberoende av hur
+resorna grupperats. I läget `complete` kan en lucka intygas som privat körning (en
+sammanfattande privat post utan påhittade tider) eller lämnas som oavstämd, och öppna luckor
+redovisas i den detaljerade exporten. I standardläget är luckorna bara information.
+
+Oavsett läge slås två resor aldrig ihop automatiskt över en lucka: saknas kilometer mellan
+dem har bilen körts däremellan.
 
 ## Klassificering och inlärning
 

@@ -58,7 +58,9 @@ def _apply_journal_scope(db, principal) -> None:
         if scope == settings_svc.SCOPE_BUSINESS_ONLY:
             anomalies.close_gap_anomalies(db, vehicle)
         for trip in seg.active_trips(db, vid):
-            pipeline.sync_trip_review_items(db, trip, scope=scope)
+            # Bara ärendet "misstänkt datalucka" beror på omfånget.
+            if "possible_missed_trips" in (trip.quality_flags or []):
+                pipeline.sync_trip_review_items(db, trip, scope=scope)
     db.flush()
 
 

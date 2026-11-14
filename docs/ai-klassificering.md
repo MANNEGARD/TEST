@@ -79,14 +79,14 @@ Skatteverket: *"Resor du gör till och från ditt arbete räknas som privata res
 tjänsteresa är en resa *"till ett annat ställe än där hen normalt utför sina
 arbetsuppgifter (tjänstestället)"*.
 
-Under *Inställningar → Tjänsteställe* anger du:
+Som standard är inget tjänsteställe konfigurerat, och då tillämpas ingen arbetsreseregel –
+resor till dina kontor föreslås utifrån platstyp, historik och kalender, och du avgör själv
+vad som redovisas. Vill du att systemet ska uppmärksamma resor mellan bostaden och ett
+ordinarie tjänsteställe anger du under *Inställningar → Tjänsteställe*:
 
 - ordinarie tjänsteställe (en plats ur platsregistret) med giltighetsperiod – flera perioder
   kan läggas upp när tjänstestället byts,
-- om bostaden är tjänsteställe,
-- om du har bilförmån, och om regeln ska tillämpas alls.
-
-Utan konfigurerat tjänsteställe tillämpas ingen arbetsreseregel. Med konfiguration föreslås
+- om bostaden är tjänsteställe. Med konfiguration föreslås
 resor mellan bostaden och tjänstestället som privata, men **alltid med krav på ditt
 godkännande** och en förklarande notering – systemet fattar aldrig det beslutet åt dig. En
 manuell regel för rutten går före.

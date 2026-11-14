@@ -1,86 +1,92 @@
 # Användning
 
-## Import av historiska körjournaler
+DriveLog är byggt för ett enkelt flöde: **resorna kommer in → du bekräftar vilka som var
+tjänsteresor och varför → en gång i månaden skapar du underlaget till arbetsgivaren.**
 
-1. Exportera körjournalen från Volvo Cars-appen (XLSX).
-2. Öppna **Import**, dra in en eller flera filer (XLSX eller CSV).
-3. **Förhandsgranskningen** visar per fil: igenkänt format, antal rader, nya resor,
-   dubbletter, rader med fel (med förklaring per rad), period, körsträcka, bränsle och el.
-   Inga resor skapas förrän du bekräftar.
-4. Välj **datatäckning**:
-   - *Komplett fordonsjournal* – filen innehåller alla resor för perioden,
-   - *Importerat urval* – t.ex. bara tjänsteresor (föreslås automatiskt när det finns luckor
-     i mätarställningen),
-   - *Ofullständig period*.
-5. Välj om sammanslagningsreglerna ska tillämpas, och klicka **Bekräfta import**.
+Du äger bilen och redovisar bara tjänsteresorna. Privat körning syns som luckor i
+mätarställningen mellan resorna – det är väntat och ger aldrig fel eller varningar.
 
-Efter importen visas hur många resor som skapades, hur många som slogs ihop automatiskt
-(regel A), hur många sammanslagningsfrågor som väntar (regel B) och hur många kilometer som
-saknar journalpost.
+## Månadsrutinen
+
+1. **Granskning** – gå igenom det som väntar: *Arbete eller privat?*, *Vad var syftet?*,
+   *Ska resorna slås samman?* Med Home Assistant ansluten kommer samma frågor som notiser i
+   telefonen under månaden, så att det mesta redan är klart.
+2. **Export** – välj månad, kontrollera förhandsvisningen och klicka *Skapa Excel*.
+3. Skicka filen till arbetsgivaren.
+
+## Hur resorna kommer in
+
+| Källa | Hur |
+| --- | --- |
+| **Import** | Ladda upp körjournalen från Volvo Cars-appen (XLSX). Verifierade resor med tider, adresser, mätarställning och förbrukning |
+| **Volvo API** | Bilen läses av automatiskt och resor rekonstrueras. Positionen rapporteras först när en körning avslutats, så starttiden kan vara okänd – komplettera med import när du vill ha exakta uppgifter |
+| **Manuellt** | *Körjournal → Lägg till resa* |
+
+När samma resa senare importeras från Volvos körjournal ersätter den verifierade resan den
+rekonstruerade, och dina beslut följer med.
+
+## Import
+
+1. Öppna **Import** och dra in en eller flera filer (XLSX eller CSV).
+2. **Förhandsgranskningen** visar per fil: igenkänt format, nya resor, dubbletter och rader
+   med fel (med förklaring per rad), samt period, körsträcka, bensin och el. Inga resor
+   skapas förrän du bekräftar.
+3. Klicka **Bekräfta import**.
 
 - **Dubbletter:** samma fil kan laddas upp igen utan att något händer. Samma resa i en annan
   export känns igen på starttid och mätarställning.
-- **Ångra:** varje import kan ångras under *Import → Tidigare importer*. Resorna makuleras
-  och kan importeras på nytt.
+- **Ångra:** varje import kan ångras under *Tidigare importer*.
 - **Originalen bevaras:** kategori, adresser, mätarställningar, sträcka, förbrukning och
-  anteckningar sparas exakt som i filen, tillsammans med filens kontrollsumma och radnummer.
-  Importerade kommentarer ändras aldrig automatiskt.
-- Historiska importer ger aldrig pushnotiser.
+  anteckningar sparas exakt som i filen. Dina kommentarer blir resornas syfte och ändras
+  aldrig automatiskt.
+- Importerade resor som redan är märkta *Arbete* räknas som klara – de behöver inte godkännas
+  en gång till.
 
-## Platser – gör detta direkt efter första importen
+## Platser – gör detta en gång
 
-Under **Platser** finns alla adresser ur journalen med besöksstatistik. Fliken *Förslag*
-visar vad systemet tror sig ha lärt sig:
+Under **Platser** finns alla adresser ur journalen. Överst visas förslag:
 
-- **Platstyper:** hem (där dagens första resa oftast börjar och sista slutar), hotell, kontor
-  och kunder (ur kommentarerna). Godkänn eller avvisa var och en.
-- **Slå ihop:** grannadresser på samma gata som troligen är samma plats.
+- **Platstyper** – hem, kontor, kunder och hotell, härledda ur dina resor och kommentarer.
+  Godkänn eller avvisa med ett klick.
+- **Slå ihop** – grannadresser på samma gata som troligen är samma parkering.
 
-Ge platserna egna namn ("Örebrokontoret"), välj typ och sätt gärna ut dem på kartan – då kan
-positioner från bilen kopplas till platsen. Bara **bekräftade** platser påverkar
-klassificeringen. En plats markerad *Privat destination* ger privat klassning.
+Ge platserna egna namn ("Örebrokontoret") och sätt gärna ut dem på kartan, så kan positioner
+från bilen kopplas till rätt plats. Bara bekräftade platser påverkar förslagen. En plats
+markerad *Privat destination* ger privat klassning, och resor dit hamnar aldrig i underlaget.
 
-Under *AI-minne* visas inlärda mönster per plats och rutt, dina korrigeringar (som kan
-ångras) och manuella regler ("resor hit är alltid Arbete med syftet …").
+Fliken *AI-minne* visar vad systemet lärt sig per plats och rutt, dina korrigeringar (som kan
+ångras) och egna regler, till exempel "resor hit är alltid Arbete med syftet …".
 
 ## Körjournalen
 
-**Körjournal** är huvudtabellen: datum, tider, adresser, mätarställningar, avstånd,
-kategori, syfte, AI-status, datakälla och granskningsstatus.
+**Körjournal** visar resorna med datum, tider, adresser, mätarställning, avstånd, kategori
+och syfte. Snabbfiltren *Alla / Arbete / Privat / Att granska* ligger överst.
 
-- Sortera, filtrera (period, kategori, status, källa, favoriter) och sök i adresser och syften.
 - **Byt kategori med ett klick** direkt i raden; syftet redigeras på plats.
-- Markera flera rader för massändring, godkännande, sammanslagning eller export.
-- *Lägg till resa manuellt* för körningar som saknas.
-
-### Granskningsstatus
+- Sök i adresser och syften, sortera och filtrera på period.
+- Markera flera rader för att sätta kategori eller syfte, godkänna, slå samman eller exportera.
 
 | Status | Betydelse |
 | --- | --- |
 | Importerad | Kategorin kommer från den importerade körjournalen |
 | Godkänd | Du har bestämt eller godkänt |
-| Automatiskt klassad (preliminär) | Hög säkerhet – gäller tills vidare, särredovisas tills du godkänt |
+| Automatiskt klassad (preliminär) | Systemet är säkert, men resan tas med i underlaget först när du godkänt |
 | Förslag | Väntar på ditt godkännande |
-| Behöver granskas | Underlaget räcker inte – du måste välja |
+| Behöver granskas | Underlaget räcker inte – du väljer |
 
-### Datakvalitet i gränssnittet
-
-Faktiska värden visas som vanlig text. Uppskattade värden visas kursivt med "≈" och en
-förklaring. Saknade värden visas som "–". En okänd starttid visas som "okänd" – aldrig som
-ett gissat klockslag.
+Faktiska värden visas som vanlig text, uppskattade kursivt med "≈", och saknade som "–".
+En okänd starttid visas som "okänd", aldrig som ett gissat klockslag.
 
 ## Resedetaljer
 
-Klicka på en resa för att se karta, mellanstopp, mätarställningar, förbrukning,
-klassningens underlag, matchande Outlook-möten, liknande tidigare resor, ingående
+Överst: karta, sträcka, kategori och syfte. Under hopfällda rubriker finns varför systemet
+föreslog som det gjorde, matchande Outlook-möten, liknande tidigare resor, ingående
 originalresor och ändringshistorik.
 
 - **Kartan** visar de punkter som faktiskt är kända. En linje mellan dem är inte den körda
   vägen, och det står utskrivet.
-- **Varför?** Varje signal bakom förslaget visas med riktning och vikt.
-- **Fördela privat/tjänst:** dela en körning i delsträckor (t.ex. 30 km tjänst + 12 km
-  privat). Summan måste stämma med den uppmätta sträckan.
-- **Sammanslagning:** ångra, eller dela vid ett visst stopp.
+- **Delvis privat?** Dela resan i delsträckor (t.ex. 30 km tjänst + 12 km privat). Summan
+  måste stämma med den uppmätta sträckan, och bara tjänstedelen hamnar i underlaget.
 - **Ångra ändring** återställer både resan och det systemet lärt sig av ändringen.
 
 ## Sammanslagning av resor
@@ -88,96 +94,80 @@ originalresor och ändringshistorik.
 | Stillestånd | Vad som händer |
 | --- | --- |
 | Högst 15 minuter | Resorna slås ihop automatiskt (kan ångras) |
-| Över 15 och högst 60 minuter | Du får en fråga – i notis och i granskningscentret |
-| Över 60 minuter | Ingenting automatiskt; markera resorna och välj *Slå samman* |
+| Över 15 och högst 60 minuter | Du får en fråga |
+| Över 60 minuter | Inget automatiskt; markera resorna och välj *Slå samman* |
 
-Gränserna ändras under *Inställningar → Sammanslagning*. Den sammanslagna resan visar
-mellanstoppen, summerar sträcka och förbrukning och behåller första starttid och sista
-sluttid. Originalresorna finns alltid kvar.
+Den sammanslagna resan visar mellanstoppen ("via …"), summerar sträckan och behåller första
+starttid och sista sluttid. Originalresorna finns alltid kvar, och gränserna ändras under
+*Inställningar → Sammanslagning*.
 
-Har delresorna olika kategorier slås de ändå ihop, men varje delsträcka behåller sin kategori
-och resan måste fördelas manuellt. Saknas kilometer mellan resorna måste du uttryckligen
-bekräfta en manuell sammanslagning – luckan döljs inte.
+Två resor slås inte ihop automatiskt om bilen har körts däremellan (kilometer saknas i
+mätarställningen), och en privat delsträcka blir aldrig tjänst genom en sammanslagning.
 
-## Granskningscentret
+## Granskning
 
-**Granskning** samlar allt som behöver ditt beslut:
+**Granskning** samlar det som behöver ditt beslut. Snabbflödet går igenom ärendena ett i
+taget, även med tangentbordet (A = arbete, P = privat, G = godkänn).
 
 | Ärende | Åtgärd |
 | --- | --- |
-| Oklar kategori | Arbete / Privat |
-| Oklart syfte | Välj ett tidigare syfte eller skriv ett nytt |
-| Skattemässig bedömning | T.ex. resa mellan bostad och tjänsteställe – du avgör |
-| Fördela privat/tjänst | Blandad resa |
-| Förfrågan om sammanslagning | Ja / Nej |
-| Saknad mätarställning, misstänkt datalucka | Komplettera eller notera |
-| Konflikt mellan kalender och fordonsdata | Välj rätt bokning eller avvisa |
-| Avvikelse, importproblem | Kontrollera |
+| Arbete eller privat? | Välj |
+| Vad var syftet? | Välj ett tidigare syfte eller skriv ett nytt |
+| Slå samman? | Ja / Nej |
+| Övrigt (saknad mätarställning, kalenderkonflikt, möjlig dubblett) | Kontrollera |
 
-Snabbflödet går igenom ärendena ett i taget med tangentbordet. Ärenden kan skjutas upp eller
-avfärdas, och varje åtgärd kan ångras.
-
-### Dataluckor
-
-En lucka är kilometer i mätarställningen som saknar journalpost. För varje lucka kan du:
-
-- **Markera som privat körning** – en sammanfattande privat post skapas (utan påhittade
-  tider) så att mätarställningarna går ihop,
-- **Lämna oredovisad** – luckan redovisas som oavstämd i exporten,
-- komplettera genom att importera fler resor eller lägga in dem manuellt.
-
-Privat körning räknas aldrig ut som "allt som inte är tjänst" – det kräver att perioden är
-avstämd mot mätarställningen.
+Ärenden kan skjutas upp eller avfärdas, och varje åtgärd kan ångras.
 
 ## Översikten
 
-Nyckeltal för vald period (idag, vecka, månad, föregående månad, år eller eget intervall):
-mil totalt, i tjänsten, privat och ej klassificerat; antal resor; bensin och el med
-snittförbrukning; senaste mätarställning, position och synk; resor att granska. Diagrammen
-visar sträcka över tid, privat mot arbete, bensin och el, destinationer, resvägar och
-månadsjämförelser.
-
-Förbrukning visas med **täckningsgrad**: snittet beräknas bara över sträcka där förbrukningen
-är uppmätt per resa. Preliminärt klassade kilometer och ej journalförda kilometer
-särredovisas, och en varning visas när perioden bara är ett importerat urval.
-
-## Bränsle och energi
-
-Registrera tankningar (liter, pris, mätarställning) och laddningar under **Bränsle &
-energi**. Tankningar kan också föreslås ur bilens tanknivå – de märks då som uppskattade och
-ersätter aldrig det du själv fört in. Skatteverket rekommenderar att liter och pris
-antecknas vid tankning.
+Månadens tjänstemil, antal tjänsteresor, beräknad milersättning och vad som väntar på
+granskning – samt diagram över tjänstekörning över tid och vanligaste destinationerna.
+Milersättningen räknas bara på godkända resor. Mer statistik (resvägar, månadsjämförelse,
+förbrukning) finns under en hopfälld rubrik.
 
 ## Export
 
-**Export** → välj period → *Kontrollera* visar brister innan filen skapas → *Skapa Excel*.
-Se [Excel-export](excel-export.md).
+Se [Excel-export](excel-export.md). I korthet: **Export → välj månad → Skapa Excel.** Filen
+innehåller ett blad med månadens tjänsteresor och en summering med mil och ersättning.
 
 ## Notiser i telefonen
 
-Med Home Assistant ansluten kommer frågorna som interaktiva notiser: *Arbete/Privat*,
-*Vad var syftet?*, *Ska resorna slås samman?* samt en veckosammanställning. Svaren sparas
-direkt i journalen. Obesvarade frågor ligger kvar i granskningscentret. Tysta timmar, max
-antal per dygn och påminnelser ställs in under *Inställningar → Notiser*. Se
+Med Home Assistant ansluten kommer frågorna som interaktiva notiser, och svaren sparas direkt
+i journalen. Obesvarade frågor ligger kvar under *Granskning*. Tysta timmar, max antal per
+dygn och påminnelser ställs in under *Inställningar → Notiser*. Se
 [Home Assistant](home-assistant.md).
+
+## Bränsle och energi
+
+Under *Mer → Bränsle & energi* visas bensin och el. Förbrukning räknas bara som uppmätt när
+den kommer per resa ur den importerade körjournalen; bilens snittvärden och tanknivå från
+Volvo räknas inte som förbrukning per resa. Här kan du också föra in tankningar och laddningar.
 
 ## Demoläge
 
 Utan nycklar kan varje integration provas i demoläge. Demodata hamnar på en separat
-**demobil** som väljs i fordonsväljaren; en tydlig banderoll visas, exporten vattenmärks och
-ingenting blandas med din riktiga journal. *Stäng av demoläge* tar bort demodatan.
+**demobil** som väljs i fordonsväljaren; en banderoll visar att det är demo, och ingenting
+blandas med din riktiga journal. *Stäng av demoläge* tar bort demodatan.
 
 ## Inställningar i korthet
 
 | Sektion | Innehåll |
 | --- | --- |
-| Fordon | Registreringsnummer, modell, förare, mätarställningar vid årsskifte |
-| Tjänsteställe | Ordinarie tjänsteställe med giltighetstid, bostaden som tjänsteställe, bilförmån |
-| Sammanslagning | Gränser för regel A och B, tolerans i mätarställning |
-| AI | Trösklar, strikt läge, vad som får skickas till AI-leverantören |
+| Fordon och förare | Registreringsnummer, bil, ditt namn och arbetsgivare (visas i exporten) |
+| Milersättning och export | Kronor per mil, visa belopp, exportens utseende, vad som redovisas |
+| Sammanslagning | Gränserna 15 och 60 minuter |
+| Förslag och AI | Trösklar, strikt läge, vad som får skickas till AI-leverantören |
 | Notiser | Typer, tysta timmar, max per dygn, påminnelser, veckosammanställning |
-| Kalender | Kalendrar, tidsfönster för matchning |
-| Sekretess | Karta, geokodning, gallring, radering av historik |
-| Export | Adresser för privata resor, ändringshistorik |
+| Kalender | Tidsfönster för matchning |
+| Tjänsteställe | Avancerat: ordinarie tjänsteställe och bostaden som tjänsteställe |
 | Förkortningar | Egna förkortningar i kommentarer, t.ex. ortsförkortningar |
+| Sekretess | Karta, geokodning, gallring, radering av historik |
+| Säkerhet | Lösenord, API-tokens |
 | Säkerhetskopia | Skapa och hämta kopior |
+
+### Fullständig körjournal
+
+Behöver du i stället en fullständig körjournal där även privata resor redovisas och allt
+stäms av mot mätarställningen – till exempel för en förmånsbil – väljer du *Fullständig
+körjournal* under *Milersättning och export → Vad redovisas?*. Då visas luckor i
+mätarställningen som något att reda ut, och den detaljerade exporten med flera blad används.

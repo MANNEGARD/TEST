@@ -1,10 +1,14 @@
 # SMGD DriveLog
 
-Intelligent, självhostad körjournal för Volvo. DriveLog samlar fordonsdata via Volvos
-officiella API, importerar historiska körjournaler från Volvo Cars-appen, matchar resor
-mot Outlook-kalendern, föreslår kategori och syfte med en hybrid av regler och AI, frågar
-via interaktiva notiser i Home Assistant när något är oklart – och exporterar en
-Excel-körjournal enligt Skatteverkets rekommendationer.
+Intelligent, självhostad körjournal för Volvo – byggd för att redovisa tjänsteresor med egen
+bil till arbetsgivaren (milersättning). DriveLog samlar fordonsdata via Volvos officiella
+API, importerar körjournaler från Volvo Cars-appen, matchar resor mot Outlook-kalendern,
+föreslår kategori och syfte med en hybrid av regler och AI, frågar via interaktiva notiser i
+Home Assistant när något är oklart – och skapar ett enkelt Excel-underlag med just de
+uppgifter arbetsgivaren och Skatteverket behöver.
+
+Endast tjänsteresor redovisas. Privat körning – och därmed luckor i mätarställningen mellan
+resorna – är förväntad och behandlas aldrig som fel.
 
 Applikationen är fristående. Home Assistant, Outlook, Volvo och AI-leverantör är
 integrationer som kan slås på var för sig; allt fungerar även utan dem.
@@ -51,7 +55,7 @@ docker compose up -d --build
 | [Microsoft Outlook](docs/microsoft-graph.md) | Appregistrering, behörigheter, matchning |
 | [Home Assistant](docs/home-assistant.md) | Installation via HACS, notiser, push/pull-läge |
 | [AI-klassificering](docs/ai-klassificering.md) | Regler, AI-lager, trösklar, sekretess |
-| [Excel-export](docs/excel-export.md) | Blad, kontroller, Skatteverkets uppgifter |
+| [Excel-export](docs/excel-export.md) | Det enkla underlaget för milersättning, och den valfria detaljerade exporten |
 | [Säkerhet och sekretess](docs/sakerhet.md) | Autentisering, kryptering, vad som skickas vart |
 | [Säkerhetskopiering](docs/backup.md) | Backup, återställning, nyckelhantering |
 

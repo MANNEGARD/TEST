@@ -57,14 +57,14 @@ alltså redan slagit ihop delsträckor med stopp i vissa rader. Därför lagras 
 skilja ±1 km i mätarställning utan att någon körning saknas. Luckor och överlapp bedöms
 därför med en tolerans (standard 2 km, inställbar).
 
-**3. Underlagen är ett urval, inte en komplett journal.** Mellan resorna finns 69 luckor i
+**3. Underlagen innehåller bara tjänsteresor.** Mellan resorna finns 69 luckor i
 mätarställningen på sammanlagt cirka 8 000 km, av en total mätarsträcka på cirka 21 900 km.
-Därför:
+Luckorna är privat körning med den egna bilen och ska inte redovisas. Därför:
 
-- varje import får en datatäckning (*Komplett fordonsjournal*, *Importerat urval*,
-  *Ofullständig period*) och föreslås som urval när luckor finns,
-- luckorna lagras som egna poster som syns i granskningscentret och i exporten,
-- privat körning beräknas aldrig som "total körning minus arbetsresor".
+- standardläget är *Endast tjänsteresor*: luckor ger inga fel, varningar eller ärenden,
+- privat körning beräknas aldrig som "total körning minus arbetsresor" – den redovisas inte alls,
+- en sammanslagning görs ändå aldrig automatiskt över en lucka, eftersom bilen då har körts
+  däremellan och resorna inte hänger ihop.
 
 **4. Alla resor är klassade Arbete.** Materialet är positivt referensmaterial för
 tjänstekörning, inte ett balanserat träningsunderlag. Importerad historik räknas därför

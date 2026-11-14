@@ -86,12 +86,14 @@ docker compose exec api python -m app.cli create-admin din@adress.se
 
 ## 4. Kom igång
 
-1. **Inställningar → Fordon:** ange registreringsnummer och förarens namn.
-2. **Import:** ladda upp dina Volvo-exporter (se [Användning](anvandning.md)).
-3. **Platser:** godkänn de föreslagna platstyperna (hem, kontor, kunder, hotell).
-4. **Inställningar → Tjänsteställe:** ange ordinarie tjänsteställe och om bostaden är
-   tjänsteställe. Det styr den skattemässiga bedömningen av resor mellan bostad och arbete.
+1. **Inställningar → Fordon och förare:** ange registreringsnummer, ditt namn och arbetsgivare
+   – de hamnar i exportens sidhuvud.
+2. **Inställningar → Milersättning och export:** kontrollera ersättningen per mil (25 kr som
+   standard).
+3. **Import:** ladda upp dina Volvo-exporter (se [Användning](anvandning.md)).
+4. **Platser:** godkänn de föreslagna platstyperna (hem, kontor, kunder, hotell).
 5. **Integrationer:** anslut Volvo, Outlook, Home Assistant och eventuell AI-leverantör.
+6. **Export:** välj månad och skapa underlaget till arbetsgivaren.
 
 ## Installera som app på iPhone
 
