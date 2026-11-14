@@ -42,6 +42,7 @@ import {
   formatPercent,
   formatTime,
   formatWeekday,
+  plural,
 } from "@/lib/format";
 import {
   AUDIT_ACTION_LABELS,
@@ -393,7 +394,7 @@ function HistorySection({ d }: { d: TripDetail }) {
   const undo = useUndoFeedback();
   const latest = d.feedback.find((f) => !f.undone_at);
   return (
-    <CollapsibleSection title="Ändringshistorik" icon={<History />} meta={`${d.history.length} händelser`}>
+    <CollapsibleSection title="Ändringshistorik" icon={<History />} meta={plural(d.history.length, "händelse", "händelser")}>
       {latest ? (
         <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-md bg-surface-2 p-3 text-sm">
           <span>

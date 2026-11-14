@@ -63,13 +63,13 @@ export function TripTable({
         return (
           <span className="whitespace-nowrap">
             <span className="mr-1.5 text-xs text-fg-subtle">{formatWeekday(t.started_at ?? t.sort_time, true)}</span>
-            <span className="font-mono text-[13px]">{formatDate(t.started_at ?? t.sort_time)}</span>
+            <span className="text-[13px] font-medium">{formatDate(t.started_at ?? t.sort_time)}</span>
           </span>
         );
       case "start_time":
-        return <span className="font-mono text-[13px]"><TripTime at={t.started_at} quality={t.start_time_quality} /></span>;
+        return <span className="text-[13px]"><TripTime at={t.started_at} quality={t.start_time_quality} /></span>;
       case "end_time":
-        return <span className="font-mono text-[13px]"><TripTime at={t.ended_at} quality={t.end_time_quality} /></span>;
+        return <span className="text-[13px]"><TripTime at={t.ended_at} quality={t.end_time_quality} /></span>;
       case "start_address":
         return <AddressCell address={t.start_address} location={t.start_location} className="block max-w-[170px] truncate text-[13px]" />;
       case "end_address":
@@ -97,8 +97,7 @@ export function TripTable({
               value={formatKm(t.distance_km)}
               quality={t.quality_flags.includes("distance_estimated") ? "estimated" : "actual"}
               explanation={distanceQualityNote(t)}
-              mono
-              className="text-[13px]"
+              className="text-[13px] font-medium"
             />
           </span>
         );

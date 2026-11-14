@@ -83,7 +83,7 @@ function KpiRow({ s, loading }: { s: DashboardSummary | undefined; loading: bool
       />
       {r && r.amount != null ? (
         <StatCard
-          label="Beräknad milersättning"
+          label="Milersättning"
           icon={<Banknote />}
           accent="ok"
           loading={loading}

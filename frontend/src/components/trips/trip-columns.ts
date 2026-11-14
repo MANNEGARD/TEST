@@ -23,7 +23,7 @@ export const TRIP_COLUMNS: TripColumn[] = [
   { id: "category", label: "Kategori", sort: "category", defaultVisible: true, required: true },
   { id: "purpose", label: "Syfte", sort: "purpose", defaultVisible: true },
   { id: "ai", label: "AI-status", defaultVisible: false },
-  { id: "source", label: "Källa", defaultVisible: true },
+  { id: "source", label: "Källa", defaultVisible: false },
   { id: "status", label: "Granskning", sort: "status", defaultVisible: true },
 ];
 

@@ -698,7 +698,13 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Dataluckor: kilometer som saknar journalpost */
+        /**
+         * Kilometer i mätarställningen mellan de journalförda resorna
+         * @description Luckor i mätarställningen.
+         *
+         *     ``expected`` är sant när endast tjänsteresor redovisas (``scope`` = ``business_only``):
+         *     luckorna är då privat körning som inte ska åtgärdas, och listan kan döljas.
+         */
         get: operations["list_gaps_api_v1_gaps_get"];
         put?: never;
         post?: never;

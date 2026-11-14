@@ -62,7 +62,7 @@ export function ClassificationCard({ detail }: { detail: TripDetail }) {
             <CategoryToggle value={t.category} size="lg" onChange={(c) => void actions.setCategory(t.id, c).catch(() => {})} />
           )}
           <p className="mt-2 text-xs text-fg-muted">
-            Avgjord av {label(DECISION_SOURCE_LABELS, t.category_source).toLowerCase()}
+            {t.category_source === "user" ? "Avgjord av dig" : `Avgjord av ${label(DECISION_SOURCE_LABELS, t.category_source).toLowerCase()}`}
             {t.confidence != null && (t.category_source === "ai" || t.category_source === "rule" || t.category_source === "pattern")
               ? ` · ${formatPercent(t.confidence)} säkerhet`
               : ""}

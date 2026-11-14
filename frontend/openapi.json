@@ -2399,7 +2399,8 @@
     "tags": [
      "Review"
     ],
-    "summary": "Dataluckor: kilometer som saknar journalpost",
+    "summary": "Kilometer i mätarställningen mellan de journalförda resorna",
+    "description": "Luckor i mätarställningen.\n\n``expected`` är sant när endast tjänsteresor redovisas (``scope`` = ``business_only``):\nluckorna är då privat körning som inte ska åtgärdas, och listan kan döljas.",
     "operationId": "list_gaps_api_v1_gaps_get",
     "parameters": [
      {
