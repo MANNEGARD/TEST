@@ -15,6 +15,7 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Any, Protocol
 
+import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -62,28 +63,52 @@ class VehicleApi(Protocol):
 # ----------------------------------------------------------------------- klient
 
 
-def build_client(db: Session, conn: IntegrationConnection, *, now: datetime | None = None) -> VolvoClient:
+def build_client(
+    db: Session,
+    conn: IntegrationConnection,
+    *,
+    now: datetime | None = None,
+    transport: httpx.BaseTransport | None = None,
+) -> VolvoClient:
     """Riktig API-klient för anslutningen (förnyar token vid behov)."""
     now = now or utcnow()
     sec = integrations.secrets(conn)
     api_key = sec.get("vcc_api_key")
     if not api_key:
         raise VolvoError("VCC API-nyckel saknas.", code="not_configured")
-    token = oauth.get_access_token(db, conn, now=now)
+    token = oauth.get_access_token(db, conn, now=now, transport=transport)
     quota = QuotaTracker.from_dict((conn.capabilities or {}).get("quota"))
 
-    def _refresh() -> str | None:
-        return oauth.refresh_access_token(db, conn, now=utcnow())
+    def _refresh(failed_token: str) -> str | None:
+        return oauth.refresh_access_token(db, conn, now=utcnow(), transport=transport, failed_token=failed_token)
 
-    return VolvoClient(access_token=token, api_key=str(api_key), on_unauthorized=_refresh, quota=quota)
+    return VolvoClient(
+        access_token=token,
+        api_key=str(api_key),
+        on_unauthorized=_refresh,
+        quota=quota,
+        limiter=vc.limiter_for(str(conn.id)),
+        transport=transport,
+    )
 
 
-def client_for(db: Session, conn: IntegrationConnection, vehicle: Vehicle | None, *, now: datetime | None = None) -> VehicleApi:
+def client_for(
+    db: Session,
+    conn: IntegrationConnection,
+    vehicle: Vehicle | None,
+    *,
+    now: datetime | None = None,
+    transport: httpx.BaseTransport | None = None,
+) -> VehicleApi:
     if vehicle is not None and vehicle.is_demo:
         from app.services.volvo import demo
 
         return demo.DemoClient(conn)
-    return build_client(db, conn, now=now)
+    return build_client(db, conn, now=now, transport=transport)
+
+
+def in_backoff(conn: IntegrationConnection, now: datetime) -> bool:
+    return conn.backoff_until is not None and conn.backoff_until > now
 
 
 def _save_quota(conn: IntegrationConnection, api: VehicleApi) -> None:
@@ -317,14 +342,22 @@ def _should_poll(vehicle: Vehicle, name: str, now: datetime) -> bool:
 
 
 def probe_capabilities(
-    db: Session, conn: IntegrationConnection, vehicle: Vehicle, *, client: VehicleApi | None = None, now: datetime | None = None
+    db: Session,
+    conn: IntegrationConnection,
+    vehicle: Vehicle,
+    *,
+    client: VehicleApi | None = None,
+    now: datetime | None = None,
+    transport: httpx.BaseTransport | None = None,
 ) -> dict[str, Any]:
     """Provar varje läs-endpoint en gång för just den här bilen och sparar utfallet."""
     now = now or utcnow()
     if not vehicle.vin:
         raise VolvoError("Inget fordon är valt.", code="no_vehicle")
+    if client is None and not vehicle.is_demo and in_backoff(conn, now):
+        raise vc.VolvoThrottled()
     own = client is None
-    api = client or client_for(db, conn, vehicle, now=now)
+    api = client or client_for(db, conn, vehicle, now=now, transport=transport)
     results: dict[str, ApiResult] = {}
     try:
         for name in C.ENDPOINTS:
@@ -356,12 +389,19 @@ def vehicle_ref(vin: str) -> str:
 
 
 def discover_vehicles(
-    db: Session, conn: IntegrationConnection, *, client: VehicleApi | None = None, now: datetime | None = None
+    db: Session,
+    conn: IntegrationConnection,
+    *,
+    client: VehicleApi | None = None,
+    now: datetime | None = None,
+    transport: httpx.BaseTransport | None = None,
 ) -> list[dict[str, Any]]:
     """Listar bilarna på Volvo-kontot. VIN lagras krypterat; UI får maskerade värden."""
     now = now or utcnow()
+    if client is None and in_backoff(conn, now):
+        raise vc.VolvoThrottled()
     own = client is None
-    api = client or build_client(db, conn, now=now)
+    api = client or build_client(db, conn, now=now, transport=transport)
     found: list[dict[str, Any]] = []
     try:
         for vin in api.list_vehicles():
@@ -493,8 +533,12 @@ def poll_vehicle(
     now: datetime | None = None,
     client: VehicleApi | None = None,
     detect: bool = True,
+    transport: httpx.BaseTransport | None = None,
 ) -> dict[str, Any]:
-    """Hämtar aktuella fordonsuppgifter, sparar en observation och kör resedetekteringen."""
+    """Hämtar aktuella fordonsuppgifter, sparar en observation och kör resedetekteringen.
+
+    Under en aktiv backoff (efter HTTP 429) görs inga anrop alls.
+    """
     now = now or utcnow()
     user_id = vehicle.owner_user_id
     conn = integrations.get(db, user_id, IntegrationProvider.VOLVO)
@@ -502,6 +546,16 @@ def poll_vehicle(
         raise VolvoError("Volvo-integrationen är inte konfigurerad.", code="not_configured")
     if not vehicle.vin:
         raise VolvoError("Inget fordon är valt.", code="no_vehicle")
+    if not vehicle.is_demo and client is None and in_backoff(conn, now):
+        return {
+            "status": "throttled",
+            "message": "Insamlingen är pausad efter Volvos anropsgräns; inga anrop görs förrän pausen är över.",
+            "backoff_until": conn.backoff_until.isoformat() if conn.backoff_until else None,
+            "endpoints": {},
+            "observation": "none",
+            "new_trips": 0,
+            "new_trip_ids": [],
+        }
     settings = settings_svc.get_section(db, user_id, "volvo")
     run = integrations.start_run(db, conn, "demo_poll" if vehicle.is_demo else "poll")
     stats: dict[str, Any] = {"endpoints": {}, "observation": "none", "new_trips": 0}
@@ -510,7 +564,7 @@ def poll_vehicle(
     api: VehicleApi | None = client
     try:
         if api is None:
-            api = client_for(db, conn, vehicle, now=now)
+            api = client_for(db, conn, vehicle, now=now, transport=transport)
         throttled: ApiResult | None = None
         for name in C.POLL_ENDPOINTS:
             if not _should_poll(vehicle, name, now):
@@ -602,8 +656,13 @@ def _due(conn: IntegrationConnection, interval: float, now: datetime) -> bool:
     return (now - conn.last_sync_at).total_seconds() >= interval - 5
 
 
-def poll_due(db: Session, now: datetime | None = None) -> dict[str, Any]:
-    """Pollar alla anslutna fordon vars intervall har löpt ut. Anropas av bakgrundsjobbet."""
+def poll_due(
+    db: Session, now: datetime | None = None, *, transport: httpx.BaseTransport | None = None
+) -> dict[str, Any]:
+    """Pollar alla anslutna fordon vars intervall har löpt ut. Anropas av bakgrundsjobbet.
+
+    Committar efter varje fordon. Demofordon hanteras av ``demo.tick``.
+    """
     now = now or utcnow()
     out: dict[str, Any] = {"polled": 0, "skipped": 0, "errors": 0, "new_trips": 0, "throttled": 0}
     conns = list(
@@ -637,7 +696,7 @@ def poll_due(db: Session, now: datetime | None = None) -> dict[str, Any]:
             continue
         for vehicle in vehicles:
             try:
-                result = poll_vehicle(db, vehicle, now=now)
+                result = poll_vehicle(db, vehicle, now=now, transport=transport)
                 db.commit()
             except Exception:
                 db.rollback()

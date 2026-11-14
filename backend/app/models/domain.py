@@ -7,7 +7,6 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import (
-    JSON,
     Boolean,
     Float,
     ForeignKey,
@@ -20,7 +19,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db import Base, UTCDateTime, new_id, utcnow
+from app.db import Base, JSONType, UTCDateTime, new_id, utcnow
 
 # --------------------------------------------------------------------------- platser
 
@@ -95,9 +94,9 @@ class LocationPattern(Base):
     imported_private: Mapped[int] = mapped_column(Integer, default=0)
     corrections_to_private: Mapped[int] = mapped_column(Integer, default=0)
     corrections_to_work: Mapped[int] = mapped_column(Integer, default=0)
-    purposes: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
-    weekday_hist: Mapped[dict[str, int]] = mapped_column(JSON, default=dict)
-    hour_hist: Mapped[dict[str, int]] = mapped_column(JSON, default=dict)
+    purposes: Mapped[list[dict[str, Any]]] = mapped_column(JSONType, default=list)
+    weekday_hist: Mapped[dict[str, int]] = mapped_column(JSONType, default=dict)
+    hour_hist: Mapped[dict[str, int]] = mapped_column(JSONType, default=dict)
     last_seen_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
 
     # Godkännande av inlärt mönster samt manuell regel.
@@ -126,15 +125,15 @@ class LearningFeedback(Base):
     new_category: Mapped[str | None] = mapped_column(String(20), nullable=True)
     original_purpose: Mapped[str | None] = mapped_column(Text, nullable=True)
     new_purpose: Mapped[str | None] = mapped_column(Text, nullable=True)
-    original_state: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)  # för ångra
+    original_state: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict)  # för ångra
     origin_location_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
     destination_location_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
     origin_type: Mapped[str | None] = mapped_column(String(30), nullable=True)
     destination_type: Mapped[str | None] = mapped_column(String(30), nullable=True)
     weekday: Mapped[int | None] = mapped_column(Integer, nullable=True)
     local_hour: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    calendar_context: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
-    model_assessment: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    calendar_context: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict)
+    model_assessment: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     undone_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
 
@@ -223,8 +222,8 @@ class NotificationRequest(Base):
     dedupe_key: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
     title: Mapped[str] = mapped_column(String(200))
     message: Mapped[str] = mapped_column(Text)
-    actions: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
-    context: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    actions: Mapped[list[dict[str, Any]]] = mapped_column(JSONType, default=list)
+    context: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict)
     status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
     channel: Mapped[str | None] = mapped_column(String(20), nullable=True)  # ha_push | ha_pull | demo | web
     digest_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)  # ingår i samlingsnotis
@@ -257,7 +256,7 @@ class NotificationResponse(Base):
     received_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     applied: Mapped[bool] = mapped_column(Boolean, default=False)
     outcome: Mapped[str] = mapped_column(String(30), default="applied")  # applied | duplicate | expired | invalid
-    result: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    result: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict)
 
     request: Mapped[NotificationRequest] = relationship(back_populates="responses")
 
@@ -273,7 +272,7 @@ class ImportBatch(Base):
     vehicle_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("vehicles.id", ondelete="CASCADE"), index=True)
     status: Mapped[str] = mapped_column(String(20), default="preview")
     coverage: Mapped[str] = mapped_column(String(20), default="unknown")
-    summary: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    summary: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     committed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     undone_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
@@ -297,7 +296,7 @@ class ImportedFile(Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     period_start: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     period_end: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
-    column_map: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    column_map: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
     batch: Mapped[ImportBatch] = relationship(back_populates="files")
@@ -310,11 +309,11 @@ class ImportRow(Base):
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=new_id)
     file_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("imported_files.id", ondelete="CASCADE"), index=True)
     row_number: Mapped[int] = mapped_column(Integer)
-    raw: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)  # originalvärden som text
-    parsed: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    raw: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict)  # originalvärden som text
+    parsed: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict)
     natural_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(30), default="ok")
-    messages: Mapped[list[str]] = mapped_column(JSON, default=list)
+    messages: Mapped[list[str]] = mapped_column(JSONType, default=list)
     raw_trip_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
 
     file: Mapped[ImportedFile] = relationship(back_populates="rows")

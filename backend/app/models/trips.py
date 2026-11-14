@@ -18,7 +18,6 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import (
-    JSON,
     Boolean,
     Float,
     ForeignKey,
@@ -31,7 +30,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db import Base, UTCDateTime, new_id, utcnow
+from app.db import Base, JSONType, UTCDateTime, new_id, utcnow
 
 
 class VehicleObservation(Base):
@@ -75,8 +74,8 @@ class VehicleObservation(Base):
     trip_meter_manual_km: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     content_hash: Mapped[str] = mapped_column(String(64), index=True)
-    raw: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
-    errors: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    raw: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict)
+    errors: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict)
     # Bearbetningsstatus i resedetekteringen
     processed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
 
@@ -160,8 +159,8 @@ class RawTrip(Base):
 
     is_complete: Mapped[bool] = mapped_column(Boolean, default=True)
     possible_missed_trips: Mapped[bool] = mapped_column(Boolean, default=False)
-    quality_flags: Mapped[list[str]] = mapped_column(JSON, default=list)
-    observation_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
+    quality_flags: Mapped[list[str]] = mapped_column(JSONType, default=list)
+    observation_ids: Mapped[list[str]] = mapped_column(JSONType, default=list)
 
     voided_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     void_reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
@@ -248,7 +247,7 @@ class LogicalTrip(Base):
     end_address: Mapped[str | None] = mapped_column(String(300), nullable=True)
     start_location_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True, index=True)
     end_location_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True, index=True)
-    via: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)  # mellanstopp
+    via: Mapped[list[dict[str, Any]]] = mapped_column(JSONType, default=list)  # mellanstopp
     fuel_liters: Mapped[float | None] = mapped_column(Float, nullable=True)
     fuel_quality: Mapped[str] = mapped_column(String(20), default="unknown")
     energy_kwh: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -259,7 +258,7 @@ class LogicalTrip(Base):
     is_complete: Mapped[bool] = mapped_column(Boolean, default=True)
     has_gap: Mapped[bool] = mapped_column(Boolean, default=False)  # odometerlucka mellan delresor
     gap_km: Mapped[float] = mapped_column(Float, default=0.0)
-    quality_flags: Mapped[list[str]] = mapped_column(JSON, default=list)
+    quality_flags: Mapped[list[str]] = mapped_column(JSONType, default=list)
 
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
@@ -308,9 +307,9 @@ class TripMerge(Base):
     vehicle_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("vehicles.id", ondelete="CASCADE"), index=True)
     operation: Mapped[str] = mapped_column(String(20))  # merge | split
     trigger: Mapped[str] = mapped_column(String(20))  # rule_a | rule_b | manual | ha
-    result_trip_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
-    source_trip_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
-    details: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    result_trip_ids: Mapped[list[str]] = mapped_column(JSONType, default=list)
+    source_trip_ids: Mapped[list[str]] = mapped_column(JSONType, default=list)
+    details: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict)
     created_by: Mapped[str] = mapped_column(String(64), default="system")
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     undone_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
@@ -354,7 +353,7 @@ class TripClassification(Base):
     provider: Mapped[str | None] = mapped_column(String(60), nullable=True)
     model: Mapped[str | None] = mapped_column(String(120), nullable=True)
     engine_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    signals: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    signals: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict)
     is_current: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     created_by: Mapped[str] = mapped_column(String(64), default="system")
@@ -372,7 +371,7 @@ class TripPurpose(Base):
     text: Mapped[str] = mapped_column(Text)
     source: Mapped[str] = mapped_column(String(20))
     rationale: Mapped[str | None] = mapped_column(Text, nullable=True)
-    based_on: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    based_on: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict)
     needs_confirmation: Mapped[bool] = mapped_column(Boolean, default=False)
     is_current: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
@@ -397,7 +396,7 @@ class TripEvidence(Base):
     weight: Mapped[float] = mapped_column(Float, default=0.0)
     ref_type: Mapped[str | None] = mapped_column(String(40), nullable=True)
     ref_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    data: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    data: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
 
@@ -442,12 +441,12 @@ class ReviewItem(Base):
     )
     title: Mapped[str] = mapped_column(String(300))
     detail: Mapped[str | None] = mapped_column(Text, nullable=True)
-    data: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    data: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict)
     status: Mapped[str] = mapped_column(String(20), default="open", index=True)
     snoozed_until: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     resolved_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     resolved_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    resolution: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    resolution: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict)
 
     __table_args__ = (UniqueConstraint("vehicle_id", "dedupe_key", name="uq_review_vehicle_key"),)

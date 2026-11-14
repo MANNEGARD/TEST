@@ -14,6 +14,16 @@ import httpx
 
 _SERVICE_RE = re.compile(r"^mobile_app_[a-z0-9_]{1,200}$")
 
+# Transport som används när ingen anges uttryckligen (tester ersätter den med
+# httpx.MockTransport). None = vanlig nätverkstrafik.
+_default_transport: httpx.BaseTransport | None = None
+
+
+def use_transport(transport: httpx.BaseTransport | None) -> None:
+    """Sätter standardtransport för alla nya klienter (endast för tester)."""
+    global _default_transport
+    _default_transport = transport
+
 
 class HAError(Exception):
     """Fel mot Home Assistant. ``kind``: unreachable | auth | http | invalid."""
@@ -68,7 +78,7 @@ class HAClient:
         self._client = httpx.Client(
             base_url=self.base_url,
             timeout=httpx.Timeout(timeout, connect=min(timeout, 5.0)),
-            transport=transport,
+            transport=transport if transport is not None else _default_transport,
             follow_redirects=False,
             headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
         )

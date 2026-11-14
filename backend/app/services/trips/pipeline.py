@@ -117,6 +117,10 @@ def after_trips_changed(
     out.update(gaps.recompute(db, vehicle.id, float(merge_cfg["odometer_tolerance_km"])))
     places.recount_visits(db, user_id)
     patterns.rebuild(db, user_id)
+    if origin in ("import", "import_undo"):
+        from app.services.places import suggest
+
+        out["location_suggestions"] = suggest.refresh(db, user_id)
 
     from app.services.calendar import matching as calendar_matching
     from app.services.trips import journeys

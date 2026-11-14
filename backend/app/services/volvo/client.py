@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import random
+import re
 import time
 from collections import deque
 from collections.abc import Callable
@@ -27,6 +28,32 @@ import httpx
 from app.services.volvo import constants as C
 
 logger = logging.getLogger(__name__)
+
+_VIN_IN_PATH = re.compile(r"(/vehicles/)([A-HJ-NPR-Z0-9]{5,})([A-HJ-NPR-Z0-9]{4})(?=[/?\s\"']|$)", re.IGNORECASE)
+
+
+class _RedactVinFilter(logging.Filter):
+    """httpx loggar hela URL:en (inklusive VIN) på INFO-nivå. VIN maskeras innan loggning."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            message = record.getMessage()
+        except Exception:  # pragma: no cover - felaktig loggpost, släpp igenom oförändrad
+            return True
+        if "/vehicles/" in message:
+            record.msg = _VIN_IN_PATH.sub(lambda m: f"{m.group(1)}…{m.group(3)}", message)
+            record.args = ()
+        return True
+
+
+def _install_log_redaction() -> None:
+    for name in ("httpx", "httpcore"):
+        target = logging.getLogger(name)
+        if not any(isinstance(f, _RedactVinFilter) for f in target.filters):
+            target.addFilter(_RedactVinFilter())
+
+
+_install_log_redaction()
 
 # Injiceras av tester (httpx.MockTransport). None = riktig nätverkstrafik.
 HTTP_TRANSPORT: httpx.BaseTransport | None = None
@@ -146,6 +173,17 @@ class MinuteLimiter:
         return waited
 
 
+_limiters: dict[str, MinuteLimiter] = {}
+
+
+def limiter_for(key: str) -> MinuteLimiter:
+    """Processgemensam minutbegränsare per anslutning (gränsen gäller per Volvo ID och klient)."""
+    limiter = _limiters.get(key)
+    if limiter is None:
+        limiter = _limiters[key] = MinuteLimiter()
+    return limiter
+
+
 def backoff_seconds(failures: int, *, base: float = 60.0, cap: float = 3600.0, retry_after: float | None = None) -> float:
     """Exponentiell backoff med jitter. Retry-After respekteras när servern anger den."""
     if retry_after is not None and retry_after > 0:
@@ -202,7 +240,7 @@ class VolvoClient:
         *,
         access_token: str,
         api_key: str,
-        on_unauthorized: Callable[[], str | None] | None = None,
+        on_unauthorized: Callable[[str], str | None] | None = None,
         quota: QuotaTracker | None = None,
         limiter: MinuteLimiter | None = None,
         base_url: str = C.API_BASE_URL,
@@ -265,8 +303,8 @@ class VolvoClient:
             if status == 401:
                 if not refreshed and self._on_unauthorized is not None:
                     refreshed = True
-                    new_token = self._on_unauthorized()  # kan kasta VolvoAuthError
-                    if new_token:
+                    new_token = self._on_unauthorized(self._token)  # kan kasta VolvoAuthError
+                    if new_token and new_token != self._token:
                         self._token = new_token
                         continue
                 raise VolvoAuthError(http_status=401)

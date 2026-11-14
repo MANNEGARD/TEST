@@ -102,8 +102,15 @@ def public_status(db: Session, user_id: uuid.UUID) -> dict[str, Any]:
     conn = state.conn
     cfg = (conn.config or {}) if conn else {}
     hb = state.heartbeat
+    status = state.status
+    last_error = conn.last_error if conn else None
+    if state.mode == "pull" and status == IntegrationStatus.CONNECTED and not state.heartbeat_fresh():
+        # Pull-läget bygger på att integrationen hör av sig – utan livstecken är det
+        # inte längre en verifierad anslutning. Frågorna ligger kvar i utkorgen.
+        status = IntegrationStatus.ERROR
+        last_error = last_error or "Inget livstecken från Home Assistant-integrationen de senaste 10 minuterna."
     return {
-        "status": state.status,
+        "status": status,
         "demo": state.is_demo,
         "delivery_mode": state.mode,
         "channel": state.channel,
@@ -113,7 +120,7 @@ def public_status(db: Session, user_id: uuid.UUID) -> dict[str, Any]:
         "ha_version": (conn.capabilities or {}).get("version") if conn else None,
         "location_name": (conn.capabilities or {}).get("location_name") if conn else None,
         "last_success_at": conn.last_success_at if conn else None,
-        "last_error": conn.last_error if conn else None,
+        "last_error": last_error,
         "last_error_at": conn.last_error_at if conn else None,
         "heartbeat": {
             "received_at": hb.get("received_at"),

@@ -279,7 +279,8 @@ def run_checks(
                 )
     else:
         out.append(
-            _check("selection_export", WARNING, "Export av valda resor",
+            # Ett urval kan aldrig stämmas av mot mätarställningen och får därför inte kallas fullständigt.
+            _check("selection_export", ERROR, "Export av valda resor",
                    "Exporten innehåller endast ett urval av resor och kan inte stämmas av mot mätarställningen.", count=1)
         )
 

@@ -430,6 +430,13 @@ def commit(
     batch.committed_at = utcnow()
     db.flush()
 
+    # Verifierade originalresor ersätter resor som rekonstruerats ur fordonsrapporter.
+    reconciled: dict[str, Any] = {}
+    if imported:
+        from app.services.volvo import detection
+
+        reconciled = detection.reconcile_with_imports(db, vehicle, actor=actor) or {}
+
     merge_cfg = settings_svc.get_section(db, batch.user_id, "merge")
     if apply_merge_rules is None:
         apply_merge_rules = bool(merge_cfg["enabled"])
@@ -451,6 +458,7 @@ def commit(
             "open_gaps": result.get("open_gaps", 0),
             "open_gap_km": result.get("open_gap_km", 0),
             "locations_created": len([loc for loc in location_cache.values() if loc is not None]),
+            "reconciled_api_trips": {k: v for k, v in reconciled.items() if isinstance(v, (int, float))},
         }
     )
     batch.summary = summary
@@ -488,14 +496,13 @@ def undo(db: Session, batch: ImportBatch, *, actor: Actor) -> dict[str, Any]:
     for _ in range(50):
         merged = (
             db.execute(
-                select(LogicalTrip)
-                .join(TripSegment, TripSegment.logical_trip_id == LogicalTrip.id)
-                .where(
+                select(LogicalTrip).where(
                     LogicalTrip.state == LogicalState.ACTIVE,
                     LogicalTrip.segment_count > 1,
-                    TripSegment.raw_trip_id.in_(raw_ids),
+                    LogicalTrip.id.in_(
+                        select(TripSegment.logical_trip_id).where(TripSegment.raw_trip_id.in_(raw_ids))
+                    ),
                 )
-                .distinct()
             )
             .scalars()
             .all()
@@ -508,10 +515,10 @@ def undo(db: Session, batch: ImportBatch, *, actor: Actor) -> dict[str, Any]:
 
     trips = (
         db.execute(
-            select(LogicalTrip)
-            .join(TripSegment, TripSegment.logical_trip_id == LogicalTrip.id)
-            .where(TripSegment.raw_trip_id.in_(raw_ids), LogicalTrip.state != LogicalState.VOIDED)
-            .distinct()
+            select(LogicalTrip).where(
+                LogicalTrip.state != LogicalState.VOIDED,
+                LogicalTrip.id.in_(select(TripSegment.logical_trip_id).where(TripSegment.raw_trip_id.in_(raw_ids))),
+            )
         )
         .scalars()
         .all()

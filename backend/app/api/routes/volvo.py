@@ -1,5 +1,449 @@
-"""Fylls i – se app/api/router.py."""
+"""Volvo Cars-integrationen: anslutning (OAuth2 + PKCE eller testtoken), fordonsval,
+insamling och demoläge.
 
-from fastapi import APIRouter
+Hemligheter (Client secret, VCC API-nyckel, tokens) sparas endast krypterat och
+returneras aldrig – svaren visar bara *om* de finns.
+"""
 
-router = APIRouter()
+from __future__ import annotations
+
+import logging
+import uuid
+from typing import Any
+from urllib.parse import urlencode
+
+from fastapi import APIRouter, Request
+from fastapi.responses import RedirectResponse
+from pydantic import BaseModel, Field
+from sqlalchemy import select
+
+from app.api.deps import DbDep, Principal, PrincipalDep, WebPrincipalDep, get_principal, get_vehicle
+from app.api.errors import ApiError, bad_request, conflict
+from app.config import get_config
+from app.db import utcnow
+from app.models import IntegrationConnection, IntegrationSyncRun, Vehicle, VehicleObservation
+from app.models.enums import IntegrationProvider, IntegrationStatus
+from app.services import audit, integrations, vehicles
+from app.services.volvo import collector, demo, oauth
+from app.services.volvo import constants as C
+from app.services.volvo.client import VolvoError, VolvoThrottled
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/integrations/volvo", tags=["Volvo"])
+
+
+# ----------------------------------------------------------------------- scheman
+
+
+class CredentialsIn(BaseModel):
+    client_id: str = Field(min_length=1, max_length=200)
+    client_secret: str | None = Field(default=None, max_length=500, description="Tomt = behåll sparat värde")
+    vcc_api_key: str | None = Field(default=None, max_length=500, description="Tomt = behåll sparat värde")
+    auth_server: str | None = Field(default=None, pattern="^(new|legacy)$")
+    scopes: list[str] | None = Field(default=None, max_length=40)
+
+
+class TestTokenIn(BaseModel):
+    access_token: str = Field(min_length=20, max_length=8000)
+    vcc_api_key: str | None = Field(default=None, max_length=500)
+
+
+class SelectVehicleIn(BaseModel):
+    ref: str = Field(min_length=6, max_length=64)
+    vehicle_id: uuid.UUID | None = None
+
+
+class SyncIn(BaseModel):
+    vehicle_id: uuid.UUID | None = None
+
+
+class SimulateIn(BaseModel):
+    scenario: str | None = Field(default=None, max_length=40)
+
+
+# ----------------------------------------------------------------------- hjälpare
+
+_STATUS_FOR_CODE = {
+    "not_configured": 400,
+    "invalid_credentials": 400,
+    "invalid_state": 400,
+    "state_expired": 400,
+    "missing_code": 400,
+    "no_vehicle": 400,
+    "unknown_vehicle": 404,
+    "demo_vehicle": 400,
+    "demo_disabled": 409,
+    "unknown_scenario": 400,
+    "needs_reauth": 409,
+    "throttled": 429,
+    "invalid_client": 400,
+    "network": 502,
+    "token_error": 502,
+}
+
+
+def _api_error(exc: VolvoError) -> ApiError:
+    status = _STATUS_FOR_CODE.get(exc.code, 502 if exc.http_status else 400)
+    return ApiError(status, exc.message, exc.code)
+
+
+def _conn(db: DbDep, principal: Principal, *, create: bool = True) -> IntegrationConnection | None:
+    return oauth.connection(db, principal.user.id, create=create)
+
+
+def _iso(value: Any) -> str | None:
+    return value.isoformat() if value is not None else None
+
+
+def _vehicle_summary(db: DbDep, v: Vehicle) -> dict[str, Any]:
+    caps = v.capabilities or {}
+    last_obs = collector.latest_observation(db, v.id)
+    return {
+        "id": str(v.id),
+        "name": v.name,
+        "is_demo": v.is_demo,
+        "vin_masked": vehicles.mask_vin(v.vin),
+        "model": v.model,
+        "model_year": v.model_year,
+        "fuel_type": v.fuel_type,
+        "capabilities": caps.get("endpoints") or {},
+        "energy_capabilities": caps.get("energy") or {},
+        "probed_at": caps.get("probed_at"),
+        "data_freshness": caps.get("data_freshness"),
+        "last_observation_at": _iso(last_obs.last_seen_at) if last_obs else None,
+    }
+
+
+def _last_run(db: DbDep, conn: IntegrationConnection, *, demo_runs: bool) -> dict[str, Any] | None:
+    q = select(IntegrationSyncRun).where(IntegrationSyncRun.connection_id == conn.id)
+    q = q.where(IntegrationSyncRun.kind.like("demo%") if demo_runs else IntegrationSyncRun.kind.not_like("demo%"))
+    run = db.execute(q.order_by(IntegrationSyncRun.started_at.desc()).limit(1)).scalar_one_or_none()
+    if run is None:
+        return None
+    return {
+        "kind": run.kind,
+        "status": run.status,
+        "started_at": _iso(run.started_at),
+        "finished_at": _iso(run.finished_at),
+        "http_status": run.http_status,
+        "error": run.error,
+        "stats": run.stats or {},
+    }
+
+
+def _status(db: DbDep, principal: Principal) -> dict[str, Any]:
+    conn = _conn(db, principal, create=False)
+    view = integrations.public_view(conn, IntegrationProvider.VOLVO)
+    cfg = dict(view.get("config") or {})
+    demo_cfg = cfg.pop("demo", None) or {}
+    caps = dict(view.get("capabilities") or {})
+    quota = caps.pop("quota", None)
+    view["config"] = cfg
+    view["capabilities"] = caps
+
+    linked: list[Vehicle] = []
+    if conn is not None:
+        linked = list(
+            db.execute(
+                select(Vehicle).where(Vehicle.volvo_connection_id == conn.id, Vehicle.is_demo.is_(False))
+            ).scalars()
+        )
+    demo_vehicle = vehicles.demo_vehicle(db, principal.user.id, create=False) if demo.is_enabled(conn) else None
+    real_connected = conn is not None and conn.status == IntegrationStatus.CONNECTED
+    stale = [v.id for v in linked if ((v.capabilities or {}).get("data_freshness") or {}).get("stale")]
+    view.update(
+        {
+            "is_connected": real_connected,
+            "mode": cfg.get("mode") or (C.MODE_DEMO if demo_cfg.get("enabled") else None),
+            "test_token_mode": oauth.is_test_token_mode(conn),
+            "test_token_notice": (
+                "Testtoken från utvecklarportalen: kortlivad och förnyas inte automatiskt. "
+                "Anslut med Volvo ID för kontinuerlig insamling."
+            )
+            if oauth.is_test_token_mode(conn)
+            else None,
+            "redirect_uri": oauth.redirect_uri(),
+            "auth_server": cfg.get("auth_server") or C.DEFAULT_AUTH_SERVER,
+            "requested_scopes": oauth.requested_scopes(conn) if conn is not None else list(C.DEFAULT_SCOPES),
+            "reauth_due_at": _iso(oauth.reauth_due_at(conn)) if conn is not None else None,
+            "quota": quota
+            or {"date": None, "calls": {}, "budget_per_api": C.DAILY_BUDGET_PER_API,
+                "documented_limit_per_api": C.DOCUMENTED_DAILY_LIMIT},
+            "rate_limit_per_minute": C.REQUESTS_PER_MINUTE,
+            "vehicles": [_vehicle_summary(db, v) for v in linked],
+            "stale": bool(stale),
+            "stale_vehicle_ids": [str(i) for i in stale],
+            "last_run": _last_run(db, conn, demo_runs=False) if conn is not None else None,
+            "endpoints": [
+                {"name": e.name, "label": e.label, "api": e.api, "scopes": list(e.scopes), "polled": e.polled}
+                for e in C.ENDPOINTS.values()
+            ],
+            "demo": {
+                "enabled": bool(demo_cfg.get("enabled")),
+                "vehicle": _vehicle_summary(db, demo_vehicle) if demo_vehicle is not None else None,
+                "last_run": _last_run(db, conn, demo_runs=True) if conn is not None and demo_cfg else None,
+                "scenarios": [{"key": k, "description": d} for k, d in demo.SCENARIOS.items()],
+            },
+        }
+    )
+    return view
+
+
+def _redirect(**params: str) -> RedirectResponse:
+    base = get_config().base_url.rstrip("/")
+    return RedirectResponse(f"{base}/integrations?{urlencode(params)}", status_code=302)
+
+
+# ----------------------------------------------------------------------- status och uppgifter
+
+
+@router.get("/status", summary="Volvo-integrationens status, kapabiliteter och kvot")
+def status(principal: PrincipalDep, db: DbDep) -> dict[str, Any]:
+    return _status(db, principal)
+
+
+@router.put("/credentials", summary="Spara utvecklarapplikationens uppgifter (krypteras)")
+def save_credentials(body: CredentialsIn, principal: WebPrincipalDep, db: DbDep) -> dict[str, Any]:
+    conn = _conn(db, principal)
+    assert conn is not None
+    try:
+        oauth.save_credentials(
+            db,
+            conn,
+            client_id=body.client_id,
+            client_secret=body.client_secret,
+            vcc_api_key=body.vcc_api_key,
+            auth_server=body.auth_server,
+            scopes=body.scopes,
+        )
+    except VolvoError as exc:
+        db.rollback()
+        raise _api_error(exc) from exc
+    audit.record(
+        db, principal.actor, "volvo.credentials_saved", "integration", conn.id,
+        after={"client_id": body.client_id, "auth_server": body.auth_server, "secret_changed": bool(body.client_secret),
+               "api_key_changed": bool(body.vcc_api_key)},
+    )
+    db.commit()
+    return _status(db, principal)
+
+
+@router.post("/connect", summary="Starta inloggning med Volvo ID (OAuth2 + PKCE)")
+def connect(principal: WebPrincipalDep, db: DbDep) -> dict[str, str]:
+    conn = _conn(db, principal)
+    assert conn is not None
+    try:
+        url = oauth.start_authorization(db, conn, principal.user.id)
+    except VolvoError as exc:
+        db.rollback()
+        raise _api_error(exc) from exc
+    db.commit()
+    return {"authorize_url": url}
+
+
+@router.get("/callback", summary="Återkomst från Volvo ID (webbläsaren omdirigeras hit)", include_in_schema=True)
+def callback(
+    request: Request,
+    db: DbDep,
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+) -> RedirectResponse:
+    try:
+        principal = get_principal(request, db)
+    except ApiError:
+        return _redirect(volvo="error", reason="not_logged_in")
+    if principal.api_token is not None:
+        return _redirect(volvo="error", reason="session_required")
+    user_id = principal.user.id
+    if error:
+        # Användaren avbröt eller Volvo nekade. State förbrukas ändå.
+        oauth.discard_state(db, user_id, state)
+        db.commit()
+        reason = error if error in ("access_denied", "invalid_scope", "server_error", "temporarily_unavailable") else "denied"
+        return _redirect(volvo="error", reason=reason)
+    try:
+        conn = oauth.complete_authorization(db, user_id, state=state, code=code)
+    except VolvoError as exc:
+        db.rollback()
+        return _redirect(volvo="error", reason=exc.code)
+    except Exception:  # aldrig 500 i webbläsaren – detaljer loggas utan hemligheter
+        db.rollback()
+        logger.exception("Oväntat fel vid Volvo-återkomst")
+        return _redirect(volvo="error", reason="internal_error")
+    audit.record(db, principal.actor, "volvo.connected", "integration", conn.id, after={"mode": C.MODE_OAUTH})
+    db.commit()
+    try:
+        collector.discover_vehicles(db, conn)
+        db.commit()
+    except VolvoError as exc:
+        db.rollback()
+        logger.info("Fordonslistan kunde inte hämtas direkt efter anslutning (%s)", exc.code)
+    except Exception:
+        db.rollback()
+        logger.exception("Oväntat fel när fordonslistan hämtades")
+    return _redirect(volvo="connected")
+
+
+@router.post("/test-token", summary="Anslut med en kortlivad testtoken från utvecklarportalen")
+def test_token(body: TestTokenIn, principal: WebPrincipalDep, db: DbDep) -> dict[str, Any]:
+    conn = _conn(db, principal)
+    assert conn is not None
+    try:
+        oauth.set_test_token(db, conn, access_token=body.access_token, vcc_api_key=body.vcc_api_key)
+    except VolvoError as exc:
+        db.rollback()
+        raise _api_error(exc) from exc
+    audit.record(db, principal.actor, "volvo.test_token_set", "integration", conn.id, after={"mode": C.MODE_TEST_TOKEN})
+    db.commit()
+    # Verifiera direkt genom att hämta fordonslistan; först då räknas den som ansluten.
+    try:
+        collector.discover_vehicles(db, conn)
+    except VolvoError as exc:
+        db.commit()  # needs_reauth/fel sparas
+        raise _api_error(exc) from exc
+    db.commit()
+    return _status(db, principal)
+
+
+# ----------------------------------------------------------------------- fordon och synk
+
+
+@router.get("/vehicles", summary="Bilar på det anslutna Volvo-kontot (maskerade VIN)")
+def list_account_vehicles(principal: PrincipalDep, db: DbDep, refresh: bool = False) -> dict[str, Any]:
+    conn = _conn(db, principal, create=False)
+    if conn is None:
+        return {"vehicles": [], "selected_ref": None}
+    if refresh:
+        try:
+            collector.discover_vehicles(db, conn)
+        except VolvoError as exc:
+            db.commit()
+            raise _api_error(exc) from exc
+        db.commit()
+    cfg = conn.config or {}
+    return {"vehicles": cfg.get("vehicles") or [], "selected_ref": cfg.get("vehicle_ref")}
+
+
+@router.post("/select-vehicle", summary="Koppla en bil på Volvo-kontot till ett fordon i DriveLog")
+def select_vehicle(body: SelectVehicleIn, principal: WebPrincipalDep, db: DbDep) -> dict[str, Any]:
+    conn = _conn(db, principal, create=False)
+    if conn is None or not oauth.has_real_credentials(conn):
+        raise bad_request("Anslut Volvo-kontot först.", "not_configured")
+    target = get_vehicle(db, principal, body.vehicle_id)
+    known = integrations.secrets(conn).get("vehicles") or []
+    info = next((v for v in known if collector.vehicle_ref(str(v.get("vin") or "")) == body.ref), None)
+    if info is not None:
+        clash = db.execute(
+            select(Vehicle.id).where(
+                Vehicle.owner_user_id == principal.user.id, Vehicle.vin == str(info.get("vin")), Vehicle.id != target.id
+            )
+        ).first()
+        if clash is not None:
+            raise conflict("Bilen är redan kopplad till ett annat fordon i DriveLog.", "vehicle_already_linked")
+    # Tidigare kopplade fordon släpps så att samma Volvo-konto bara pollar den valda bilen.
+    for other in db.execute(
+        select(Vehicle).where(Vehicle.volvo_connection_id == conn.id, Vehicle.is_demo.is_(False), Vehicle.id != target.id)
+    ).scalars():
+        other.volvo_connection_id = None
+    try:
+        collector.select_vehicle(db, conn, target, body.ref)
+    except VolvoError as exc:
+        db.rollback()
+        raise _api_error(exc) from exc
+    audit.record(db, principal.actor, "volvo.vehicle_selected", "vehicle", target.id, after={"ref": body.ref})
+    db.commit()
+    probe_error: str | None = None
+    try:
+        collector.probe_capabilities(db, conn, target)
+        db.commit()
+    except VolvoError as exc:
+        db.commit()
+        probe_error = exc.message
+    out = _status(db, principal)
+    out["probe_error"] = probe_error
+    return out
+
+
+@router.post("/sync", summary="Hämta fordonsdata nu")
+def sync_now(principal: WebPrincipalDep, db: DbDep, body: SyncIn | None = None) -> dict[str, Any]:
+    conn = _conn(db, principal, create=False)
+    if conn is None:
+        raise bad_request("Volvo-integrationen är inte konfigurerad.", "not_configured")
+    if body is not None and body.vehicle_id is not None:
+        vehicle = get_vehicle(db, principal, body.vehicle_id)
+    else:
+        vehicle = db.execute(
+            select(Vehicle)
+            .where(Vehicle.volvo_connection_id == conn.id, Vehicle.is_demo.is_(False), Vehicle.vin.is_not(None))
+            .limit(1)
+        ).scalar_one_or_none()
+        if vehicle is None and demo.is_enabled(conn):
+            vehicle = vehicles.demo_vehicle(db, principal.user.id, create=False)
+    if vehicle is None or vehicle.volvo_connection_id != conn.id:
+        raise bad_request("Inget fordon är kopplat till Volvo-kontot.", "no_vehicle")
+    if not vehicle.is_demo and not oauth.has_real_credentials(conn):
+        raise bad_request("Anslut Volvo-kontot först.", "not_configured")
+    try:
+        result = collector.poll_vehicle(db, vehicle)
+    except VolvoError as exc:
+        db.commit()
+        raise _api_error(exc) from exc
+    db.commit()
+    result.pop("freshness", None)
+    obs = db.execute(
+        select(VehicleObservation.last_seen_at)
+        .where(VehicleObservation.vehicle_id == vehicle.id)
+        .order_by(VehicleObservation.fetched_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    return {"vehicle_id": str(vehicle.id), "result": result, "last_observation_at": _iso(obs), "at": _iso(utcnow())}
+
+
+@router.post("/disconnect", summary="Koppla bort Volvo-kontot (raderar alla hemligheter)")
+def disconnect(principal: WebPrincipalDep, db: DbDep) -> dict[str, Any]:
+    conn = _conn(db, principal, create=False)
+    if conn is not None:
+        before = {"status": conn.status, "mode": (conn.config or {}).get("mode")}
+        oauth.disconnect(db, conn)
+        audit.record(db, principal.actor, "volvo.disconnected", "integration", conn.id, before=before)
+        db.commit()
+    return _status(db, principal)
+
+
+# ----------------------------------------------------------------------- demoläge
+
+
+@router.post("/demo/enable", summary="Aktivera demoläget (separat demobil med påhittade data)")
+def demo_enable(principal: WebPrincipalDep, db: DbDep) -> dict[str, Any]:
+    try:
+        demo.enable(db, principal.user.id)
+    except VolvoError as exc:
+        db.rollback()
+        raise _api_error(exc) from exc
+    db.commit()
+    return _status(db, principal)
+
+
+@router.post("/demo/simulate", summary="Simulera en körning med demobilen")
+def demo_simulate(principal: WebPrincipalDep, db: DbDep, body: SimulateIn | None = None) -> dict[str, Any]:
+    try:
+        result = demo.simulate_trip(db, principal.user.id, body.scenario if body else None)
+    except VolvoThrottled as exc:  # pragma: no cover - demon har ingen kvot
+        db.rollback()
+        raise _api_error(exc) from exc
+    except VolvoError as exc:
+        db.rollback()
+        raise _api_error(exc) from exc
+    db.commit()
+    return result
+
+
+@router.post("/demo/disable", summary="Stäng av demoläget och radera all demodata")
+def demo_disable(principal: WebPrincipalDep, db: DbDep) -> dict[str, Any]:
+    removed = demo.disable(db, principal.user.id)
+    db.commit()
+    out = _status(db, principal)
+    out["removed"] = removed
+    return out

@@ -1,0 +1,18 @@
+{
+  "domain": "smgd_drivelog",
+  "name": "SMGD DriveLog",
+  "after_dependencies": [
+    "mobile_app",
+    "notify"
+  ],
+  "codeowners": [
+    "@SMGD-MP"
+  ],
+  "config_flow": true,
+  "documentation": "https://github.com/SMGD-MP/TEST/blob/main/docs/home-assistant.md",
+  "integration_type": "service",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/SMGD-MP/TEST/issues",
+  "requirements": [],
+  "version": "1.0.0"
+}

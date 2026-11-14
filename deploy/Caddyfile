@@ -1,0 +1,27 @@
+# Omvänd proxy med automatisk HTTPS (Let's Encrypt) för den domän som anges i
+# DRIVELOG_DOMAIN, t.ex. journal.smgd.se. Med "localhost" används ett lokalt certifikat.
+{$DRIVELOG_DOMAIN} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "same-origin"
+		Permissions-Policy "geolocation=(), microphone=(), camera=()"
+		-Server
+	}
+
+	# Uppladdningar: importfiler är små; begränsa för att skydda servern.
+	request_body {
+		max_size 60MB
+	}
+
+	handle /api/v1/* {
+		reverse_proxy api:8000
+	}
+
+	handle {
+		reverse_proxy web:3000
+	}
+}

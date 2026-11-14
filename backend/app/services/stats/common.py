@@ -182,8 +182,9 @@ def segment_km(trip: LogicalTrip) -> dict[str, float]:
 
 
 def trip_kind(trip: LogicalTrip) -> str:
-    """work | private | undecided | mixed – för antal resor per kategori."""
-    decided = [k for k, v in (("work", trip.work_km), ("private", trip.private_km), ("undecided", trip.undecided_km)) if v > KM_EPS]
+    """work | private | undecided | mixed – för antal resor per kategori (ur segmenten)."""
+    km = segment_km(trip)
+    decided = [k for k in ("work", "private", "undecided") if km[k] > KM_EPS]
     if len(decided) > 1:
         return "mixed"
     if decided:
@@ -261,20 +262,24 @@ class Totals:
     driving_seconds: int = 0
 
     def add_trip(self, trip: LogicalTrip) -> None:
+        # Kilometer räknas direkt ur segmenten – aldrig ur resans cachefält.
+        km = segment_km(trip)
+        total = km["work"] + km["private"] + km["undecided"]
         self.trips += 1
-        self.total_km += trip.distance_km
-        self.work_km += trip.work_km
-        self.private_km += trip.private_km
-        self.undecided_km += trip.undecided_km
-        self.by_kind[trip_kind(trip)] = self.by_kind.get(trip_kind(trip), 0) + 1
+        self.total_km += total
+        self.work_km += km["work"]
+        self.private_km += km["private"]
+        self.undecided_km += km["undecided"]
+        kind = trip_kind(trip)
+        self.by_kind[kind] = self.by_kind.get(kind, 0) + 1
         if trip.review_status in PRELIMINARY:
             self.preliminary_trips += 1
-            self.preliminary_work_km += trip.work_km
-            self.preliminary_private_km += trip.private_km
+            self.preliminary_work_km += km["work"]
+            self.preliminary_private_km += km["private"]
         elif trip.review_status == ReviewStatus.NEEDS_REVIEW:
             self.needs_review_trips += 1
         if is_gap_fill(trip):
-            self.summarized_gap_km += trip.distance_km
+            self.summarized_gap_km += total
         self.driving_seconds += trip.driving_seconds or 0
         for raw in seg.ordered_raws(trip):
             if raw.source == TripSource.GAP_FILL:

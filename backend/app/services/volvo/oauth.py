@@ -187,14 +187,28 @@ def _consume_state(db: Session, user_id: uuid.UUID, state: str | None) -> str:
     return crypto.decrypt_text(verifier_enc)
 
 
+def discard_state(db: Session, user_id: uuid.UUID, state: str | None) -> None:
+    """Förbrukar state utan tokenutbyte (t.ex. när användaren avbröt hos Volvo)."""
+    try:
+        _consume_state(db, user_id, state)
+    except VolvoError:
+        pass
+
+
 # ------------------------------------------------------------------ token-endpoint
 
 
-def _token_request(conn: IntegrationConnection, data: dict[str, str]) -> dict[str, Any]:
+def _token_request(
+    conn: IntegrationConnection, data: dict[str, str], *, transport: httpx.BaseTransport | None = None
+) -> dict[str, Any]:
+    """POST mot token-endpointen med HTTP Basic (client_id:client_secret)."""
     client_id = (conn.config or {}).get("client_id") or ""
     client_secret = integrations.secrets(conn).get("client_secret") or ""
+    if not client_id or not client_secret:
+        raise VolvoError("Client ID och Client secret saknas.", code="not_configured")
+    transport = transport if transport is not None else volvo_client.HTTP_TRANSPORT
     try:
-        with httpx.Client(timeout=TOKEN_TIMEOUT, transport=volvo_client.HTTP_TRANSPORT) as http:
+        with httpx.Client(timeout=TOKEN_TIMEOUT, transport=transport) as http:
             resp = http.post(
                 auth_urls(conn)["token"],
                 data=data,
@@ -247,12 +261,20 @@ def _store_tokens(db: Session, conn: IntegrationConnection, body: dict[str, Any]
 
 
 def complete_authorization(
-    db: Session, user_id: uuid.UUID, *, state: str | None, code: str | None, now: datetime | None = None
+    db: Session,
+    user_id: uuid.UUID,
+    *,
+    state: str | None,
+    code: str | None,
+    now: datetime | None = None,
+    transport: httpx.BaseTransport | None = None,
 ) -> IntegrationConnection:
     """Byter auktoriseringskoden mot tokens och markerar anslutningen som ansluten."""
     now = now or utcnow()
-    verifier = _consume_state(db, user_id, state)
-    db.commit()  # state är förbrukat oavsett hur det går sedan
+    try:
+        verifier = _consume_state(db, user_id, state)
+    finally:
+        db.commit()  # state är förbrukat oavsett hur det går
     if not code:
         raise VolvoError("Svaret från Volvo saknar auktoriseringskod.", code="missing_code")
     conn = connection(db, user_id)
@@ -266,6 +288,7 @@ def complete_authorization(
                 "redirect_uri": redirect_uri(),
                 "code_verifier": verifier,
             },
+            transport=transport,
         )
     except VolvoError as exc:
         integrations.mark_error(conn, exc.message)
@@ -284,8 +307,19 @@ def complete_authorization(
     return conn
 
 
-def refresh_access_token(db: Session, conn: IntegrationConnection, *, now: datetime | None = None) -> str:
-    """Förnyar access token. Vid ``invalid_grant`` krävs ny inloggning."""
+def refresh_access_token(
+    db: Session,
+    conn: IntegrationConnection,
+    *,
+    now: datetime | None = None,
+    transport: httpx.BaseTransport | None = None,
+    failed_token: str | None = None,
+) -> str:
+    """Förnyar access token. Vid ``invalid_grant`` krävs ny inloggning.
+
+    ``failed_token`` anges efter ett 401-svar: då förnyas alltid, såvida inte en annan
+    arbetare redan hunnit byta till en annan token.
+    """
     now = now or utcnow()
     # Lås raden så att två arbetare inte förbrukar samma roterande refresh token.
     db.flush()
@@ -294,13 +328,17 @@ def refresh_access_token(db: Session, conn: IntegrationConnection, *, now: datet
     sec = integrations.secrets(conn)
     if (conn.config or {}).get("mode") == C.MODE_TEST_TOKEN:
         _require_reauth(db, conn, "Testtoken har gått ut. Skapa en ny i Volvos utvecklarportal eller anslut med Volvo ID.")
-    if conn.token_expires_at and conn.token_expires_at - EXPIRY_SKEW > now and sec.get("access_token"):
-        return str(sec["access_token"])  # en annan arbetare hann förnya
+    current = sec.get("access_token")
+    still_valid = conn.token_expires_at is not None and conn.token_expires_at - EXPIRY_SKEW > now
+    if current and still_valid and current != failed_token:
+        return str(current)  # en annan arbetare hann förnya
     refresh_token = sec.get("refresh_token")
     if not refresh_token:
         _require_reauth(db, conn, "Ingen giltig Volvo-behörighet finns. Anslut igen.")
     try:
-        body = _token_request(conn, {"grant_type": "refresh_token", "refresh_token": str(refresh_token)})
+        body = _token_request(
+            conn, {"grant_type": "refresh_token", "refresh_token": str(refresh_token)}, transport=transport
+        )
     except VolvoAuthError as exc:
         _require_reauth(db, conn, exc.message)
     return _store_tokens(db, conn, body, now)
@@ -315,7 +353,9 @@ def _require_reauth(db: Session, conn: IntegrationConnection, message: str) -> N
     raise VolvoAuthError(message)
 
 
-def get_access_token(db: Session, conn: IntegrationConnection, *, now: datetime | None = None) -> str:
+def get_access_token(
+    db: Session, conn: IntegrationConnection, *, now: datetime | None = None, transport: httpx.BaseTransport | None = None
+) -> str:
     """Giltig access token; förnyas automatiskt strax innan den går ut."""
     now = now or utcnow()
     sec = integrations.secrets(conn)
@@ -326,7 +366,7 @@ def get_access_token(db: Session, conn: IntegrationConnection, *, now: datetime 
         return str(access)
     if access and conn.token_expires_at and conn.token_expires_at - EXPIRY_SKEW > now:
         return str(access)
-    return refresh_access_token(db, conn, now=now)
+    return refresh_access_token(db, conn, now=now, transport=transport)
 
 
 def set_test_token(db: Session, conn: IntegrationConnection, *, access_token: str, vcc_api_key: str | None) -> None:
@@ -358,3 +398,30 @@ def reauth_due_at(conn: IntegrationConnection) -> datetime | None:
         return datetime.fromisoformat(started) + GRANT_MAX_LIFETIME
     except ValueError:
         return None
+
+
+def is_test_token_mode(conn: IntegrationConnection | None) -> bool:
+    return conn is not None and (conn.config or {}).get("mode") == C.MODE_TEST_TOKEN
+
+
+def disconnect(db: Session, conn: IntegrationConnection) -> None:
+    """Kopplar bort Volvo-kontot: alla hemligheter och tokens raderas.
+
+    Fordonen i DriveLog och redan insamlade observationer/resor finns kvar, men
+    kopplingen till Volvo-kontot tas bort. Ett aktiverat demoläge påverkas inte.
+    """
+    from app.models import Vehicle
+
+    demo_cfg = (conn.config or {}).get("demo")
+    integrations.disconnect(db, conn)
+    for vehicle in db.execute(
+        select(Vehicle).where(Vehicle.volvo_connection_id == conn.id, Vehicle.is_demo.is_(False))
+    ).scalars():
+        vehicle.volvo_connection_id = None
+    db.execute(delete(OAuthState).where(OAuthState.user_id == conn.user_id, OAuthState.provider == IntegrationProvider.VOLVO))
+    conn.last_sync_at = conn.last_success_at = None
+    if demo_cfg:
+        integrations.update_config(conn, {"demo": demo_cfg})
+        if demo_cfg.get("enabled"):
+            conn.status = IntegrationStatus.DEMO
+    db.flush()

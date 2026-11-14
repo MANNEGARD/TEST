@@ -8,7 +8,8 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import DateTime, MetaData, create_engine, event
+from sqlalchemy import JSON, DateTime, MetaData, create_engine, event
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -23,6 +24,10 @@ NAMING_CONVENTION = {
     "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
     "pk": "pk_%(table_name)s",
 }
+
+
+# JSONB på PostgreSQL (stöder likhet, DISTINCT och index); vanlig JSON på SQLite.
+JSONType = JSON().with_variant(JSONB(), "postgresql")
 
 
 class UTCDateTime(TypeDecorator):

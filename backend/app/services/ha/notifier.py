@@ -408,6 +408,7 @@ def cancel_for_trip(
     klassningsfråga när resan är godkänd, en syftesfråga när syftet är bekräftat
     eller resan inte längre är en tjänsteresa.
     """
+    db.flush()
     trip = db.get(LogicalTrip, trip_id)
     reqs = db.execute(
         select(NotificationRequest).where(
@@ -429,6 +430,7 @@ def cancel_for_trip(
 
 def cancel_for_review_item(db: Session, item_id: uuid.UUID) -> int:
     """Avbryter frågor kopplade till ett granskningsärende (t.ex. sammanslagning)."""
+    db.flush()
     reqs = db.execute(
         select(NotificationRequest).where(
             NotificationRequest.review_item_id == item_id, NotificationRequest.status.in_(OPEN_STATUSES)
@@ -441,6 +443,7 @@ def cancel_for_review_item(db: Session, item_id: uuid.UUID) -> int:
 
 
 def cancel_all_open(db: Session, user_id: uuid.UUID, *, only_channel: str | None = None) -> int:
+    db.flush()
     reqs = db.execute(
         select(NotificationRequest).where(
             NotificationRequest.user_id == user_id, NotificationRequest.status.in_(OPEN_STATUSES)
@@ -503,7 +506,7 @@ class _Delivery:
             assert conn is not None
             if self.offline:
                 if not reminder:
-                    req.send_after = now + policy.retry_delay(max(1, req.delivery_attempts))
+                    req.send_after = now + policy.retry_delay(max(1, req.delivery_attempts or 0))
                 return False
             try:
                 self._push(service_data(req, reminder=reminder))
@@ -604,6 +607,7 @@ def deliver_user(db: Session, user_id: uuid.UUID, now: datetime | None = None) -
         reqs = [r for r in reqs if r.status in OPEN_STATUSES]
 
         # 2. Rensa notiser på telefonen för avgjorda frågor (push).
+        db.flush()  # sessionen har autoflush avstängt
         for r in db.execute(
             select(NotificationRequest).where(
                 NotificationRequest.user_id == user_id, NotificationRequest.channel == f"{CHANNEL_PUSH}:clear"
@@ -703,7 +707,7 @@ def deliver_user(db: Session, user_id: uuid.UUID, now: datetime | None = None) -
                         used()
                     else:
                         for r in questions:
-                            r.send_after = now + policy.retry_delay(max(1, digest.delivery_attempts))
+                            r.send_after = now + policy.retry_delay(max(1, digest.delivery_attempts or 0, r.delivery_attempts or 0))
                             r.delivery_attempts = (r.delivery_attempts or 0) + 1
                             r.last_error = digest.last_error
                 else:

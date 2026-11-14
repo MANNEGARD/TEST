@@ -56,9 +56,7 @@ logger = logging.getLogger(__name__)
 CLOCK_SKEW = timedelta(minutes=2)
 ROAD_FACTOR = 1.3  # väg/fågelväg vid uppskattning av mycket korta förflyttningar
 LAG_KM = 2.0  # mätarställning som släpar efter positionsrapporten
-MIN_AVG_SPEED_KMH = 15.0  # långsammaste rimliga snittfart (ger tidigaste rimliga start)
 MAX_AVG_SPEED_KMH = 130.0  # högsta rimliga snittfart (ger senaste möjliga start)
-DURATION_SLACK = timedelta(minutes=10)
 VOID_REASON_SUPERSEDED = "Ersatt av importerad originalresa"
 _USER_SOURCES = (DecisionSource.USER, DecisionSource.HA)
 
@@ -241,25 +239,6 @@ def _imported_coverage(db: Session, vehicle_id: uuid.UUID, odo_s: float, odo_e: 
     return sum(max(0.0, min(odo_e, e) - max(odo_s, s)) for s, e in rows)
 
 
-def _estimate_fuel(leg: Leg, anchor_eff: Eff, flags: list[str], possible_missed: bool) -> float | None:
-    """Uppskattad bränsleåtgång ur tanknivån – endast när ingen tankning kan ha skett.
-
-    API:t ger tanknivå, inte förbrukning. Uppskattningen görs bara när nivån aldrig
-    ökat under resan, resan är entydig och skillnaden är rimlig. Annars: okänd.
-    """
-    if possible_missed or leg.start.fuel is None or leg.end.fuel is None:
-        return None
-    levels = [leg.start.fuel] + [s.eff.fuel for s in leg.steps if s.eff.fuel is not None]
-    if any(b > a + 0.05 for a, b in zip(levels, levels[1:], strict=False)):
-        return None  # nivån har ökat → tankning kan ha skett
-    used = leg.start.fuel - leg.end.fuel
-    distance = (leg.end.odo - leg.start.odo) if (leg.end.odo is not None and leg.start.odo is not None) else 0
-    if used <= 0 or distance <= 0 or used > 0.25 * distance + 1:
-        return None
-    flags.append("fuel_estimated_from_level")
-    return round(used, 2)
-
-
 def _raw_from_leg(
     db: Session,
     vehicle: Vehicle,
@@ -334,34 +313,33 @@ def _raw_from_leg(
     if end_quality != TimeQuality.REPORTED:
         flags.append("end_time_uncertain")
 
-    # Starttid: okänd och hittas aldrig på. Endast ett intervall anges.
-    #  * Har bilen rapporterat under färd (flera ökningar av mätarställningen) vet vi att
-    #    den stod still vid föregående hämtning → snävt intervall.
-    #  * Annars rapporterade bilen först efter ankomst. Då gäller den hårda gränsen (bilen
-    #    stod bevisligen kvar vid sin senaste rapport) och, för en entydig resa, den
-    #    tidigaste rimliga starten givet sträckan – märkt som uppskattat fönster.
+    # Starttid: okänd och hittas aldrig på. Endast gränser anges.
+    #  * Senaste möjliga start: första hämtningen (eller bilens egen tidsstämpel) som
+    #    visade ändrat läge, och aldrig senare än att sträckan hinns med i
+    #    ``MAX_AVG_SPEED_KMH``.
+    #  * Tidigaste möjliga start: bilens senaste rapport från det stillastående läget
+    #    (den stod bevisligen kvar då). Har bilen rapporterat under färd (mätarställningen
+    #    ökade i flera steg) snävas gränsen in till föregående oförändrade hämtning
+    #    minus ett pollintervall.
     first = leg.steps[0]
     observed_in_motion = len(leg.steps) >= 2 and not first.pos_moved
     latest = first.obs.fetched_at
     if first.eff.odo_ts is not None and leg.start.odo_ts is not None and leg.start.odo_ts < first.eff.odo_ts <= latest:
         latest = first.eff.odo_ts
-    if not observed_in_motion and distance > 0:
+    if distance > 0:
         latest = min(latest, ended_at - timedelta(hours=distance / MAX_AVG_SPEED_KMH))
     latest = min(latest, ended_at)
     earliest = lower
     if observed_in_motion and leg.seen_earliest is not None:
         earliest = leg.seen_earliest if earliest is None else max(earliest, leg.seen_earliest)
-    elif not possible_missed and distance > 0:
-        plausible = ended_at - timedelta(hours=distance / MIN_AVG_SPEED_KMH) - DURATION_SLACK
-        if earliest is None or plausible > earliest:
-            earliest = plausible
-            flags.append("start_window_estimated")
-    if earliest is not None:
+        flags.append("observed_in_motion")
+    if earliest is None:
+        flags.append("start_lower_bound_unknown")
+    else:
         earliest = min(earliest, latest)
 
     start_loc, _ = places.resolve_position(db, user_id, leg.start.lat, leg.start.lon)
     end_loc, _ = places.resolve_position(db, user_id, leg.end.lat, leg.end.lon)
-    fuel = _estimate_fuel(leg, leg.start, flags, possible_missed) if leg_count == 1 else None
     obs_ids = [str(leg.start_obs.id)] + [str(s.obs.id) for s in leg.steps]
     raw = RawTrip(
         vehicle_id=vehicle.id,
@@ -388,8 +366,9 @@ def _raw_from_leg(
         position_source=PositionSource.API_POSITION if (leg.start.has_pos or leg.end.has_pos) else PositionSource.NONE,
         start_location_id=start_loc.id if start_loc else None,
         end_location_id=end_loc.id if end_loc else None,
-        fuel_liters=fuel,
-        fuel_quality=ValueQuality.ESTIMATED if fuel is not None else ValueQuality.UNKNOWN,
+        # API:t ger tanknivå och batterinivå, inte förbrukning per resa → okänt.
+        fuel_liters=None,
+        fuel_quality=ValueQuality.UNKNOWN,
         energy_kwh=None,
         energy_quality=ValueQuality.UNKNOWN,
         is_complete=complete,
@@ -668,6 +647,11 @@ def reconcile_with_imports(db: Session, vehicle: Vehicle, *, actor: Actor, now: 
                             f"({'Arbete' if previous == Category.WORK else 'Privat'}) än ditt tidigare beslut. "
                             "Ditt beslut har behållits – kontrollera att det stämmer."
                         )
+                elif single_rec_trip.category != target.category:
+                    problem = (
+                        "Både den importerade originalresan och den tidigare rekonstruerade resan har beslut "
+                        "fattade i DriveLog, med olika kategori. Originalresans beslut har behållits – kontrollera."
+                    )
             elif had_decision:
                 problem = (
                     "Ditt beslut för en rekonstruerad resa kunde inte föras över automatiskt eftersom resan "

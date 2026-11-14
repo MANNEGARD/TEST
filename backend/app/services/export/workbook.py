@@ -36,7 +36,6 @@ from app.models import (
 )
 from app.models.enums import (
     TRIP_SOURCE_LABELS_SV,
-    Category,
     GapStatus,
     LocationType,
     ReviewStatus,
@@ -271,6 +270,7 @@ def journal_rows(ctx: ExportContext) -> list[dict[str, Any]]:
         when = _naive_local(common.trip_time(t), tz)
         fuel, energy = trip_energy(t)
         kind = common.trip_kind(t)
+        km = common.segment_km(t)  # kilometer per delsträcka – facit för summorna
         rows.append(
             {
                 "trip": t,
@@ -282,12 +282,12 @@ def journal_rows(ctx: ExportContext) -> list[dict[str, Any]]:
                 "end_address": _address(ctx, t, t.end_address, t.end_location_id),
                 "odo_start": t.odometer_start,
                 "odo_end": t.odometer_end,
-                "km": round(t.distance_km, 3),
+                "km": round(km["work"] + km["private"] + km["undecided"], 3),
                 "category": CATEGORY_LABELS.get(kind, CATEGORY_LABELS["undecided"]),
                 "kind": kind,
-                "work_km": round(t.work_km, 3),
-                "private_km": round(t.private_km, 3),
-                "undecided_km": round(t.undecided_km, 3),
+                "work_km": km["work"],
+                "private_km": km["private"],
+                "undecided_km": km["undecided"],
                 "purpose": t.purpose or "",
                 "contacts": _contacts(ctx, t),
                 "driver": ctx.drivers.get(t.driver_id, ctx.driver_name) if t.driver_id else ctx.driver_name,
@@ -492,10 +492,12 @@ def _monthly_sheet(book: _Book, rows: list[dict[str, Any]], jr: dict[str, Any]) 
         m = facit["by_month"].get(key, {})
         book.text(ws, r, 0, key)
         a = xl_rowcol_to_cell(r, 0, False, True)
-        book.formula(ws, r, 1, f"=COUNTIFS({month_rng},{a})", m.get("trips", 0), "int")
+        # Jokertecknet tvingar textjämförelse, så att "2026-09" aldrig tolkas som ett datum.
+        crit = f'{a}&"*"'
+        book.formula(ws, r, 1, f"=COUNTIFS({month_rng},{crit})", m.get("trips", 0), "int")
         for c, col_key in ((2, "work_km"), (3, "private_km"), (4, "undecided_km")):
             rng = _abs_range(SHEET_JOURNAL, COL[col_key], first, last)
-            book.formula(ws, r, c, f"=SUMIFS({rng},{month_rng},{a})", m.get(col_key, 0))
+            book.formula(ws, r, c, f"=SUMIFS({rng},{month_rng},{crit})", m.get(col_key, 0))
         row_total = m.get("work_km", 0) + m.get("private_km", 0) + m.get("undecided_km", 0)
         c2, c3, c4, c5 = (xl_rowcol_to_cell(r, i) for i in (2, 3, 4, 5))
         book.formula(ws, r, 5, f"={c2}+{c3}+{c4}", row_total)
@@ -504,7 +506,7 @@ def _monthly_sheet(book: _Book, rows: list[dict[str, Any]], jr: dict[str, Any]) 
         book.formula(ws, r, 8, f"={c5}/10", row_total / 10, "num2")
         for c, col_key in ((9, "fuel"), (10, "energy")):
             rng = _abs_range(SHEET_JOURNAL, COL[col_key], first, last)
-            book.formula(ws, r, c, f"=SUMIFS({rng},{month_rng},{a})", m.get(col_key, 0), "num2")
+            book.formula(ws, r, c, f"=SUMIFS({rng},{month_rng},{crit})", m.get(col_key, 0), "num2")
         r += 1
     last_month_row = max(first_month_row, r - 1)
     total_row = last_month_row + 1

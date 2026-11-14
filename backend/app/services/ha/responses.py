@@ -120,7 +120,8 @@ def _apply(
         feedback.apply_decision(db, trip, user_id=user_id, actor=actor, channel=channel, category=category)
         label = "Arbete" if category == Category.WORK else "Privat"
         result = _result(req, OUTCOME_APPLIED, f"Resan klassades som {label}.", category=category)
-        if category == Category.WORK:
+        if category == Category.WORK and source in _PHONE_SOURCES:
+            # Följdfråga om syftet direkt på telefonen (i webben frågar appen själv).
             follow = _follow_up_purpose(db, user_id, req.logical_trip_id, now)
             if follow is not None:
                 result["follow_up"] = follow.public_id

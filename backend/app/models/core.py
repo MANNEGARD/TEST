@@ -6,10 +6,10 @@ import uuid
 from datetime import date, datetime
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, Date, ForeignKey, Index, Integer, String, Text, UniqueConstraint, Uuid
+from sqlalchemy import Boolean, Date, ForeignKey, Index, Integer, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db import Base, UTCDateTime, new_id, utcnow
+from app.db import Base, JSONType, UTCDateTime, new_id, utcnow
 
 
 class User(Base):
@@ -53,7 +53,7 @@ class ApiToken(Base):
     name: Mapped[str] = mapped_column(String(120))
     token_prefix: Mapped[str] = mapped_column(String(16))
     token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
-    scopes: Mapped[list[str]] = mapped_column(JSON, default=list)
+    scopes: Mapped[list[str]] = mapped_column(JSONType, default=list)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     last_used_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     revoked_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
@@ -79,7 +79,7 @@ class Vehicle(Base):
     volvo_connection_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("integration_connections.id", ondelete="SET NULL"), nullable=True
     )
-    capabilities: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    capabilities: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
 
@@ -104,7 +104,7 @@ class Setting(Base):
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=new_id)
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     key: Mapped[str] = mapped_column(String(120))
-    value: Mapped[Any] = mapped_column(JSON)
+    value: Mapped[Any] = mapped_column(JSONType)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
 
     __table_args__ = (UniqueConstraint("user_id", "key", name="uq_settings_user_key"),)
@@ -138,8 +138,8 @@ class AuditEvent(Base):
     action: Mapped[str] = mapped_column(String(80), index=True)
     entity_type: Mapped[str] = mapped_column(String(60))
     entity_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    before: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
-    after: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    before: Mapped[dict[str, Any] | None] = mapped_column(JSONType, nullable=True)
+    after: Mapped[dict[str, Any] | None] = mapped_column(JSONType, nullable=True)
     ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
     user_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True, index=True)
 
@@ -155,10 +155,10 @@ class IntegrationConnection(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     provider: Mapped[str] = mapped_column(String(40))
     status: Mapped[str] = mapped_column(String(30), default="not_configured")
-    config: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    config: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict)
     secrets_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
-    scopes: Mapped[list[str]] = mapped_column(JSON, default=list)
-    capabilities: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    scopes: Mapped[list[str]] = mapped_column(JSONType, default=list)
+    capabilities: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict)
     token_expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     last_sync_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     last_success_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
@@ -184,7 +184,7 @@ class IntegrationSyncRun(Base):
     finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="running")  # running | ok | partial | error | throttled
     http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    stats: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    stats: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
@@ -210,13 +210,13 @@ class ExportJob(Base):
     vehicle_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("vehicles.id", ondelete="CASCADE"))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
-    params: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    params: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict)
     status: Mapped[str] = mapped_column(String(20), default="pending")  # pending | done | error | deleted
     filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
     file_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     is_complete: Mapped[bool] = mapped_column(Boolean, default=False)
-    warnings: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
-    summary: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    warnings: Mapped[list[dict[str, Any]]] = mapped_column(JSONType, default=list)
+    summary: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     deleted_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)

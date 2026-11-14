@@ -7,6 +7,7 @@ låsskärmstexten inga platsnamn alls – detaljerna visas först i den inloggad
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -20,6 +21,8 @@ from app.services.places.normalize import address_key, parse_address
 APP_TITLE = "SMGD DriveLog"
 MAX_PURPOSE_BUTTONS = 3
 MAX_BUTTON_TITLE = 60
+
+_POSTCODE_RE = re.compile(r"^(?:SE-?)?\d{3}\s?\d{2}\s+", re.IGNORECASE)
 
 
 def fmt_mil(km: float | None) -> str:
@@ -43,8 +46,9 @@ def safe_label(loc: KnownLocation | None, address: str | None) -> str:
         candidates.add(address_key(loc.address))
     if address_key(label) in candidates and address_key(label):
         city = (loc.city if loc is not None else None) or parse_address(address).city
-        return city or "okänd plats"
-    return label
+        label = city or "okänd plats"
+    # Postnummer ("702 10 Örebro") är onödigt exakt – visa bara orten.
+    return _POSTCODE_RE.sub("", label).strip() or "okänd plats"
 
 
 def trip_labels(db: Session, trip: LogicalTrip) -> tuple[str, str]:

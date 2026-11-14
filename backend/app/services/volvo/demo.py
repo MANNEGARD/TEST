@@ -23,7 +23,6 @@ from app.services import audit, integrations, vehicles
 from app.services.places import registry as places
 from app.services.places.normalize import haversine_m
 from app.services.volvo import collector, oauth
-from app.services.volvo import constants as C
 from app.services.volvo.client import ApiResult, QuotaTracker, VolvoError
 
 DEMO_VIN = "DEMO0000000000001"
@@ -396,7 +395,7 @@ def tick(db: Session, now: datetime | None = None) -> dict[str, Any]:
                 out["simulated"] += 1
                 db.commit()
                 continue
-        if last is None or last.last_seen_at <= now:
+        if last is None or last.last_seen_at + POLL <= now:
             collector.poll_vehicle(db, vehicle, now=now, client=DemoClient(conn))
             out["polled"] += 1
         db.commit()
