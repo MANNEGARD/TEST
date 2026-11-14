@@ -20,6 +20,7 @@ dependencies = [
     "cryptography>=43",
     "python-multipart>=0.0.12",
     "tzdata>=2024.2",
+    "anthropic>=2.0",
 ]
 
 [project.optional-dependencies]

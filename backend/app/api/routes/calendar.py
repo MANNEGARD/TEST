@@ -7,12 +7,12 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Any
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
-from app.api.deps import DbDep, PrincipalDep, WebPrincipalDep, get_owned_trip, owned_vehicle_ids
+from app.api.deps import DbDep, PrincipalDep, WebPrincipalDep, get_owned_trip, get_principal, owned_vehicle_ids
 from app.api.errors import ApiError, bad_request, not_found
 from app.config import get_config
 from app.db import utcnow
@@ -110,11 +110,20 @@ def connect(principal: WebPrincipalDep, db: DbDep) -> dict[str, str]:
 
 @router.get("/integrations/microsoft/callback", include_in_schema=False)
 def callback(
-    principal: PrincipalDep, db: DbDep, code: str | None = None, state: str | None = None,
+    request: Request, db: DbDep, code: str | None = None, state: str | None = None,
     error: str | None = None, error_description: str | None = None,
 ) -> RedirectResponse:
-    """OAuth-redirect från Microsoft (webbläsar-GET med sessionskaka)."""
+    """OAuth-redirect från Microsoft (webbläsar-GET med sessionskaka).
+
+    Utan giltig session görs ingenting – webbläsaren skickas tillbaka med ett fel.
+    """
     base = get_config().base_url.rstrip("/")
+    try:
+        principal = get_principal(request, db)
+    except ApiError:
+        return RedirectResponse(f"{base}/integrations?microsoft=error&reason=not_logged_in", status_code=302)
+    if principal.api_token is not None:
+        return RedirectResponse(f"{base}/integrations?microsoft=error&reason=session_required", status_code=302)
     if error or not code:
         logger.info("Microsoft-inloggningen avbröts: %s", error)
         return RedirectResponse(f"{base}/integrations?microsoft=error&reason={(error or 'missing_code')[:40]}", status_code=302)

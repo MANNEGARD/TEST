@@ -367,3 +367,44 @@ def test_openapi_is_documented(client):
         assert expected in tags, expected
     assert client.get(f"{API}/health").json()["status"] == "ok"
     assert client.get(f"{API}/health/ready").json()["checks"]["database"] == "ok"
+
+
+PUBLIC_PATHS = {
+    f"{API}/health",
+    f"{API}/health/ready",
+    f"{API}/auth/setup-status",
+    f"{API}/auth/setup",
+    f"{API}/auth/login",
+    f"{API}/openapi.json",
+    f"{API}/docs",
+}
+
+
+def test_every_endpoint_requires_authentication(anon_client):
+    """Systematisk kontroll: varje route utom en uttalad lista kräver inloggning eller token."""
+    import re
+
+    spec = anon_client.get(f"{API}/openapi.json").json()
+    checked = 0
+    for path, methods in spec["paths"].items():
+        if path in PUBLIC_PATHS:
+            continue
+        url = re.sub(r"\{[^}]+\}", "00000000-0000-0000-0000-000000000000", path)
+        for method in methods:
+            if method not in ("get", "post", "put", "patch", "delete"):
+                continue
+            resp = anon_client.request(method.upper(), url, json={}, follow_redirects=False)
+            if path.startswith(f"{API}/integrations/") and path.endswith("/callback"):
+                # OAuth-återkomst i webbläsaren: inget utförs, användaren skickas tillbaka med fel.
+                assert resp.status_code == 302 and "reason=not_logged_in" in resp.headers["location"], path
+            else:
+                assert resp.status_code == 401, f"{method.upper()} {path} svarade {resp.status_code} utan inloggning"
+            checked += 1
+    assert checked > 150
+
+
+def test_oauth_callbacks_require_session(anon_client):
+    for provider in ("microsoft", "volvo"):
+        r = anon_client.get(f"{API}/integrations/{provider}/callback?code=x&state=y", follow_redirects=False)
+        assert r.status_code == 302, provider
+        assert f"{provider}=error" in r.headers["location"] and "reason=not_logged_in" in r.headers["location"]
