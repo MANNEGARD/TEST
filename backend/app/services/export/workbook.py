@@ -364,6 +364,7 @@ class _Book:
             "datetime": f({**base, "num_format": "yyyy-mm-dd hh:mm"}),
             "km": f({**base, "num_format": "#,##0.0"}),
             "km_bold": f({**base, "num_format": "#,##0.0", "bold": True, "top": 1}),
+            "mil_bold": f({**base, "num_format": "#,##0.00", "bold": True, "top": 1}),
             "odo": f({**base, "num_format": "#,##0"}),
             "int": f({**base, "num_format": "0"}),
             "int_bold": f({**base, "num_format": "0", "bold": True, "top": 1}),
@@ -461,6 +462,9 @@ def _journal_sheet(book: _Book, rows: list[dict[str, Any]]) -> dict[str, Any]:
     ws.autofilter(hr, 0, last, len(JOURNAL_COLUMNS) - 1)
     ws.freeze_panes(first, 3)
     book.page_setup(ws, hr, "Körjournal")
+    # Utskriften omfattar Skatteverkets kolumner (t.o.m. Anteckningar); tekniska hjälpkolumner
+    # finns kvar i bladet men skrivs inte ut, så att texten blir läsbar på papper.
+    ws.print_area(0, 0, total_row, COL["notes"])
     return {"first": first, "last": last, "total_row": total_row, "sums": sums}
 
 
@@ -659,7 +663,7 @@ def _overview_sheet(book: _Book, ws, rows: list[dict[str, Any]], jr: dict[str, A
     book.text(ws, r, 0, "Totalt", "total_label")
     b1, b2 = xl_rowcol_to_cell(cat_rows[0], 1), xl_rowcol_to_cell(cat_rows[-1], 1)
     book.formula(ws, r, 1, f"=SUM({b1}:{b2})", journal_km, "km_bold")
-    book.formula(ws, r, 2, f"={xl_rowcol_to_cell(r, 1)}/10", journal_km / 10, "km_bold")
+    book.formula(ws, r, 2, f"={xl_rowcol_to_cell(r, 1)}/10", journal_km / 10, "mil_bold")
     d1, d2 = xl_rowcol_to_cell(cat_rows[0], 3), xl_rowcol_to_cell(mixed_row, 3)
     book.formula(ws, r, 3, f"=SUM({d1}:{d2})", len(rows), "int_bold")
     r += 1
