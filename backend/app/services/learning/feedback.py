@@ -1,0 +1,366 @@
+"""Användarens beslut: klassning, syfte, godkännande – och inlärningen av dem.
+
+Varje ändring sparas som ``LearningFeedback`` med ursprungligt och nytt värde, plats,
+veckodag, tid, kalenderkontext och modellens tidigare bedömning. Mönstren räknas om
+efter varje beslut, och en korrigering kan ångras helt.
+"""
+
+from __future__ import annotations
+
+import uuid
+from typing import Any
+
+from sqlalchemy import select, update
+from sqlalchemy.orm import Session
+
+from app.db import utcnow
+from app.models import (
+    CalendarEvent,
+    CalendarMatch,
+    KnownLocation,
+    LearningFeedback,
+    LogicalTrip,
+    TripClassification,
+    TripPurpose,
+    TripSegment,
+    Vehicle,
+)
+from app.models.enums import Category, DecisionSource, LogicalState, ReviewStatus
+from app.services import audit
+from app.services import settings as settings_svc
+from app.services.audit import Actor
+from app.services.classify.purpose import NEEDS_CONFIRMATION_SUFFIX
+from app.services.learning import patterns
+from app.services.places.normalize import fold
+from app.services.trips import segments as seg
+from app.services.trips.segments import TripError
+
+MAX_PURPOSE_LENGTH = 500
+_SNAPSHOT_FIELDS = (
+    "category",
+    "subcategory",
+    "category_source",
+    "purpose",
+    "purpose_source",
+    "purpose_confirmed",
+    "review_status",
+    "confidence",
+    "tax_note",
+    "contacts",
+    "notes",
+)
+
+
+def _snapshot(trip: LogicalTrip) -> dict[str, Any]:
+    snap = {f: getattr(trip, f) for f in _SNAPSHOT_FIELDS}
+    snap["segments"] = [
+        {"raw_trip_id": str(s.raw_trip_id), "seq": s.seq, "part": s.part, "distance_km": s.distance_km,
+         "category_override": s.category_override, "note": s.note}
+        for s in sorted(trip.segments, key=lambda s: (s.seq, s.part))
+    ]
+    return snap
+
+
+def _calendar_context(db: Session, trip_id: uuid.UUID) -> dict[str, Any]:
+    row = db.execute(
+        select(CalendarMatch, CalendarEvent)
+        .join(CalendarEvent, CalendarEvent.id == CalendarMatch.calendar_event_id)
+        .where(CalendarMatch.logical_trip_id == trip_id, CalendarMatch.is_selected.is_(True))
+        .limit(1)
+    ).first()
+    if row is None:
+        return {}
+    m, ev = row
+    return {"event_id": str(ev.id), "subject": ev.subject, "score": m.score, "relation": m.relation}
+
+
+def _model_assessment(db: Session, trip_id: uuid.UUID) -> dict[str, Any]:
+    c = db.execute(
+        select(TripClassification)
+        .where(
+            TripClassification.logical_trip_id == trip_id,
+            TripClassification.source.in_((DecisionSource.RULE, DecisionSource.AI)),
+        )
+        .order_by(TripClassification.created_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    if c is None:
+        return {}
+    return {
+        "source": c.source,
+        "category": c.category,
+        "confidence": c.confidence,
+        "model": c.model,
+        "suggested_category": (c.signals or {}).get("suggested_category"),
+    }
+
+
+def apply_decision(
+    db: Session,
+    trip: LogicalTrip,
+    *,
+    user_id: uuid.UUID,
+    actor: Actor,
+    channel: str = "web",
+    category: str | None = None,
+    purpose: str | None = None,
+    subcategory: str | None = None,
+    contacts: str | None = None,
+    notes: str | None = None,
+    approve: bool = False,
+    rebuild: bool = True,
+) -> LogicalTrip:
+    """Tillämpar ett användarbeslut på en resa och lär av det."""
+    if trip.state != LogicalState.ACTIVE:
+        raise TripError("Resan är inte aktiv och kan inte ändras.", "not_active")
+    if category is not None and category not in (Category.WORK, Category.PRIVATE, Category.UNDECIDED):
+        raise TripError("Ogiltig kategori.", "invalid_category")
+    if purpose is not None and len(purpose) > MAX_PURPOSE_LENGTH:
+        raise TripError(f"Syftet får vara högst {MAX_PURPOSE_LENGTH} tecken.", "purpose_too_long")
+
+    before = _snapshot(trip)
+    tz = settings_svc.user_timezone(db, user_id)
+    decision_source = DecisionSource.HA if channel == "ha" else DecisionSource.USER
+    category_changed = purpose_changed = False
+
+    if category is not None:
+        category_changed = category != trip.category or bool(any(s.category_override for s in trip.segments))
+        # Ett uttryckligt beslut för hela resan gäller alla delsträckor.
+        for s in trip.segments:
+            s.category_override = None
+        trip.category = category
+        trip.category_source = decision_source
+        trip.confidence = None
+        trip.tax_note = None
+        if subcategory is not None or category_changed:
+            trip.subcategory = subcategory
+        trip.review_status = ReviewStatus.APPROVED if category != Category.UNDECIDED else ReviewStatus.NEEDS_REVIEW
+    elif subcategory is not None:
+        trip.subcategory = subcategory
+
+    if purpose is not None:
+        text = purpose.strip()
+        purpose_changed = (text or None) != (trip.purpose or None)
+        trip.purpose = text or None
+        trip.purpose_source = decision_source if text else None
+        trip.purpose_confirmed = bool(text)
+        db.execute(
+            update(TripPurpose)
+            .where(TripPurpose.logical_trip_id == trip.id, TripPurpose.is_current.is_(True))
+            .values(is_current=False)
+        )
+        if text:
+            db.add(
+                TripPurpose(
+                    logical_trip_id=trip.id,
+                    text=text,
+                    source=decision_source,
+                    rationale="Angivet av användaren.",
+                    needs_confirmation=False,
+                    created_by=actor.label,
+                )
+            )
+
+    if approve:
+        if trip.category == Category.UNDECIDED and category is None:
+            raise TripError("Välj Arbete eller Privat innan resan godkänns.", "undecided")
+        if trip.has_mixed_categories and category is None and trip.undecided_km > 0.05:
+            raise TripError("Fördela alla delsträckor innan resan godkänns.", "unallocated")
+        trip.review_status = ReviewStatus.APPROVED
+        trip.category_source = decision_source
+        trip.tax_note = None
+        # Godkännandet omfattar även ett föreslaget syfte – men inte platshållaren.
+        if trip.purpose and not trip.purpose_confirmed and NEEDS_CONFIRMATION_SUFFIX not in fold(trip.purpose):
+            trip.purpose_confirmed = True
+
+    if contacts is not None:
+        trip.contacts = contacts.strip() or None
+    if notes is not None:
+        trip.notes = notes.strip() or None
+    if trip.category == Category.PRIVATE and purpose is None and not trip.purpose_confirmed:
+        trip.purpose, trip.purpose_source = None, None  # privata resor behöver inget syfte
+
+    trip.updated_by = actor.label
+    seg.refresh_logical(db, trip)
+
+    if category is not None or approve:
+        db.execute(
+            update(TripClassification)
+            .where(TripClassification.logical_trip_id == trip.id, TripClassification.is_current.is_(True))
+            .values(is_current=False)
+        )
+        db.add(
+            TripClassification(
+                logical_trip_id=trip.id,
+                source=decision_source,
+                category=trip.category,
+                subcategory=trip.subcategory,
+                confidence=None,
+                requires_review=False,
+                source_quality="user",
+                signals={"approved_proposal": approve and category is None, "channel": channel},
+                created_by=actor.label,
+            )
+        )
+
+    origin = db.get(KnownLocation, trip.start_location_id) if trip.start_location_id else None
+    dest = db.get(KnownLocation, trip.end_location_id) if trip.end_location_id else None
+    when = trip.started_at or trip.sort_time
+    local = when.astimezone(tz) if when else None
+    was_proposal = before["category"] != Category.UNDECIDED and before["review_status"] not in (
+        ReviewStatus.APPROVED,
+    )
+    is_correction = (category_changed and before["category"] != Category.UNDECIDED) or (
+        purpose_changed and bool(before["purpose"])
+    )
+    if category is not None or purpose is not None or approve:
+        db.add(
+            LearningFeedback(
+                logical_trip_id=trip.id,
+                user_id=user_id,
+                channel=channel,
+                kind="correction" if is_correction else "confirmation",
+                original_category=before["category"],
+                new_category=trip.category,
+                original_purpose=before["purpose"],
+                new_purpose=trip.purpose,
+                original_state=before,
+                origin_location_id=trip.start_location_id,
+                destination_location_id=trip.end_location_id,
+                origin_type=origin.type if origin else None,
+                destination_type=dest.type if dest else None,
+                weekday=local.weekday() if local else None,
+                local_hour=local.hour if local else None,
+                calendar_context=_calendar_context(db, trip.id),
+                model_assessment={**_model_assessment(db, trip.id), "was_proposal": was_proposal},
+            )
+        )
+    audit.record(
+        db,
+        actor,
+        "trip.update",
+        "logical_trip",
+        trip.id,
+        before={k: v for k, v in before.items() if k != "segments"},
+        after={f: getattr(trip, f) for f in _SNAPSHOT_FIELDS},
+        user_id=user_id,
+    )
+    db.flush()
+    if rebuild:
+        after_decisions(db, user_id=user_id, vehicle_id=trip.vehicle_id, actor=actor)
+    return trip
+
+
+def after_decisions(db: Session, *, user_id: uuid.UUID, vehicle_id: uuid.UUID, actor: Actor) -> None:
+    """Räknar om mönster och uppdaterar förslag för övriga oavgjorda resor (utan LLM)."""
+    from app.services.classify import engine
+    from app.services.trips import pipeline
+
+    patterns.rebuild(db, user_id)
+    vehicle = db.get(Vehicle, vehicle_id)
+    if vehicle is None:
+        return
+    engine.classify_pending(db, user_id=user_id, vehicle=vehicle, actor=audit.SYSTEM, provider=None, use_llm=False)
+    for trip in seg.active_trips(db, vehicle_id):
+        pipeline.sync_trip_review_items(db, trip, by=actor.label)
+    db.flush()
+
+
+def bulk_apply(
+    db: Session,
+    trips: list[LogicalTrip],
+    *,
+    user_id: uuid.UUID,
+    actor: Actor,
+    category: str | None = None,
+    purpose: str | None = None,
+    approve: bool = False,
+) -> tuple[int, list[dict[str, str]]]:
+    """Massredigering. Returnerar (antal ändrade, fel per resa)."""
+    done = 0
+    errors: list[dict[str, str]] = []
+    vehicles: set[uuid.UUID] = set()
+    for trip in trips:
+        try:
+            apply_decision(
+                db, trip, user_id=user_id, actor=actor, channel="bulk", category=category, purpose=purpose,
+                approve=approve, rebuild=False,
+            )
+            vehicles.add(trip.vehicle_id)
+            done += 1
+        except TripError as exc:
+            errors.append({"trip_id": str(trip.id), "message": exc.message})
+    for vid in vehicles:
+        after_decisions(db, user_id=user_id, vehicle_id=vid, actor=actor)
+    return done, errors
+
+
+def undo(db: Session, feedback: LearningFeedback, *, actor: Actor) -> LogicalTrip:
+    """Ångrar en korrigering: resan återställs och inlärningen räknas om utan den."""
+    if feedback.undone_at is not None:
+        raise TripError("Ändringen är redan ångrad.", "already_undone")
+    trip = seg.load_trip(db, feedback.logical_trip_id)
+    if trip is None or trip.state != LogicalState.ACTIVE:
+        raise TripError("Resan finns inte längre i aktivt skick.", "not_active")
+    later = db.execute(
+        select(LearningFeedback.id).where(
+            LearningFeedback.logical_trip_id == trip.id,
+            LearningFeedback.undone_at.is_(None),
+            LearningFeedback.created_at > feedback.created_at,
+        ).limit(1)
+    ).first()
+    if later is not None:
+        raise TripError("Det finns senare ändringar av resan. Ångra dem först.", "later_changes")
+    state = feedback.original_state or {}
+    before = {f: getattr(trip, f) for f in _SNAPSHOT_FIELDS}
+    for f in _SNAPSHOT_FIELDS:
+        if f in state:
+            setattr(trip, f, state[f])
+    wanted = {(s["raw_trip_id"], s["part"]): s for s in state.get("segments", [])}
+    if wanted:
+        current = {(str(s.raw_trip_id), s.part): s for s in trip.segments}
+        if set(current) == set(wanted):
+            for key, s in current.items():
+                s.category_override = wanted[key]["category_override"]
+        else:
+            raws = {str(s.raw_trip_id): s.raw_trip for s in trip.segments}
+            for s in list(trip.segments):
+                trip.segments.remove(s)
+            db.flush()
+            for w in wanted.values():
+                if w["raw_trip_id"] in raws:
+                    trip.segments.append(
+                        TripSegment(
+                            raw_trip=raws[w["raw_trip_id"]], seq=w["seq"], part=w["part"],
+                            distance_km=w["distance_km"], category_override=w["category_override"], note=w.get("note"),
+                        )
+                    )
+    feedback.undone_at = utcnow()
+    trip.updated_by = actor.label
+    db.execute(
+        update(TripClassification)
+        .where(
+            TripClassification.logical_trip_id == trip.id,
+            TripClassification.is_current.is_(True),
+            TripClassification.source.in_((DecisionSource.USER, DecisionSource.HA)),
+        )
+        .values(is_current=False)
+    )
+    seg.refresh_logical(db, trip)
+    audit.record(
+        db, actor, "trip.undo_change", "logical_trip", trip.id,
+        before=before, after={f: getattr(trip, f) for f in _SNAPSHOT_FIELDS},
+    )
+    db.flush()
+    after_decisions(db, user_id=feedback.user_id, vehicle_id=trip.vehicle_id, actor=actor)
+    return trip
+
+
+def history(db: Session, trip_id: uuid.UUID) -> list[LearningFeedback]:
+    return list(
+        db.execute(
+            select(LearningFeedback)
+            .where(LearningFeedback.logical_trip_id == trip_id)
+            .order_by(LearningFeedback.created_at.desc())
+        ).scalars()
+    )
