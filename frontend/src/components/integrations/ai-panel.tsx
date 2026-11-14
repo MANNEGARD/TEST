@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { Check, FlaskConical, Info, KeyRound, ShieldCheck, Trash2, Upload, X } from "lucide-react";
+import { Check, FlaskConical, Info, ShieldCheck, Trash2, Upload, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { FieldError, Input } from "@/components/ui/input";
@@ -10,7 +10,7 @@ import { SegmentedControl } from "@/components/ui/segmented-control";
 import { errorMessage } from "@/lib/api";
 import type { AiProviderName, AiStatus } from "@/lib/integrations-types";
 import { useConfigureAi, useRemoveAi, useTestAi } from "@/lib/queries/integrations";
-import { ConfirmButton, Field, LastErrorNote, Note, notifyError, Section, SecretField } from "./shared";
+import { ConfirmButton, Field, Note, notifyError, Section, SecretField, StatusNote } from "./shared";
 
 export const AI_PROVIDER_LABELS: Record<AiProviderName, string> = {
   none: "Ingen",
@@ -93,12 +93,13 @@ export function AiPanel({ status }: { status: AiStatus }) {
           reglerna inte räcker, och du godkänner alltid själv.
         </p>
       </Note>
-      <LastErrorNote error={status.last_error} at={status.last_error_at} />
-      {status.status === "needs_reauth" ? (
-        <Note tone="warn" icon={<KeyRound aria-hidden />} title="Leverantören godkände inte nyckeln" role="status">
-          <p>Ange en ny API-nyckel och testa igen. Tills dess används bara reglerna.</p>
-        </Note>
-      ) : null}
+      <StatusNote
+        status={status.status}
+        error={status.last_error}
+        at={status.last_error_at}
+        reauthTitle="Leverantören godkände inte nyckeln"
+        reauthHint="Ange en ny API-nyckel och testa igen. Tills dess används bara reglerna."
+      />
 
       <Section title="Leverantör">
         <form onSubmit={submit} className="space-y-3" noValidate>

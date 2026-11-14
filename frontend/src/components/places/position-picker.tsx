@@ -55,6 +55,18 @@ interface MapState {
   ml: typeof import("maplibre-gl");
   marker: import("maplibre-gl").Marker | null;
   loaded: boolean;
+  /** Senast ritade position ("lat,lon") – för att upptäcka ändringar utifrån. */
+  drawn: string | null;
+  /** Sant när ändringen kom från klick/drag i kartan (då flyttas inte utsnittet). */
+  fromMap: boolean;
+}
+
+/** Zoomar så att hela geofencen syns med lite luft omkring. */
+function fitFence(s: MapState, center: LatLon, radiusM: number, animate: boolean) {
+  const ring = circle(center, Math.max(radiusM, 60) * 1.6).geometry.coordinates[0];
+  const b = new s.ml.LngLatBounds();
+  for (const c of ring) b.extend(c);
+  s.map.fitBounds(b, { padding: 16, maxZoom: 17, duration: animate ? 350 : 0 });
 }
 
 /**
@@ -99,18 +111,24 @@ export function PositionPicker({
         const marker = new s.ml.Marker({ element: el, draggable: true }).setLngLat([v.lon, v.lat]).addTo(s.map);
         marker.on("dragend", () => {
           const p = marker.getLngLat();
+          s.fromMap = true;
           latest.current.onChange({ lat: round6(p.lat), lon: round6(p.lng) });
         });
         s.marker = marker;
       } else {
         s.marker.setLngLat([v.lon, v.lat]);
       }
-      // Koordinater som skrivits in för hand kan ligga utanför utsnittet – följ med dit.
-      if (!s.map.getBounds().contains([v.lon, v.lat])) s.map.jumpTo({ center: [v.lon, v.lat], zoom: Math.max(s.map.getZoom(), 14) });
     } else if (s.marker) {
       s.marker.remove();
       s.marker = null;
     }
+    const key = v ? `${v.lat},${v.lon}` : null;
+    if (key !== s.drawn) {
+      // Koordinater som skrivits in för hand: flytta utsnittet dit och visa geofencen.
+      if (v && !s.fromMap) fitFence(s, v, r, !window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+      s.drawn = key;
+    }
+    s.fromMap = false;
     if (s.loaded) {
       const source = s.map.getSource("fence") as import("maplibre-gl").GeoJSONSource | undefined;
       source?.setData(v ? circle(v, r) : EMPTY);
@@ -155,18 +173,15 @@ export function PositionPicker({
         locale: MAP_LOCALE,
         fadeDuration: reduced ? 0 : 300,
       });
-      state.current = { map, ml, marker: null, loaded: false };
+      const s: MapState = { map, ml, marker: null, loaded: false, drawn: start.value ? `${start.value.lat},${start.value.lon}` : null, fromMap: false };
+      state.current = s;
       map.getCanvas().style.cursor = "crosshair";
       observer = new ResizeObserver(() => map.resize());
       observer.observe(ref.current);
       map.addControl(new ml.NavigationControl({ showCompass: false }), "top-right");
 
       if (start.value) {
-        // Visa hela geofencen med lite luft omkring.
-        const ring = circle(start.value, Math.max(start.radius, 60) * 1.6).geometry.coordinates[0];
-        const b = new ml.LngLatBounds();
-        for (const c of ring) b.extend(c);
-        map.fitBounds(b, { padding: 16, maxZoom: 17, duration: 0 });
+        fitFence(s, start.value, start.radius, false);
       } else if (start.context.length) {
         const b = new ml.LngLatBounds();
         for (const c of start.context) b.extend([c.lon, c.lat]);
@@ -175,10 +190,12 @@ export function PositionPicker({
         map.fitBounds(SWEDEN, { padding: 8, duration: 0 });
       }
 
-      map.on("click", (e) => latest.current.onChange({ lat: round6(e.lngLat.lat), lon: round6(e.lngLat.lng) }));
+      map.on("click", (e) => {
+        s.fromMap = true;
+        latest.current.onChange({ lat: round6(e.lngLat.lat), lon: round6(e.lngLat.lng) });
+      });
       map.on("load", () => {
-        const s = state.current;
-        if (!s || s.map !== map) return;
+        if (state.current !== s) return;
         map.addSource("fence", { type: "geojson", data: EMPTY });
         map.addLayer({ id: "fence-fill", type: "fill", source: "fence", paint: { "fill-color": accent, "fill-opacity": 0.14 } });
         map.addLayer({ id: "fence-line", type: "line", source: "fence", paint: { "line-color": accent, "line-width": 1.5, "line-opacity": 0.9 } });

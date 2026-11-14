@@ -1,4 +1,10 @@
-"""Skapar, listar och raderar exporterade körjournaler."""
+"""Skapar, listar och raderar exporterade körjournaler.
+
+Två layouter finns (inställningen ``export.layout``):
+
+* ``simple`` (standard) – ett blad med periodens tjänsteresor, för milersättning.
+* ``detailed`` – den fullständiga arbetsboken med sex blad.
+"""
 
 from __future__ import annotations
 
@@ -22,6 +28,7 @@ from app.models import (
     ImportedFile,
     ImportRow,
     KnownLocation,
+    LogicalTrip,
     User,
     Vehicle,
 )
@@ -30,6 +37,8 @@ from app.services import audit
 from app.services import settings as settings_svc
 from app.services.audit import Actor
 from app.services.export import checks as checks_mod
+from app.services.export import simple as simple_mod
+from app.services.export.simple import SimpleJournal
 from app.services.export.workbook import ExportContext, build_workbook
 from app.services.stats import common
 from app.services.stats import energy as energy_stats
@@ -57,6 +66,66 @@ def _driver_name(db: Session, user_id: uuid.UUID) -> str:
         return driver.name
     user = db.get(User, user_id)
     return (user.display_name or user.email) if user is not None else ""
+
+
+def resolve_layout(db: Session, user_id: uuid.UUID, layout: str | None = None) -> str:
+    """Exportens layout: den angivna, annars inställningen ``export.layout`` (standard ``simple``)."""
+    if layout is None:
+        layout = settings_svc.get_section(db, user_id, "export").get("layout")
+        if layout not in settings_svc.EXPORT_LAYOUTS:
+            layout = settings_svc.LAYOUT_SIMPLE
+    if layout not in settings_svc.EXPORT_LAYOUTS:
+        raise ExportError("Okänd layout. Välj simple eller detailed.", "invalid_layout")
+    return layout
+
+
+def build_simple_journal(
+    db: Session,
+    *,
+    vehicle: Vehicle,
+    start: datetime | None,
+    end: datetime | None,
+    tz: ZoneInfo,
+    trip_ids: Iterable[uuid.UUID] | None = None,
+) -> tuple[SimpleJournal, list[LogicalTrip]]:
+    """Den enkla körjournalens innehåll (ingen fil skrivs) samt alla periodens resor.
+
+    Förhandsvisningen och exportfilen byggs båda härifrån och innehåller därför alltid
+    samma rader och summor.
+    """
+    user_id = vehicle.owner_user_id
+    ids = list(trip_ids) if trip_ids is not None else None
+    if ids is not None:
+        start = end = None
+    trips = common.load_trips(db, vehicle.id, start, end, trip_ids=ids)
+    rate, show_amount = settings_svc.reimbursement_settings(db, user_id)
+    general = settings_svc.get_section(db, user_id, "general")
+    journal = simple_mod.build_journal(
+        vehicle=vehicle,
+        trips=trips,
+        start=start,
+        end=end,
+        tz=tz,
+        driver_name=_driver_name(db, user_id),
+        employer_name=general.get("employer_name") or "",
+        rate_per_mil=rate,
+        show_amount=show_amount,
+    )
+    return journal, trips
+
+
+def simple_summary(journal: SimpleJournal) -> dict[str, Any]:
+    """Kompakt sammanfattning av den enkla exporten: summor och vad som inte togs med."""
+    excluded = {
+        key: ({k: v for k, v in value.items() if k != "trip_ids"} if isinstance(value, dict) else value)
+        for key, value in journal.excluded.items()
+    }
+    return {
+        "layout": settings_svc.LAYOUT_SIMPLE,
+        **journal.totals(),
+        "period_label": journal.period_label,
+        "excluded": excluded,
+    }
 
 
 def build_context(
@@ -208,10 +277,16 @@ def create_export(
     label: str | None = None,
     tz: ZoneInfo | None = None,
     now: datetime | None = None,
+    layout: str | None = None,
 ) -> ExportJob:
-    """Skapar en Excel-körjournal för perioden (eller för valda resor)."""
+    """Skapar en Excel-körjournal för perioden (eller för valda resor).
+
+    ``layout`` är ``simple`` eller ``detailed``; utelämnas den används inställningen
+    ``export.layout``.
+    """
     if vehicle.owner_user_id != user_id:
         raise ExportError("Fordonet hittades inte.", "not_found")
+    layout = resolve_layout(db, user_id, layout)
     if start is not None and end is not None and end <= start:
         raise ExportError("Periodens slut måste ligga efter dess början.", "invalid_period")
     cfg = get_config()
@@ -240,34 +315,49 @@ def create_export(
             "end": end.isoformat() if end else None,
             "trip_ids": [str(i) for i in ids] if ids is not None else None,
             "label": label,
+            "layout": layout,
         },
         status="pending",
     )
     db.add(job)
     db.flush()
     try:
-        ctx = build_context(db, vehicle=vehicle, period=period, tz=tz, trip_ids=ids, now=now)
-        if ids is not None and len(ctx.trips) != len(set(ids)):
-            raise ExportError("En eller flera valda resor finns inte eller tillhör ett annat fordon.", "not_found")
         cfg.exports_dir.mkdir(parents=True, exist_ok=True)
         path = cfg.exports_dir / f"{crypto.random_token(18)}.xlsx"
-        summary = build_workbook(path, ctx)
+        if layout == settings_svc.LAYOUT_SIMPLE:
+            journal, trips = build_simple_journal(db, vehicle=vehicle, start=start, end=end, tz=tz, trip_ids=ids)
+            if ids is not None and len(trips) != len(set(ids)):
+                raise ExportError("En eller flera valda resor finns inte eller tillhör ett annat fordon.", "not_found")
+            checks = checks_mod.run_checks(
+                db, vehicle=vehicle, start=period.start, end=period.end, tz=tz, trip_ids=ids, now=now
+            )
+            simple_mod.write_workbook(path, journal)
+            summary = simple_summary(journal)
+        else:
+            ctx = build_context(db, vehicle=vehicle, period=period, tz=tz, trip_ids=ids, now=now)
+            if ids is not None and len(ctx.trips) != len(set(ids)):
+                raise ExportError("En eller flera valda resor finns inte eller tillhör ett annat fordon.", "not_found")
+            checks = ctx.checks
+            summary = {
+                "layout": settings_svc.LAYOUT_DETAILED,
+                **build_workbook(path, ctx),
+                "odometer_start": ctx.odometer_start.value,
+                "odometer_end": ctx.odometer_end.value,
+                "open_gap_km": round(sum(g.km for g in ctx.gaps if g.status == "open"), 1),
+            }
         path.chmod(0o600)
         job.file_path = str(path)
         job.sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
         naming_period = Period("export", start, end, label)
         job.filename = download_name(vehicle, naming_period, tz, selection=ids is not None)
-        job.is_complete = ctx.is_complete
-        job.warnings = [{k: c[k] for k in ("code", "severity", "title", "message", "count")} for c in ctx.checks]
+        job.is_complete = checks_mod.is_complete(checks)
+        job.warnings = [{k: c[k] for k in ("code", "severity", "title", "message", "count")} for c in checks]
         job.summary = {
             **summary,
-            **checks_mod.summarize(ctx.checks),
+            **checks_mod.summarize(checks),
             "label": label,
             "is_demo": vehicle.is_demo,
             "size_bytes": path.stat().st_size,
-            "odometer_start": ctx.odometer_start.value,
-            "odometer_end": ctx.odometer_end.value,
-            "open_gap_km": round(sum(g.km for g in ctx.gaps if g.status == "open"), 1),
         }
         job.status = "done"
         job.finished_at = utcnow()
@@ -282,7 +372,8 @@ def create_export(
         raise
     audit.record(
         db, actor, "export.create", "export_job", job.id,
-        after={"label": label, "trips": job.summary.get("trips"), "is_complete": job.is_complete}, user_id=user_id,
+        after={"label": label, "layout": layout, "trips": job.summary.get("trips"), "is_complete": job.is_complete},
+        user_id=user_id,
     )
     db.flush()
     return job

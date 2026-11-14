@@ -100,9 +100,7 @@ function useOAuthReturn(open: (provider: ProviderKey) => void) {
     params.delete("reason");
     const rest = params.toString();
     window.history.replaceState(null, "", window.location.pathname + (rest ? `?${rest}` : ""));
-    // Körs en gång vid sidstart – `open` är stabil (setState).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [open]);
 }
 
 // ----------------------------------------------------------------------------- vy
@@ -113,7 +111,12 @@ export function IntegrationsView() {
   const ha = useHaStatus();
   const ai = useAiStatus();
   const [open, setOpen] = React.useState<ProviderKey | null>(null);
-  useOAuthReturn(setOpen);
+  const lastOpened = React.useRef<ProviderKey | null>(null);
+  const openPanel = React.useCallback((provider: ProviderKey) => {
+    lastOpened.current = provider;
+    setOpen(provider);
+  }, []);
+  useOAuthReturn(openPanel);
 
   const volvoSync = useVolvoSyncAction();
   const microsoftSync = useMicrosoftSyncAction();
@@ -274,7 +277,7 @@ export function IntegrationsView() {
             isLoading={queries[key].isLoading}
             error={queries[key].error}
             onRetry={() => void queries[key].refetch()}
-            onConfigure={() => setOpen(key)}
+            onConfigure={() => openPanel(key)}
           />
         ))}
       </div>
@@ -287,6 +290,11 @@ export function IntegrationsView() {
             // Fokusera panelen, inte första fältet – annars fälls tangentbordet upp direkt på mobil.
             e.preventDefault();
             (e.currentTarget as HTMLElement | null)?.focus();
+          }}
+          onCloseAutoFocus={(e) => {
+            // Panelen öppnas utan Radix-trigger – lämna tillbaka fokus till kortets knapp.
+            e.preventDefault();
+            if (lastOpened.current) document.getElementById(`configure-${lastOpened.current}`)?.focus();
           }}
         >
           {open && openMeta ? (

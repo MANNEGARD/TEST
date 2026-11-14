@@ -164,6 +164,32 @@ export function LastErrorNote({ error, at }: { error: string | null; at?: string
   );
 }
 
+/**
+ * Överst i varje panel: antingen "anslut på nytt" (med felet som förklaring) eller
+ * senaste felet. Aldrig båda – ett besked räcker.
+ */
+export function StatusNote({
+  status,
+  error,
+  at,
+  reauthTitle,
+  reauthHint,
+}: {
+  status: IntegrationStatusCode;
+  error: string | null;
+  at?: string | null;
+  reauthTitle: string;
+  reauthHint: string;
+}) {
+  if (status !== "needs_reauth") return <LastErrorNote error={error} at={at} />;
+  return (
+    <Note tone="warn" icon={<KeyRound aria-hidden />} title={reauthTitle} role="status">
+      <p>{reauthHint}</p>
+      {error ? <p className="text-xs break-words opacity-80">Senaste fel: {error}</p> : null}
+    </Note>
+  );
+}
+
 /** Etikett/värde-rader (översiktskort och sammanfattningar). */
 export function Facts({ children, className }: { children: React.ReactNode; className?: string }) {
   return <dl className={cn("space-y-2.5 text-[13px]", className)}>{children}</dl>;
@@ -403,17 +429,17 @@ export function DemoVehicleSwitch() {
       </span>
       {active ? (
         <>
-          <Button asChild variant="link" size="sm">
+          <Button asChild variant="link" size="sm" className="h-auto px-0">
             <Link href="/journal">Öppna körjournalen</Link>
           </Button>
           {real ? (
-            <Button variant="link" size="sm" onClick={() => setVehicleId(real.id)}>
+            <Button variant="link" size="sm" className="h-auto px-0" onClick={() => setVehicleId(real.id)}>
               Byt tillbaka till {real.name}
             </Button>
           ) : null}
         </>
       ) : (
-        <Button variant="link" size="sm" onClick={() => setVehicleId(demo.id)}>
+        <Button variant="link" size="sm" className="h-auto px-0" onClick={() => setVehicleId(demo.id)}>
           Byt till demobilen
         </Button>
       )}

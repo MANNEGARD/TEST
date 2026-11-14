@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { AlertTriangle, BellRing, CheckCircle2, KeyRound, Play, PlugZap, Plus, Unplug } from "lucide-react";
+import { AlertTriangle, BellRing, CheckCircle2, Play, PlugZap, Plus, Unplug } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -28,7 +28,7 @@ import {
   useVolvoStatus,
 } from "@/lib/queries/integrations";
 import { DemoPhone } from "./demo-phone";
-import { ConfirmButton, CopyButton, CopyField, DemoBlock, DemoVehicleSwitch, Fact, Facts, Field, LastErrorNote, Note, notifyError, Section, SecretField, TimeAgo } from "./shared";
+import { ConfirmButton, CopyButton, CopyField, DemoBlock, DemoVehicleSwitch, Fact, Facts, Field, Note, notifyError, Section, SecretField, StatusNote, TimeAgo } from "./shared";
 
 export const DELIVERY_LABELS: Record<DeliveryMode, string> = {
   pull: "Home Assistant hämtar",
@@ -277,8 +277,8 @@ export function HaPanel({ status }: { status: HaStatus }) {
   const runTest = () =>
     test.mutate(undefined, {
       onSuccess: (r) => {
-        setTestResult(r);
-        (r.ok ? toast.success : toast.error)(r.message);
+        setTestResult(r); // beskedet står kvar under knappen; toast bara som kvitto när det gick bra
+        if (r.ok) toast.success(r.message);
       },
       onError: (err) => {
         setTestResult(null);
@@ -292,12 +292,13 @@ export function HaPanel({ status }: { status: HaStatus }) {
 
   return (
     <>
-      <LastErrorNote error={status.last_error} at={status.last_error_at} />
-      {status.status === "needs_reauth" ? (
-        <Note tone="warn" icon={<KeyRound aria-hidden />} title="Home Assistant godkände inte token" role="status">
-          <p>Ange en ny long-lived access token och testa anslutningen igen.</p>
-        </Note>
-      ) : null}
+      <StatusNote
+        status={status.status}
+        error={status.last_error}
+        at={status.last_error_at}
+        reauthTitle="Home Assistant godkände inte token"
+        reauthHint="Ange en ny long-lived access token och testa anslutningen igen."
+      />
 
       {!isDemo ? (
         <>

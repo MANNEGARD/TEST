@@ -30,7 +30,7 @@ import {
   useVolvoTestToken,
 } from "@/lib/queries/integrations";
 import { useVehicle } from "@/lib/vehicle";
-import { ConfirmButton, CopyField, DemoBlock, DemoVehicleSwitch, Field, LastErrorNote, Note, notifyError, Section, SecretField, TimeAgo } from "./shared";
+import { ConfirmButton, CopyField, DemoBlock, DemoVehicleSwitch, Field, Note, notifyError, Section, SecretField, StatusNote, TimeAgo } from "./shared";
 
 // ----------------------------------------------------------------------------- synk
 
@@ -464,12 +464,13 @@ export function VolvoPanel({ status }: { status: VolvoStatus }) {
 
   return (
     <>
-      <LastErrorNote error={status.last_error} at={status.last_error_at} />
-      {status.status === "needs_reauth" ? (
-        <Note tone="warn" icon={<KeyRound aria-hidden />} title="Logga in med Volvo ID igen" role="status">
-          <p>Behörigheten har gått ut eller återkallats (den gäller högst cirka tre månader). Inga nya data hämtas förrän du ansluter på nytt.</p>
-        </Note>
-      ) : null}
+      <StatusNote
+        status={status.status}
+        error={status.last_error}
+        at={status.last_error_at}
+        reauthTitle="Logga in med Volvo ID igen"
+        reauthHint="Behörigheten har gått ut eller återkallats (den gäller högst cirka tre månader). Inga nya data hämtas förrän du ansluter på nytt."
+      />
       {status.test_token_notice ? (
         <Note tone="warn" icon={<Info aria-hidden />} role="status">
           <p>{status.test_token_notice}</p>

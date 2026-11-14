@@ -32,15 +32,17 @@ export function RuleDialog({
   onOpenChange,
   places,
   preset,
+  onCloseAutoFocus,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   places: Place[];
   preset?: RulePreset;
+  onCloseAutoFocus?: (event: Event) => void;
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-md" onCloseAutoFocus={onCloseAutoFocus}>
         <DialogHeader>
           <DialogTitle>Ny regel</DialogTitle>
           <DialogDescription>Bestäm hur resor till en plats alltid ska klassas. Redan avgjorda resor ändras inte.</DialogDescription>

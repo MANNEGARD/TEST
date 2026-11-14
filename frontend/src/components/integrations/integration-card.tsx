@@ -103,7 +103,7 @@ export function IntegrationCard({
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border px-5 py-3">
-        <Button onClick={onConfigure} disabled={!data} data-testid={`configure-${id}`} aria-label={`Konfigurera ${name}`}>
+        <Button id={`configure-${id}`} onClick={onConfigure} disabled={!data} data-testid={`configure-${id}`} aria-label={`Konfigurera ${name}`}>
           <Settings2 aria-hidden /> Konfigurera
         </Button>
         {data?.action}

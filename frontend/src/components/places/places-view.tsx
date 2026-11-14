@@ -17,6 +17,7 @@ import { PlaceList } from "./place-list";
 import { PlaceSheet } from "./place-sheet";
 import { PlacesMap } from "./places-map";
 import { Suggestions } from "./suggestions";
+import { useReturnFocus } from "./use-return-focus";
 
 type TabKey = "platser" | "minne";
 
@@ -34,6 +35,17 @@ export function PlacesView() {
   const [newOpen, setNewOpen] = React.useState(false);
   const places = usePlaces();
   const list = places.data ?? [];
+  const sheetFocus = useReturnFocus();
+  const dialogFocus = useReturnFocus();
+
+  const openPlace = (id: string) => {
+    if (!selected) sheetFocus.remember();
+    setSelected(id);
+  };
+  const openNew = () => {
+    dialogFocus.remember();
+    setNewOpen(true);
+  };
 
   const setTab = (next: string) => router.replace(next === "minne" ? `${pathname}?tab=minne` : pathname, { scroll: false });
 
@@ -43,7 +55,7 @@ export function PlacesView() {
         title="Platser"
         description="Adresserna du kör till. Ge dem namn och typ, så klassas och beskrivs dina tjänsteresor rätt av sig själva."
         actions={
-          <Button variant="primary" onClick={() => setNewOpen(true)}>
+          <Button variant="primary" onClick={openNew}>
             <Plus aria-hidden /> Ny plats
           </Button>
         }
@@ -76,8 +88,8 @@ export function PlacesView() {
             </div>
           ) : (
             <>
-              <Suggestions onOpenPlace={setSelected} />
-              <PlaceList places={list} onOpen={setSelected} onNew={() => setNewOpen(true)} />
+              <Suggestions onOpenPlace={openPlace} />
+              <PlaceList places={list} onOpen={openPlace} onNew={openNew} />
               <PlacesMap places={list} />
             </>
           )}
@@ -88,8 +100,8 @@ export function PlacesView() {
         </TabsContent>
       </Tabs>
 
-      <PlaceSheet placeId={selected} places={list} onClose={() => setSelected(null)} onOpenPlace={setSelected} />
-      <NewPlaceDialog open={newOpen} onOpenChange={setNewOpen} onCreated={(p) => setSelected(p.id)} />
+      <PlaceSheet placeId={selected} places={list} onClose={() => setSelected(null)} onOpenPlace={openPlace} onCloseAutoFocus={sheetFocus.restore} />
+      <NewPlaceDialog open={newOpen} onOpenChange={setNewOpen} onCreated={(p) => openPlace(p.id)} onCloseAutoFocus={dialogFocus.restore} />
     </>
   );
 }

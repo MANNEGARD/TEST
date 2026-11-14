@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { ExternalLink, Info, KeyRound, LogIn, RefreshCw, Unplug } from "lucide-react";
+import { ExternalLink, Info, LogIn, RefreshCw, Unplug } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -21,7 +21,7 @@ import {
   useSaveMicrosoftCredentials,
   useSelectMicrosoftCalendars,
 } from "@/lib/queries/integrations";
-import { ConfirmButton, CopyField, DemoBlock, DemoVehicleSwitch, Field, LastErrorNote, Note, notifyError, Section, SecretField } from "./shared";
+import { ConfirmButton, CopyField, DemoBlock, DemoVehicleSwitch, Field, Note, notifyError, Section, SecretField, StatusNote } from "./shared";
 
 /** "Synka nu" med kvitto – används både på kortet och i panelen. */
 export function useMicrosoftSyncAction() {
@@ -170,12 +170,13 @@ export function OutlookPanel({ status }: { status: MicrosoftStatus }) {
 
   return (
     <>
-      <LastErrorNote error={status.last_error} at={status.last_error_at} />
-      {status.status === "needs_reauth" ? (
-        <Note tone="warn" icon={<KeyRound aria-hidden />} title="Anslut Microsoft-kontot igen" role="status">
-          <p>Åtkomsten har gått ut eller återkallats. Kalendern synkas inte förrän du ansluter på nytt.</p>
-        </Note>
-      ) : null}
+      <StatusNote
+        status={status.status}
+        error={status.last_error}
+        at={status.last_error_at}
+        reauthTitle="Anslut Microsoft-kontot igen"
+        reauthHint="Åtkomsten har gått ut eller återkallats. Kalendern synkas inte förrän du ansluter på nytt."
+      />
 
       <Section
         step={1}

@@ -50,16 +50,19 @@ export function PlaceSheet({
   places,
   onClose,
   onOpenPlace,
+  onCloseAutoFocus,
 }: {
   placeId: string | null;
   places: Place[];
   onClose: () => void;
   onOpenPlace: (id: string) => void;
+  /** Lämnar tillbaka fokus till raden/knappen som öppnade panelen. */
+  onCloseAutoFocus?: (event: Event) => void;
 }) {
   const place = placeId ? places.find((p) => p.id === placeId) : undefined;
   return (
     <Sheet open={!!place} onOpenChange={(o) => !o && onClose()}>
-      <SheetContent side="right" className="w-[min(480px,100vw)] gap-5">
+      <SheetContent side="right" className="w-[min(480px,100vw)] gap-5" onCloseAutoFocus={onCloseAutoFocus}>
         {place ? <PlaceEditor key={place.id} place={place} places={places} onClose={onClose} onOpenPlace={onOpenPlace} /> : null}
       </SheetContent>
     </Sheet>

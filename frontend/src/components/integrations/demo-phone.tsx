@@ -11,25 +11,20 @@ import type { DemoPhoneNotification, NotificationAction } from "@/lib/integratio
 import { useDemoInbox, useDemoRespond } from "@/lib/queries/integrations";
 import { DemoTag, notifyError, TimeAgo } from "./shared";
 
-function PhoneNotification({ notification: n }: { notification: DemoPhoneNotification }) {
-  const respond = useDemoRespond();
+function PhoneNotification({
+  notification: n,
+  onSend,
+  pendingAction,
+  busy,
+}: {
+  notification: DemoPhoneNotification;
+  onSend: (action: NotificationAction, replyText?: string) => void;
+  /** Åtgärden som just nu skickas för den här notisen. */
+  pendingAction: string | null;
+  busy: boolean;
+}) {
   const [replyFor, setReplyFor] = React.useState<NotificationAction | null>(null);
   const [reply, setReply] = React.useState("");
-  const pendingAction = respond.isPending ? respond.variables?.action : null;
-
-  const send = (action: NotificationAction, replyText?: string) =>
-    respond.mutate(
-      { publicId: n.public_id, action: action.key, replyText },
-      {
-        onSuccess: (r) => {
-          const ok = r.outcome === "applied" || r.outcome === "snoozed" || r.outcome === "opened";
-          (ok ? toast.success : toast.warning)(r.message, { description: r.follow_up ? "En följdfråga har skickats till telefonen." : undefined });
-          setReplyFor(null);
-          setReply("");
-        },
-        onError: notifyError,
-      },
-    );
 
   return (
     <li className="rounded-xl border border-border bg-surface p-3 shadow-sm" data-testid="demo-notification" data-kind={n.kind}>
@@ -55,7 +50,7 @@ function PhoneNotification({ notification: n }: { notification: DemoPhoneNotific
               {a.title}
             </Button>
           ) : (
-            <Button key={a.key} size="sm" variant="subtle" loading={pendingAction === a.key} disabled={respond.isPending} onClick={() => send(a)}>
+            <Button key={a.key} size="sm" variant="subtle" loading={pendingAction === a.key} disabled={busy} onClick={() => onSend(a)}>
               {a.title}
             </Button>
           ),
@@ -67,7 +62,7 @@ function PhoneNotification({ notification: n }: { notification: DemoPhoneNotific
           className="mt-2 flex gap-1.5"
           onSubmit={(e) => {
             e.preventDefault();
-            if (reply.trim()) send(replyFor, reply.trim());
+            if (reply.trim()) onSend(replyFor, reply.trim());
           }}
         >
           <Input
@@ -79,8 +74,8 @@ function PhoneNotification({ notification: n }: { notification: DemoPhoneNotific
             maxLength={200}
             className="h-8 text-[13px]"
           />
-          <Button type="submit" size="icon-sm" variant="primary" aria-label="Skicka svar" loading={respond.isPending} disabled={!reply.trim()}>
-            {respond.isPending ? null : <Send aria-hidden />}
+          <Button type="submit" size="icon-sm" variant="primary" aria-label="Skicka svar" loading={pendingAction === replyFor.key} disabled={busy || !reply.trim()}>
+            {pendingAction === replyFor.key ? null : <Send aria-hidden />}
           </Button>
         </form>
       ) : null}
@@ -99,7 +94,23 @@ function PhoneNotification({ notification: n }: { notification: DemoPhoneNotific
  */
 export function DemoPhone() {
   const inbox = useDemoInbox(true);
+  // Mutationen ägs av telefonen, inte av notisen: en besvarad notis försvinner ur
+  // listan innan kvittot hinner visas om den själv äger anropet.
+  const respond = useDemoRespond();
   const list = inbox.data ?? [];
+  const pending = respond.isPending ? respond.variables : undefined;
+
+  const send = (publicId: string, action: NotificationAction, replyText?: string) =>
+    respond.mutate(
+      { publicId, action: action.key, replyText },
+      {
+        onSuccess: (r) => {
+          const ok = r.outcome === "applied" || r.outcome === "snoozed" || r.outcome === "opened";
+          (ok ? toast.success : toast.warning)(r.message, { description: r.follow_up ? "En följdfråga har skickats till telefonen." : undefined });
+        },
+        onError: notifyError,
+      },
+    );
   return (
     <div className="mx-auto w-full max-w-[340px] rounded-[2rem] border-[5px] border-border-strong bg-surface-2 p-3 shadow-md" data-testid="demo-phone">
       <div className="mx-auto mb-3 h-1.5 w-14 rounded-full bg-border-strong" aria-hidden />
@@ -120,7 +131,13 @@ export function DemoPhone() {
       ) : (
         <ul className="space-y-2.5" aria-label="Notiser på den simulerade telefonen" aria-live="polite">
           {list.map((n) => (
-            <PhoneNotification key={n.public_id} notification={n} />
+            <PhoneNotification
+              key={n.public_id}
+              notification={n}
+              busy={respond.isPending}
+              pendingAction={pending?.publicId === n.public_id ? pending.action : null}
+              onSend={(action, replyText) => send(n.public_id, action, replyText)}
+            />
           ))}
         </ul>
       )}

@@ -17,11 +17,13 @@ export function NewPlaceDialog({
   open,
   onOpenChange,
   onCreated,
+  onCloseAutoFocus,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** Anropas när användaren väljer att öppna den nya platsen. */
   onCreated: (place: Place) => void;
+  onCloseAutoFocus?: (event: Event) => void;
 }) {
   const create = useCreatePlace();
   const [f, setF] = React.useState(EMPTY);
@@ -54,7 +56,7 @@ export function NewPlaceDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-md" onCloseAutoFocus={onCloseAutoFocus}>
         <DialogHeader>
           <DialogTitle>Ny plats</DialogTitle>
           <DialogDescription>Lägg till en plats du kör till i tjänsten, t.ex. en kund. Resor till adressen kopplas till platsen.</DialogDescription>

@@ -11,6 +11,7 @@ import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time, timedelta
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -319,29 +320,67 @@ def totals_for(trips: Iterable[LogicalTrip]) -> Totals:
 # ----------------------------------------------------------------------------- milersättning
 
 
+def round_half_up(value: float | Decimal, digits: int) -> float:
+    """Avrundar som på en reseräkning och som Excels AVRUNDA: 0,5 går alltid uppåt.
+
+    Pythons ``round`` avrundar halvor till närmaste jämna tal och räknar på talets
+    binära form, så 6,105 kan bli 6,10. Här räknas på decimalformen.
+    """
+    number = value if isinstance(value, Decimal) else Decimal(repr(float(value)))
+    return float(number.quantize(Decimal(1).scaleb(-digits), rounding=ROUND_HALF_UP))
+
+
+def reported_work_km(trip: LogicalTrip) -> float:
+    """Tjänste-km som resan redovisas med: per segment, avrundat till en decimal.
+
+    Samma tal står på resans rad i den enkla exporten, så summan av raderna är exakt
+    den körsträcka som ersättningen beräknas på.
+    """
+    return round_half_up(segment_km(trip)["work"], 1)
+
+
+def is_reported(trip: LogicalTrip) -> bool:
+    """Resan ingår i underlaget: avgjord klassning och tjänste-km att redovisa."""
+    return trip.review_status in REPORTED and reported_work_km(trip) > 0
+
+
+def km_to_mil_exact(km: float) -> float:
+    """Kilometer → mil med två decimaler (1 mil = 10 km)."""
+    return round_half_up(Decimal(repr(float(km))) / 10, 2)
+
+
+def reimbursement_amount(mil: float, rate_per_mil: float) -> float:
+    """Ersättning i kronor: mil × kronor per mil, avrundat till hela ören."""
+    return round_half_up(Decimal(repr(float(mil))) * Decimal(repr(float(rate_per_mil))), 2)
+
+
 def reimbursement(trips: Iterable[LogicalTrip], *, rate_per_mil: float, show_amount: bool = True) -> dict[str, Any]:
     """Underlag för milersättning: tjänstemil × kronor per mil.
 
     Endast tjänste-km (per segment) från godkända eller importerade resor räknas.
     Tjänste-km från preliminärt klassade resor (auto/förslag) särredovisas och ingår
     aldrig i beloppet. Privat och oavgjord körning räknas inte alls.
+
+    Varje resa räknas med sina tjänste-km avrundade till en decimal (``reported_work_km``),
+    precis som i den enkla exporten, så att dashboardens belopp och exportens alltid är lika.
     """
     km = preliminary_km = 0.0
     for trip in trips:
         if trip.review_status in REPORTED:
-            km += segment_km(trip)["work"]
+            km += reported_work_km(trip)
         elif trip.review_status in PRELIMINARY:
-            preliminary_km += segment_km(trip)["work"]
-    mil = round(km / 10.0, 2)
-    preliminary_mil = round(preliminary_km / 10.0, 2)
+            preliminary_km += reported_work_km(trip)
+    km, preliminary_km = round(km, 1), round(preliminary_km, 1)
+    mil = km_to_mil_exact(km)
+    preliminary_mil = km_to_mil_exact(preliminary_km)
     return {
         "rate_per_mil": rate_per_mil,
         "show_amount": show_amount,
         "mil": mil,
-        "km": round(km, 1),
-        "amount": round(mil * rate_per_mil, 2),
+        "km": km,
+        "amount": reimbursement_amount(mil, rate_per_mil),
         "preliminary_mil": preliminary_mil,
-        "preliminary_amount": round(preliminary_mil * rate_per_mil, 2),
+        "preliminary_amount": reimbursement_amount(preliminary_mil, rate_per_mil),
         "currency": "SEK",
         "note": "Tjänstemil × ersättning per mil. Endast godkända och importerade tjänsteresor räknas.",
     }

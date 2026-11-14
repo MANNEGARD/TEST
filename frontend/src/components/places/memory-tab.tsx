@@ -18,6 +18,7 @@ import type { Pattern, Place } from "@/lib/places-types";
 import { useCorrections, useCreateRule, useDeleteRule, usePatterns, useTripsById, useUndoCorrection } from "@/lib/queries/places";
 import type { Feedback, Trip } from "@/lib/types";
 import { RuleDialog, type RulePreset } from "./rule-dialog";
+import { useReturnFocus } from "./use-return-focus";
 
 const INITIAL_PATTERNS = 6;
 
@@ -55,7 +56,11 @@ function SectionHeader({ title, description, action }: { title: string; descript
 export function MemoryTab({ places }: { places: Place[] }) {
   const patterns = usePatterns();
   const [rule, setRule] = React.useState<{ open: boolean; preset?: RulePreset }>({ open: false });
-  const openRule = (preset?: RulePreset) => setRule({ open: true, preset });
+  const focus = useReturnFocus();
+  const openRule = (preset?: RulePreset) => {
+    focus.remember();
+    setRule({ open: true, preset });
+  };
 
   return (
     <>
@@ -70,7 +75,7 @@ export function MemoryTab({ places }: { places: Place[] }) {
           <CorrectionsCard />
         </div>
       </div>
-      <RuleDialog open={rule.open} onOpenChange={(open) => setRule((r) => ({ ...r, open }))} places={places} preset={rule.preset} />
+      <RuleDialog open={rule.open} onOpenChange={(open) => setRule((r) => ({ ...r, open }))} places={places} preset={rule.preset} onCloseAutoFocus={focus.restore} />
     </>
   );
 }
@@ -177,7 +182,7 @@ function PatternRow({ pattern: p, onRule }: { pattern: Pattern; onRule: (preset:
           <p className="mt-1.5 text-xs leading-relaxed text-fg-muted">
             <span className="text-fg-subtle">Vanliga syften: </span>
             {purposes.map((x) => x.text).join(" · ")}
-            {p.purposes.length > purposes.length ? <span className="text-fg-subtle"> +{p.purposes.length - purposes.length}</span> : null}
+            {p.purposes.length > purposes.length ? <span className="text-fg-subtle">{`\u00a0+${p.purposes.length - purposes.length}`}</span> : null}
           </p>
         ) : null}
       </div>
@@ -358,7 +363,7 @@ function CorrectionsCard() {
                     >
                       {trip ? tripSummary(trip) : "Visa resan"}
                     </Link>
-                    <span className="text-fg-subtle"> · ändrad {formatRelative(f.created_at)}</span>
+                    <span className="mt-0.5 block text-fg-subtle">Ändrad {formatRelative(f.created_at)}</span>
                   </p>
                 </div>
                 {f.undone_at ? (

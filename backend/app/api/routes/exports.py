@@ -1,10 +1,10 @@
-"""Export av körjournalen till Excel: förhandskontroll, skapa, lista, hämta och radera."""
+"""Export av körjournalen till Excel: förhandskontroll, förhandsvisning, skapa, lista, hämta och radera."""
 
 from __future__ import annotations
 
 import uuid
 from datetime import date, datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import quote
 
 from fastapi import APIRouter, Query, Response
@@ -19,11 +19,13 @@ from app.services.export import checks as checks_mod
 from app.services.export import service as export_svc
 from app.services.export.service import ExportError
 from app.services.stats import common
+from app.services.stats.common import Period
 
 router = APIRouter(prefix="/exports", tags=["Exports"])
 
 XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 MAX_TRIP_IDS = 5000
+Layout = Literal["simple", "detailed"]
 
 
 class ExportOut(ORM):
@@ -47,6 +49,8 @@ class ExportCreate(BaseModel):
     date_to: date | None = Field(default=None, alias="to")
     trip_ids: list[uuid.UUID] | None = Field(default=None, max_length=MAX_TRIP_IDS)
     label: str | None = Field(default=None, max_length=120)
+    # simple = ett blad med tjänsteresorna, detailed = fullständig arbetsbok. Utelämnad: inställningen export.layout.
+    layout: Layout | None = None
 
     model_config = {"populate_by_name": True}
 
@@ -84,6 +88,24 @@ def content_disposition(filename: str) -> str:
     return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{quote(filename, safe='')}"
 
 
+def _period_args(
+    db, principal, vehicle_id: uuid.UUID | None, date_from: date | None, date_to: date | None,
+    trip_ids: list[uuid.UUID] | None,
+):
+    """Gemensam tolkning av period/urval för förhandskontroll och förhandsvisning."""
+    vehicle = get_vehicle(db, principal, vehicle_id)
+    if trip_ids is None and (date_from is None or date_to is None):
+        raise bad_request("Ange period (från och till) eller välj resor.", "invalid_period")
+    if date_from is not None and date_to is not None and date_to < date_from:
+        raise bad_request("Tilldatum får inte ligga före fråndatum.", "invalid_period")
+    if trip_ids is not None and len(trip_ids) > MAX_TRIP_IDS:
+        raise bad_request("För många resor valda.", "too_many_trips")
+    tz, start, end = _bounds(db, principal.user.id, date_from, date_to)
+    if trip_ids is not None:
+        start = end = None
+    return vehicle, tz, start, end
+
+
 @router.get("/checks", summary="Förhandskontroll inför export")
 def precheck(
     principal: PrincipalDep,
@@ -92,26 +114,55 @@ def precheck(
     date_from: date | None = Query(default=None, alias="from"),
     date_to: date | None = Query(default=None, alias="to"),
     trip_ids: list[uuid.UUID] | None = Query(default=None),
+    layout: Layout | None = Query(default=None, description="simple eller detailed; utelämnad: inställningen"),
 ) -> dict[str, Any]:
-    vehicle = get_vehicle(db, principal, vehicle_id)
-    if trip_ids is None and (date_from is None or date_to is None):
-        raise bad_request("Ange period (från och till) eller välj resor.", "invalid_period")
-    if date_from is not None and date_to is not None and date_to < date_from:
-        raise bad_request("Tilldatum får inte ligga före fråndatum.", "invalid_period")
-    tz, start, end = _bounds(db, principal.user.id, date_from, date_to)
-    if trip_ids is not None:
-        start = end = None
-    scope = settings_svc.journal_scope(db, principal.user.id)
+    vehicle, tz, start, end = _period_args(db, principal, vehicle_id, date_from, date_to, trip_ids)
+    user_id = principal.user.id
+    scope = settings_svc.journal_scope(db, user_id)
+    layout = export_svc.resolve_layout(db, user_id, layout)
     result = checks_mod.run_checks(db, vehicle=vehicle, start=start, end=end, tz=tz, trip_ids=trip_ids, scope=scope)
+    summary = None
+    if layout == settings_svc.LAYOUT_SIMPLE:
+        journal, _ = export_svc.build_simple_journal(db, vehicle=vehicle, start=start, end=end, tz=tz, trip_ids=trip_ids)
+        summary = export_svc.simple_summary(journal)
     db.commit()
     return {
         "vehicle_id": str(vehicle.id),
         "is_demo": vehicle.is_demo,
         "scope": scope,
+        "layout": layout,
         "period": {"start": start, "end": end, "timezone": str(tz)},
         **checks_mod.summarize(result),
         "status_label": checks_mod.status_label(result, scope),
         "checks": result,
+        "summary": summary,
+    }
+
+
+@router.get("/preview", summary="Förhandsvisning av den enkla körjournalen")
+def preview(
+    principal: PrincipalDep,
+    db: DbDep,
+    vehicle_id: uuid.UUID | None = None,
+    date_from: date | None = Query(default=None, alias="from"),
+    date_to: date | None = Query(default=None, alias="to"),
+    trip_ids: list[uuid.UUID] | None = Query(default=None),
+) -> dict[str, Any]:
+    """Exakt de rader och summor som den enkla exporten (layout ``simple``) skulle innehålla."""
+    vehicle, tz, start, end = _period_args(db, principal, vehicle_id, date_from, date_to, trip_ids)
+    journal, trips = export_svc.build_simple_journal(db, vehicle=vehicle, start=start, end=end, tz=tz, trip_ids=trip_ids)
+    if trip_ids is not None and len(trips) != len(set(trip_ids)):
+        raise not_found("En eller flera valda resor")
+    return {
+        "vehicle_id": str(vehicle.id),
+        "is_demo": vehicle.is_demo,
+        "layout": settings_svc.LAYOUT_SIMPLE,
+        "scope": settings_svc.journal_scope(db, principal.user.id),
+        "period": {"start": start, "end": end, "timezone": str(tz), "label": journal.period_label},
+        "filename": export_svc.download_name(
+            vehicle, Period("export", start, end, journal.period_label), tz, selection=trip_ids is not None
+        ),
+        **journal.as_dict(),
     }
 
 
@@ -122,7 +173,7 @@ def create(body: ExportCreate, principal: PrincipalDep, db: DbDep) -> Any:
     try:
         job = export_svc.create_export(
             db, user_id=principal.user.id, vehicle=vehicle, start=start, end=end, trip_ids=body.trip_ids,
-            actor=principal.actor, label=body.label, tz=tz,
+            actor=principal.actor, label=body.label, tz=tz, layout=body.layout,
         )
     except ExportError as exc:
         db.rollback()
