@@ -65,9 +65,10 @@ class DriveLogApiClient:
                     raise DriveLogConnectionError(f"DriveLog svarade med HTTP {resp.status}.")
                 if verdict == "reject":
                     raise DriveLogRejectedError(f"DriveLog avvisade förfrågan (HTTP {resp.status}).")
-                if resp.content_type != "application/json":
-                    raise DriveLogConnectionError("Oväntat svar – adressen verkar inte gå till SMGD DriveLog.")
-                return await resp.json()
+                try:
+                    return await resp.json(content_type=None)
+                except ValueError as err:  # t.ex. en HTML-sida från en proxy
+                    raise DriveLogConnectionError("Oväntat svar – adressen verkar inte gå till SMGD DriveLog.") from err
         except (aiohttp.ClientError, asyncio.TimeoutError) as err:
             raise DriveLogConnectionError(f"SMGD DriveLog kunde inte nås: {type(err).__name__}") from err
 

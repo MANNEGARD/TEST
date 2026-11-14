@@ -1,0 +1,326 @@
+@import "tailwindcss";
+
+/*
+ * SMGD DriveLog – designsystem
+ * ---------------------------------------------------------------------------
+ * Alla färger är CSS-variabler. Ljust tema är standard i :root, mörkt tema sätts
+ * med data-theme="dark" på <html> (ett inline-skript i layout.tsx väljer tema
+ * före första målningen: localStorage → systemets inställning).
+ *
+ * Använd ALLTID de semantiska Tailwind-klasserna nedan (bg-surface, text-fg-muted,
+ * text-work-ink, bg-private-soft …) – aldrig hårdkodade hex-värden i komponenter.
+ * Kategorifärger kombineras alltid med text/ikon (aldrig enbart färg).
+ */
+
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+:root {
+  color-scheme: light;
+
+  /* Ytor och text */
+  --bg: #f7f7f5;
+  --surface: #ffffff;
+  --surface-2: #f2f2ef;
+  --surface-3: #eaeae6;
+  --border: #e5e4df;
+  --border-strong: #d3d2cb;
+  --fg: #14171b;
+  --fg-muted: #565a61;
+  --fg-subtle: #6d7178;
+  --overlay: rgba(15, 18, 22, 0.42);
+
+  /* Accent: nordisk blå (fjord) */
+  --accent: #2b5c8f;
+  --accent-hover: #234d79;
+  --accent-fg: #ffffff;
+  --accent-soft: #e6eef7;
+  --accent-ink: #1f4a76;
+  --ring: #3d79b8;
+
+  /* Kategorier (validerade för färgblindhet mot ljus yta) */
+  --work: #2a78d6;
+  --work-soft: #e7f0fb;
+  --work-ink: #1b5aa6;
+  --private: #e2577a;
+  --private-soft: #fcebef;
+  --private-ink: #b3304f;
+  --undecided: #d99400;
+  --undecided-soft: #fdf3dc;
+  --undecided-ink: #8a5a00;
+
+  /* Energi */
+  --fuel: #e8710a;
+  --fuel-soft: #fdeedf;
+  --fuel-ink: #a14b00;
+  --el: #0f9d8f;
+  --el-soft: #dff4f1;
+  --el-ink: #0a6e64;
+
+  /* Status */
+  --ok: #1e8e3e;
+  --ok-soft: #e3f4e7;
+  --ok-ink: #17703a;
+  --warn: #c98200;
+  --warn-soft: #fdf3dc;
+  --warn-ink: #855600;
+  --err: #c93434;
+  --err-soft: #fbe9e9;
+  --err-ink: #a32626;
+
+  /* Diagram */
+  --chart-grid: #e8e7e1;
+  --chart-axis: #c9c8c0;
+  --chart-label: #6d7178;
+
+  --shadow-sm: 0 1px 2px rgba(16, 20, 26, 0.05);
+  --shadow-md: 0 4px 16px -4px rgba(16, 20, 26, 0.12), 0 1px 3px rgba(16, 20, 26, 0.06);
+  --shadow-lg: 0 18px 48px -12px rgba(16, 20, 26, 0.28);
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg: #0e1116;
+  --surface: #151a21;
+  --surface-2: #1b2129;
+  --surface-3: #232a34;
+  --border: #242b35;
+  --border-strong: #323b47;
+  --fg: #e8eaed;
+  --fg-muted: #a6acb5;
+  --fg-subtle: #858c97;
+  --overlay: rgba(4, 6, 9, 0.66);
+
+  --accent: #6ea8e8;
+  --accent-hover: #8bbbef;
+  --accent-fg: #0b1220;
+  --accent-soft: #19283a;
+  --accent-ink: #9cc6f2;
+  --ring: #6ea8e8;
+
+  --work: #3987e5;
+  --work-soft: #142538;
+  --work-ink: #8dbcf2;
+  --private: #e05a80;
+  --private-soft: #33171f;
+  --private-ink: #f39ab3;
+  --undecided: #c98500;
+  --undecided-soft: #2f2410;
+  --undecided-ink: #f0c060;
+
+  --fuel: #d4690f;
+  --fuel-soft: #31200f;
+  --fuel-ink: #f5a660;
+  --el: #14a597;
+  --el-soft: #0f2a28;
+  --el-ink: #5fd3c6;
+
+  --ok: #3fb46a;
+  --ok-soft: #13291b;
+  --ok-ink: #7fd69d;
+  --warn: #e0a030;
+  --warn-soft: #2f2410;
+  --warn-ink: #f0c060;
+  --err: #f06262;
+  --err-soft: #331617;
+  --err-ink: #f8a0a0;
+
+  --chart-grid: #232a33;
+  --chart-axis: #343c48;
+  --chart-label: #8a919c;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 6px 20px -6px rgba(0, 0, 0, 0.6), 0 1px 3px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 24px 60px -12px rgba(0, 0, 0, 0.75);
+}
+
+@theme inline {
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, monospace;
+
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-fg: var(--fg);
+  --color-fg-muted: var(--fg-muted);
+  --color-fg-subtle: var(--fg-subtle);
+  --color-overlay: var(--overlay);
+
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-fg: var(--accent-fg);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-ink: var(--accent-ink);
+  --color-ring: var(--ring);
+
+  --color-work: var(--work);
+  --color-work-soft: var(--work-soft);
+  --color-work-ink: var(--work-ink);
+  --color-private: var(--private);
+  --color-private-soft: var(--private-soft);
+  --color-private-ink: var(--private-ink);
+  --color-undecided: var(--undecided);
+  --color-undecided-soft: var(--undecided-soft);
+  --color-undecided-ink: var(--undecided-ink);
+
+  --color-fuel: var(--fuel);
+  --color-fuel-soft: var(--fuel-soft);
+  --color-fuel-ink: var(--fuel-ink);
+  --color-el: var(--el);
+  --color-el-soft: var(--el-soft);
+  --color-el-ink: var(--el-ink);
+
+  --color-ok: var(--ok);
+  --color-ok-soft: var(--ok-soft);
+  --color-ok-ink: var(--ok-ink);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-warn-ink: var(--warn-ink);
+  --color-err: var(--err);
+  --color-err-soft: var(--err-soft);
+  --color-err-ink: var(--err-ink);
+
+  --shadow-sm: var(--shadow-sm);
+  --shadow-md: var(--shadow-md);
+  --shadow-lg: var(--shadow-lg);
+
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+
+  --animate-fade-in: fade-in 160ms ease-out;
+  --animate-pop-in: pop-in 160ms cubic-bezier(0.2, 0.9, 0.3, 1.2);
+  --animate-slide-in-right: slide-in-right 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  --animate-slide-in-bottom: slide-in-bottom 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  --animate-shimmer: shimmer 1.6s ease-in-out infinite;
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes pop-in {
+  from { opacity: 0; transform: translateY(4px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes slide-in-right {
+  from { transform: translateX(100%); }
+  to { transform: none; }
+}
+@keyframes slide-in-bottom {
+  from { transform: translateY(100%); }
+  to { transform: none; }
+}
+@keyframes shimmer {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+@layer base {
+  html {
+    background: var(--bg);
+    -webkit-text-size-adjust: 100%;
+  }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font-sans);
+    font-feature-settings: "ss01", "cv11";
+    font-variant-numeric: tabular-nums;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  ::selection {
+    background: var(--accent-soft);
+    color: var(--fg);
+  }
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+  button, [role="button"] {
+    cursor: pointer;
+  }
+  button:disabled {
+    cursor: not-allowed;
+  }
+  * {
+    border-color: var(--border);
+  }
+}
+
+@layer utilities {
+  .num {
+    font-variant-numeric: tabular-nums;
+  }
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-strong) transparent;
+  }
+  .no-scrollbar {
+    scrollbar-width: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  /* Uppskattat värde: kursiv + streckad underlinje (se <QualityValue>) */
+  .value-estimated {
+    font-style: italic;
+    text-decoration-line: underline;
+    text-decoration-style: dashed;
+    text-decoration-color: var(--fg-subtle);
+    text-underline-offset: 3px;
+    text-decoration-thickness: 1px;
+  }
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* MapLibre: anpassa kontroller till temat */
+.maplibregl-ctrl-group {
+  background: var(--surface) !important;
+  border: 1px solid var(--border) !important;
+  box-shadow: var(--shadow-sm) !important;
+}
+.maplibregl-ctrl-group button + button {
+  border-top-color: var(--border) !important;
+}
+[data-theme="dark"] .maplibregl-ctrl-icon {
+  filter: invert(1) hue-rotate(180deg);
+}
+.maplibregl-ctrl-attrib {
+  background: color-mix(in srgb, var(--surface) 85%, transparent) !important;
+  color: var(--fg-muted) !important;
+  font-size: 10px !important;
+}
+.maplibregl-ctrl-attrib a {
+  color: var(--fg-muted) !important;
+}
+.maplibregl-popup-content {
+  background: var(--surface) !important;
+  color: var(--fg) !important;
+  border: 1px solid var(--border);
+  border-radius: 8px !important;
+  box-shadow: var(--shadow-md) !important;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  padding: 8px 10px !important;
+}
+.maplibregl-popup-tip {
+  display: none;
+}

@@ -441,7 +441,7 @@ def test_repeated_confirmations_raise_confidence_to_auto(db, user, trips):
     setup_places(trips)
     actor = audit.user_actor(user.id)
     baseline = None
-    for i in range(5):
+    for _i in range(5):
         t = trips.trip(OFFICE, CUSTOMER)
         a = classify(db, user, t)
         baseline = baseline or a.confidence

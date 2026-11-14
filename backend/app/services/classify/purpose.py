@@ -66,7 +66,6 @@ def candidate_purposes(ctx: TripContext, limit: int = 5) -> list[dict[str, Any]]
 
 def propose(db: Session, ctx: TripContext, rules: RuleResult) -> PurposeProposal | None:
     """Regelbaserat syftesförslag. Returnerar None när inget kan sägas."""
-    trip = ctx.trip
     if rules.category == Category.PRIVATE:
         return None  # privata resor behöver inget syfte
 

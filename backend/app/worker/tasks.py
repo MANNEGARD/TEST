@@ -107,7 +107,7 @@ def maintenance() -> dict[str, Any]:
             for vehicle in db.execute(select(Vehicle).where(Vehicle.owner_user_id == user.id)).scalars().all():
                 result = _safe("anomalies.scan_vehicle", anomalies.scan_vehicle, db, vehicle, user_id=user.id)
                 if isinstance(result, dict):
-                    out["anomalies"] += int(result.get("created", 0) or 0)
+                    out["anomalies"] += int(result.get("created_total", 0) or 0)
                 if retention > 0:
                     # Bearbetade rådataobservationer gallras; resorna och mätarställningarna finns kvar.
                     res = db.execute(

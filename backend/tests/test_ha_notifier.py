@@ -23,6 +23,7 @@ from app.services.ha import actions as A
 from app.services.ha import connection, demo, notifier, responses
 from app.services.trips import merge
 from tests.test_ha_support import (  # noqa: F401
+    HA_TOKEN,
     HOME,
     JONKOPING,
     NOW,
@@ -146,7 +147,7 @@ def test_texts_never_contain_street_addresses(db, user, vehicle, trips, fake_ha)
     assert "Örebro" in requests_of(db)[0].context["detail_message"]
 
 
-def test_ha_offline_retries_without_losing_question(db, user, vehicle, trips, fake_ha):
+def test_ha_offline_retries_without_losing_question(db, user, vehicle, trips, fake_ha, caplog):
     conn = setup_push(db, user)
     trip = recent_trip(trips)
     (req,) = enqueue_classify(db, user, vehicle, trip)
@@ -170,6 +171,7 @@ def test_ha_offline_retries_without_losing_question(db, user, vehicle, trips, fa
     db.refresh(req)
     assert req.status == NotificationStatus.SENT and len(fake_ha.sent) == 1
     assert conn.status == IntegrationStatus.CONNECTED and conn.last_error is None
+    assert caplog.records and HA_TOKEN not in caplog.text  # token loggas aldrig
 
 
 def test_ha_auth_failure_marks_reauth_and_keeps_question(db, user, vehicle, trips, fake_ha):

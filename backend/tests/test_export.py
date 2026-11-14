@@ -482,7 +482,7 @@ def _soffice() -> str:
 
 
 def _run_soffice(exe: str, profile: Path, args: list[str]) -> None:
-    subprocess.run(
+    subprocess.run(  # noqa: S603 – fast körbar fil från PATH, inga användardata
         [exe, f"-env:UserInstallation={profile.as_uri()}", "--headless", "--norestore", *args],
         check=True, capture_output=True, timeout=180,
     )

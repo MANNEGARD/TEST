@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from app.api.deps import DbDep, PrincipalDep, WebPrincipalDep, get_owned_trip, get_vehicle, owned_vehicle_ids
+from app.api.deps import DbDep, PrincipalDep, get_owned_trip, get_vehicle, owned_vehicle_ids
 from app.api.errors import bad_request, not_found
 from app.api.serializers import trip_out, trips_out
 from app.models import LogicalTrip, ReviewItem, TripMerge, TripSegment

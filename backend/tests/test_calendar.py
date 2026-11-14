@@ -11,7 +11,14 @@ import pytest
 from sqlalchemy import select
 
 import app.models as M
-from app.models.enums import Category, IntegrationProvider, IntegrationStatus, LocationType, ReviewKind, ReviewStatus
+from app.models.enums import (
+    Category,
+    IntegrationProvider,
+    IntegrationStatus,
+    LocationType,
+    ReviewKind,
+    ReviewStatus,
+)
 from app.services import audit, integrations, oauth_state
 from app.services import settings as settings_svc
 from app.services.calendar import graph, matching, sync

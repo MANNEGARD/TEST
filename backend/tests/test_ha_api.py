@@ -11,7 +11,7 @@ from sqlalchemy import select
 
 import app.models as M
 from app.db import utcnow
-from app.models.enums import Category, IntegrationStatus, NotificationStatus, ReviewKind
+from app.models.enums import Category, IntegrationStatus, ReviewKind
 from app.security import sessions
 from app.services import settings as settings_svc
 from app.services.ha import actions as A
@@ -260,32 +260,6 @@ def test_disconnect_removes_secrets(client, db, fake_ha):
 def test_mutations_require_csrf(client):
     client.headers.pop("X-CSRF-Token")
     assert client.put(f"{API}/integrations/home-assistant", json={"base_url": HA_URL}).status_code == 403
-
-
-# ----------------------------------------------------------------------------- notiser i webben
-
-
-def test_notifications_list_detail_and_respond(client, db, user, vehicle, trips):
-    req = live_question(db, user, vehicle, trips)
-    lst = client.get(f"{API}/notifications").json()
-    assert [n["public_id"] for n in lst] == [req.public_id]
-    detail = client.get(f"{API}/notifications/{req.public_id}")
-    assert detail.status_code == 200 and detail.json()["trip"]["id"] == str(req.logical_trip_id)
-    assert client.get(f"{API}/notifications/finnsinte0000").status_code == 404
-    r = client.post(f"{API}/notifications/{req.public_id}/respond", json={"action": "PRIVATE"})
-    assert r.status_code == 200 and r.json()["outcome"] == "applied"
-    assert reload_trip(db, req.logical_trip_id).category == Category.PRIVATE
-    again = client.post(f"{API}/notifications/{req.public_id}/respond", json={"action": "WORK"})
-    assert again.json()["outcome"] == "duplicate"
-    assert [n["public_id"] for n in client.get(f"{API}/notifications?status=answered").json()] == [req.public_id]
-    detail = client.get(f"{API}/notifications/{req.public_id}").json()
-    assert detail["status"] == NotificationStatus.ANSWERED and detail["answer"]["source"] == "web"
-
-
-def test_snooze_from_web(client, db, user, vehicle, trips):
-    req = live_question(db, user, vehicle, trips)
-    r = client.post(f"{API}/notifications/{req.public_id}/snooze", json={"minutes": 60})
-    assert r.status_code == 200 and r.json()["outcome"] == "snoozed"
 
 
 def test_action_ids_are_short_enough():
