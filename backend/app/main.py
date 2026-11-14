@@ -83,6 +83,37 @@ def bootstrap_admin() -> None:
         logger.info("Första administratörskontot skapades från miljövariabler.")
 
 
+def _start_dev_ticker():
+    """Utvecklingsläge utan Redis (DRIVELOG_JOBS_EAGER=true): kör de schemalagda jobben i en
+    bakgrundstråd så att insamling, demoläge och notiser fungerar även utan worker och beat.
+    I drift sköts detta av Celery beat – tråden startas aldrig där."""
+    import threading
+
+    cfg = get_config()
+    if not cfg.jobs_eager or cfg.environment in ("test", "production"):
+        return None
+    stop = threading.Event()
+
+    def loop() -> None:
+        from app.worker import tasks
+
+        minutes = 0
+        while not stop.wait(60):
+            minutes += 1
+            try:
+                tasks.tick()
+                if minutes % 15 == 0:
+                    tasks.calendar_sync_due()
+                if minutes % (24 * 60) == 0:
+                    tasks.maintenance()
+            except Exception:
+                logger.exception("Schemalagt jobb misslyckades")
+
+    threading.Thread(target=loop, name="drivelog-dev-ticker", daemon=True).start()
+    logger.info("Utvecklingsläge: schemalagda jobb körs i API-processen.")
+    return stop
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     cfg = get_config()
@@ -97,7 +128,10 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     if not cfg.is_production:
         init_schema()
     bootstrap_admin()
+    stop = _start_dev_ticker()
     yield
+    if stop is not None:
+        stop.set()
 
 
 def create_app() -> FastAPI:

@@ -177,7 +177,8 @@ def _recent(trip: LogicalTrip | None, now: datetime) -> bool:
     if trip is None:
         return False
     when = trip.ended_at or trip.sort_time
-    return when is not None and timedelta(0) <= (now - when) <= RECENT_WINDOW
+    # Demosimulatorn kan lägga resor en bit fram i tiden när flera simuleras i följd.
+    return when is not None and -timedelta(hours=24) <= (now - when) <= RECENT_WINDOW
 
 
 def previous_purposes(db: Session, user_id: uuid.UUID, trip: LogicalTrip, limit: int = 3) -> list[str]:
@@ -291,7 +292,9 @@ def enqueue_for_changes(
     if vehicle.is_demo and channel != CHANNEL_DEMO:
         return []
     kinds = cfg["kinds"]
-    send_after = now + timedelta(minutes=float(cfg["batch_window_minutes"]))
+    # I demoläget visas frågorna direkt i den simulerade telefonen (ingen väntan på sammanläggning).
+    demo = channel == CHANNEL_DEMO
+    send_after = now if demo else now + timedelta(minutes=float(cfg["batch_window_minutes"]))
     created: list[NotificationRequest] = []
 
     if kinds.get("merge", True):
@@ -325,6 +328,8 @@ def enqueue_for_changes(
             if req is not None:
                 created.append(req)
     db.flush()
+    if demo and created:
+        deliver_user(db, user_id, now)
     return created
 
 
@@ -656,7 +661,10 @@ def deliver_user(db: Session, user_id: uuid.UUID, now: datetime | None = None) -
                 stats["sent"] += 1
 
         enabled = bool(cfg["enabled"])
-        quiet = policy.in_quiet_hours(now.astimezone(tz), cfg["quiet_start"], cfg["quiet_end"])
+        # Den simulerade telefonen i demoläget har inga tysta timmar.
+        quiet = channel != CHANNEL_DEMO and policy.in_quiet_hours(
+            now.astimezone(tz), cfg["quiet_start"], cfg["quiet_end"]
+        )
         remaining = policy.remaining_today(
             int(cfg["max_per_day"]), _units_today(db, user_id, policy.local_day_start(now, tz))
         )
