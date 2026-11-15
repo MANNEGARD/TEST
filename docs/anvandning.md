@@ -55,7 +55,8 @@ från bilen kopplas till rätt plats. Bara bekräftade platser påverkar försla
 markerad *Privat destination* ger privat klassning, och resor dit hamnar aldrig i underlaget.
 
 Fliken *AI-minne* visar vad systemet lärt sig per plats och rutt, dina korrigeringar (som kan
-ångras) och egna regler, till exempel "resor hit är alltid Arbete med syftet …".
+ångras) och egna regler, till exempel "resor hit är alltid Arbete med syftet …" eller *Fråga
+mig alltid*. Ett mönster som blivit fel stänger du av med *Använd inte*.
 
 ## Körjournalen
 
@@ -103,6 +104,8 @@ starttid och sista sluttid. Originalresorna finns alltid kvar, och gränserna ä
 
 Två resor slås inte ihop automatiskt om bilen har körts däremellan (kilometer saknas i
 mätarställningen), och en privat delsträcka blir aldrig tjänst genom en sammanslagning.
+Saknar en importerad resa klockslag (bara datum) går stilleståndet inte att bedöma; då ställs
+ingen fråga, men du kan fortfarande slå samman manuellt.
 
 ## Granskning
 
@@ -123,12 +126,14 @@ taget, även med tangentbordet (A = arbete, P = privat, G = godkänn).
 Månadens tjänstemil, antal tjänsteresor, beräknad milersättning och vad som väntar på
 granskning – samt diagram över tjänstekörning över tid och vanligaste destinationerna.
 Milersättningen räknas bara på godkända resor. Mer statistik (resvägar, månadsjämförelse,
-förbrukning) finns under en hopfälld rubrik.
+förbrukning) och *Veckan i korthet* (veckans tjänstemil, vad som väntar på granskning och
+vanligaste destinationer) finns under hopfällda rubriker.
 
 ## Export
 
 Se [Excel-export](excel-export.md). I korthet: **Export → välj månad → Skapa Excel.** Filen
 innehåller ett blad med månadens tjänsteresor och en summering med mil och ersättning.
+Vill du bara redovisa vissa resor markerar du dem i körjournalen och väljer *Exportera valda*.
 
 ## Notiser i telefonen
 
@@ -153,15 +158,15 @@ blandas med din riktiga journal. *Stäng av demoläge* tar bort demodatan.
 
 | Sektion | Innehåll |
 | --- | --- |
-| Fordon och förare | Registreringsnummer, bil, ditt namn och arbetsgivare (visas i exporten) |
+| Fordon och förare | Registreringsnummer, bil, ditt namn och arbetsgivare (visas i exporten); tidszon under *Avancerat* |
 | Milersättning och export | Kronor per mil, visa belopp, exportens utseende, vad som redovisas |
 | Sammanslagning av resor | Gränserna 15 och 60 minuter |
 | Förslag och AI | Trösklar, strikt läge, vad som får skickas till AI-leverantören |
 | Notiser | Typer, tysta timmar, max per dygn, påminnelser, veckosammanställning |
 | Kalender | Tidsfönster för matchning |
-| Tjänsteställe | Avancerat: ordinarie tjänsteställe och bostaden som tjänsteställe |
+| Tjänsteställe | Avancerat: ordinarie tjänsteställe, bostaden som tjänsteställe, förmånsbil och krav på godkännande vid skattemässig osäkerhet |
 | Förkortningar | Egna förkortningar i kommentarer, t.ex. ortsförkortningar |
-| Sekretess | Karta, geokodning, gallring, radering av historik |
+| Sekretess | Karta, geokodning, gallring, om originalfiler sparas vid import, radering av historik |
 | Säkerhet | Lösenord, API-tokens |
 | Säkerhetskopia | Skapa och hämta kopior |
 

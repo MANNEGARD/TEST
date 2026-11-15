@@ -18,6 +18,7 @@ riktning, vikt och en svensk förklaring som visas i resedetaljen.
 | Bostad ↔ ordinarie tjänsteställe | Privat + skattenotering | Kräver alltid godkännande, se nedan |
 | Bostaden är tjänsteställe | Arbete | Enligt dina inställningar |
 | Manuell regel för plats eller rutt | Enligt regeln | Stark |
+| Manuell regel "Fråga mig alltid" | Ej avgjord – du avgör varje gång | Går före allt annat; AI anropas inte |
 | Användarbekräftad historik för rutten/destinationen | Arbete eller privat | Växer med antalet bekräftelser |
 | Importerad historik (urval) | Arbete | Låg, begränsad vikt |
 | Tidigare korrigeringar av liknande resor | Mot korrigeringen | Minskar tilliten till den äldre regeln |
@@ -49,10 +50,16 @@ JSON. Svaret passerar sedan skyddsräcken:
 
 - **AI kan föreslå, aldrig besluta.** Ett rent AI-förslag ger som mest "begär godkännande".
 - **AI kan inte vända ett regelbeslut.** Avviker bedömningen flaggas resan för granskning.
-- **Inga påhittade uppgifter.** Ett genererat syfte godkänns bara om varje egennamn,
-  förkortning och siffra ordagrant finns i underlaget (platsnamn, orter, företag,
-  kalenderrubrik, tidigare bekräftade syften). Annars förkastas det och regelförslaget
-  används; avvisningen syns i resans underlag.
+- **Inga påhittade uppgifter.** Ett genererat syfte prövas i två steg. (1) Varje namn, ort,
+  företag, förkortning och siffra måste finnas i underlaget (platsnamn, orter, företag,
+  kalenderrubrik, tidigare bekräftade syften); allmänna ord och deras sammansättningar
+  ("Projektmöte", "Avstämningsmöte") är tillåtna. (2) Själva *ärendetypen* – kundbesök, möte,
+  utbildning, personalärende, övernattning och liknande – godtas bara när den har stöd i
+  underlaget: en matchad kalenderbokning, ett tidigare bekräftat syfte för platsen eller
+  rutten, platsens typ (kund, kontor, hotell) eller regelmotorns eget förslag. Särskilda
+  ärenden som "styrelsemöte" eller "upphandling" måste stå i underlaget. Annars förkastas
+  förslaget och regelmotorns försiktiga "… – syfte behöver bekräftas" står kvar; avvisningen
+  syns i resans underlag.
 - **Indata är data, inte instruktioner.** Kalenderrubriker och kommentarer skickas avgränsade
   och kan inte ändra utfallet även om modellen skulle "lyda" dem – valideringen sker efteråt.
 - **Fel hos leverantören** påverkar inte journalen: reglernas resultat gäller.

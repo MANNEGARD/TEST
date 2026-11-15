@@ -32,7 +32,8 @@ användares resor, platser, importer och exporter ger 404.
   (Fernet) med nyckeln i `DRIVELOG_ENCRYPTION_KEYS`. Nyckelrotation stöds.
 - API:t lämnar aldrig ut en hemlighet – bara *att* den finns.
 - Inga lösenord, nycklar, VIN eller privata adresser finns i koden eller dokumentationen.
-- Loggarna maskerar tokens, nycklar, lösenord och VIN.
+- Loggarna maskerar tokens, nycklar, lösenord, `Authorization`-huvuden och VIN – i API:t,
+  i webbserverns åtkomstlogg och i bakgrundsjobben (worker och schemaläggare).
 - OAuth-flödena använder PKCE och ett serverlagrat engångs-`state` med kort livslängd.
 
 ## Filuppladdning

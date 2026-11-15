@@ -37,7 +37,7 @@ Fyll i `.env`:
 | `POSTGRES_PASSWORD` | Databaslösenord: `openssl rand -base64 32` |
 | `DRIVELOG_SECRET_KEY` | Applikationshemlighet, minst 32 tecken: `openssl rand -hex 32` |
 | `DRIVELOG_ENCRYPTION_KEYS` | Krypteringsnyckel för lagrade tokens och API-nycklar, se nedan |
-| `DRIVELOG_TIMEZONE` | Standard `Europe/Stockholm` |
+| `DRIVELOG_TIMEZONE` | Standardtidszon tills du väljer en egen under Inställningar (`Europe/Stockholm`) |
 
 Skapa krypteringsnyckeln:
 
