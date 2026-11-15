@@ -63,8 +63,11 @@ def sync_trip_review_items(
             )
         elif trip.tax_note and not approved:
             wanted[ReviewKind.TAX_UNCERTAIN] = (f"Skattemässig bedömning: {_route(trip)}", trip.tax_note)
-        elif trip.review_status in (ReviewStatus.NEEDS_REVIEW, ReviewStatus.PROPOSED):
-            if trip.category == Category.UNDECIDED:
+        elif trip.review_status in (ReviewStatus.NEEDS_REVIEW, ReviewStatus.PROPOSED) or (
+            trip.undecided_km > seg.KM_EPS and trip.category != Category.UNDECIDED
+        ):
+            # Även en resa som ser avgjord ut behöver granskas om delsträckor saknar kategori.
+            if trip.category == Category.UNDECIDED or trip.undecided_km > seg.KM_EPS:
                 title = f"Arbete eller privat? {_route(trip)}"
             else:
                 title = f"Godkänn förslag: {_route(trip)}"
@@ -76,11 +79,19 @@ def sync_trip_review_items(
                     trip.purpose,
                 )
         flags = set(trip.quality_flags or [])
+        # Privat körning redovisas inte när endast tjänsteresor ingår i journalen.
+        private_out_of_scope = (
+            ("missing_odometer" in flags or "possible_missed_trips" in flags)
+            and seg.is_private_only(trip)
+            and (scope or _trip_scope(db, trip)) == settings_svc.SCOPE_BUSINESS_ONLY
+        )
         if "missing_odometer" in flags:
-            wanted[ReviewKind.MISSING_ODOMETER] = (f"Mätarställning saknas: {_route(trip)}", None)
+            if private_out_of_scope:
+                out_of_scope.add(ReviewKind.MISSING_ODOMETER)
+            else:
+                wanted[ReviewKind.MISSING_ODOMETER] = (f"Mätarställning saknas: {_route(trip)}", None)
         if "possible_missed_trips" in flags:
-            # Privat körning redovisas inte när endast tjänsteresor ingår i journalen.
-            if seg.is_private_only(trip) and (scope or _trip_scope(db, trip)) == settings_svc.SCOPE_BUSINESS_ONLY:
+            if private_out_of_scope:
                 out_of_scope.add(ReviewKind.DATA_GAP)
             else:
                 wanted[ReviewKind.DATA_GAP] = (
@@ -143,7 +154,7 @@ def after_trips_changed(
     out["auto_merged"] = merge_result["auto_merged"]
     out["merge_questions"] = len(merge_result["questions"])
 
-    out.update(gaps.recompute(db, vehicle.id, float(merge_cfg["odometer_tolerance_km"])))
+    out.update(gaps.recompute(db, vehicle.id, float(merge_cfg["odometer_tolerance_km"]), scope=scope))
     places.recount_visits(db, user_id)
     patterns.rebuild(db, user_id)
     if origin in ("import", "import_undo"):
@@ -170,6 +181,7 @@ def after_trips_changed(
         if created:
             new_trip_items.append((trip, created))
     out["new_review_trips"] = len(new_trip_items)
+    out["closed_orphaned_items"] = review.close_orphaned(db, vehicle.id)
 
     if notify:
         from app.services.ha import notifier

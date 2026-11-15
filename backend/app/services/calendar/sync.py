@@ -120,14 +120,22 @@ def access_token(db: Session, conn: IntegrationConnection, *, transport: httpx.B
 
 def list_calendars(db: Session, user_id: uuid.UUID, *, transport: httpx.BaseTransport | None = None) -> list[dict[str, Any]]:
     conn = _connected(db, user_id)
-    client = graph.GraphClient(access_token(db, conn, transport=transport), transport=transport)
     try:
-        calendars = client.list_calendars()
+        client = graph.GraphClient(access_token(db, conn, transport=transport), transport=transport)
+        try:
+            calendars = client.list_calendars()
+        finally:
+            client.close()
     except graph.GraphAuthError as exc:
         integrations.mark_error(conn, str(exc), needs_reauth=True)
+        db.flush()
         raise CalendarError("Kalendern behöver anslutas på nytt.", "needs_reauth") from exc
-    finally:
-        client.close()
+    except graph.GraphThrottled as exc:
+        raise CalendarError("Microsoft begränsar just nu antalet anrop. Försök igen om en stund.", "throttled") from exc
+    except graph.GraphError as exc:
+        integrations.mark_error(conn, str(exc))
+        db.flush()
+        raise CalendarError(str(exc), "graph_error") from exc
     selected = set(settings_svc.get_section(db, user_id, "calendar")["calendar_ids"])
     for c in calendars:
         c["selected"] = c["id"] in selected or (not selected and c["is_default"])
@@ -198,6 +206,7 @@ def sync_user(
                 raw_events = client.calendar_view(cal_id, start, end, include_body_preview=include_body)
                 stats["calendars"] += 1
                 _upsert_events(db, user_id, conn, cal_id, raw_events, start, end, include_body, stats)
+            stats["removed"] += retire_unselected(db, user_id, calendar_ids)
         finally:
             client.close()
     except graph.GraphThrottled as exc:
@@ -281,8 +290,32 @@ def _upsert_events(
     db.flush()
 
 
-def disconnect(db: Session, user_id: uuid.UUID, *, delete_events: bool = True) -> None:
-    """Kopplar bort Outlook och raderar tokens (och som standard lagrade kalenderposter)."""
+def retire_unselected(db: Session, user_id: uuid.UUID, calendar_ids: list[str]) -> int:
+    """Markerar lagrade händelser från kalendrar som inte längre är valda som borttagna,
+    så att de inte påverkar matchning och klassning. Returnerar antal markerade."""
+    if not calendar_ids:
+        return 0
+    now = utcnow()
+    count = 0
+    for ev in db.execute(
+        select(CalendarEvent).where(
+            CalendarEvent.user_id == user_id,
+            CalendarEvent.is_demo.is_(False),
+            CalendarEvent.removed_at.is_(None),
+            CalendarEvent.calendar_id.not_in(calendar_ids),
+        )
+    ).scalars():
+        ev.removed_at = now
+        count += 1
+    db.flush()
+    return count
+
+
+def disconnect(db: Session, user_id: uuid.UUID, *, delete_events: bool = True, forget_app: bool = False) -> None:
+    """Kopplar bort Outlook och raderar tokens (och som standard lagrade kalenderposter).
+
+    Med ``forget_app`` raderas även Microsoft-appens uppgifter (klient-ID och klienthemlighet).
+    """
     conn = integrations.get(db, user_id, PROVIDER)
     if conn is None:
         return
@@ -293,6 +326,8 @@ def disconnect(db: Session, user_id: uuid.UUID, *, delete_events: bool = True) -
             db.delete(ev)
     client_cfg = {k: v for k, v in (conn.config or {}).items() if k in ("client_id", "tenant")}
     secret = integrations.secrets(conn).get("client_secret")
+    if forget_app:
+        client_cfg, secret = {}, None
     integrations.disconnect(db, conn)
     conn.config = client_cfg
     if secret:  # appens klienthemlighet behålls så att man kan ansluta igen; tokens raderas

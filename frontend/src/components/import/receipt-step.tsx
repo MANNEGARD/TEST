@@ -85,7 +85,12 @@ export function ReceiptStep({
           </div>
 
           <ul className="mt-5 divide-y divide-border rounded-lg border border-border">
-            <ReceiptLine icon={<Merge />} label="automatiskt sammanslagna" value={autoMerged} hint="Resor med korta stopp som blev en resa." />
+            <ReceiptLine
+              icon={<Merge />}
+              label={autoMerged === 1 ? "automatisk sammanslagning" : "automatiska sammanslagningar"}
+              value={autoMerged}
+              hint="Resor med korta stopp emellan som blev en resa."
+            />
             <ReceiptLine
               icon={<MessageCircleQuestion />}
               label={questions === 1 ? "fråga om sammanslagning" : "frågor om sammanslagning"}

@@ -274,8 +274,8 @@ function RulesCard({ query, onNew, canCreate }: { query: ReturnType<typeof usePa
                     </>
                   ) : null}
                   {p.manual_purpose ? (
-                    <span className="min-w-0 break-words">
-                      {p.manual_category ? "· " : ""}syfte: <span className="text-fg">{p.manual_purpose}</span>
+                    <span className="min-w-0 basis-full break-words">
+                      Syfte: <span className="text-fg">{p.manual_purpose}</span>
                     </span>
                   ) : null}
                 </p>

@@ -37,6 +37,7 @@ from app.services.places import registry as places
 
 ENGINE_VERSION = "1.0"
 RETURN_LOOKBACK_DAYS = 14
+WEAK_GEO_BASES = ("no_location", "online")  # kalenderträff utan positivt platsstöd
 _TRUSTED = (ReviewStatus.APPROVED, ReviewStatus.IMPORTED)
 
 
@@ -80,6 +81,7 @@ class TripContext:
     dest_is_regular_workplace: bool = False
     origin_is_regular_workplace: bool = False
     home_is_workplace: bool = False
+    commute_via_stop: bool = False  # bostad → kort neutralt stopp → ordinarie tjänsteställe
 
     @property
     def local_start(self) -> datetime | None:
@@ -88,17 +90,26 @@ class TripContext:
 
     @property
     def selected_event(self) -> CalendarEvent | None:
+        sel = self.selected_match
+        return sel[1] if sel else None
+
+    @property
+    def selected_match(self) -> tuple[CalendarMatch, CalendarEvent] | None:
         for m, ev in self.calendar_matches:
             if m.is_selected and not m.is_conflict:
-                return ev
+                return m, ev
         return None
 
 
-def _workplace_ids(db: Session, user_id: uuid.UUID, on: date | None) -> tuple[set[uuid.UUID], bool]:
-    """Tjänsteställen som gäller ett visst datum, samt om bostaden är tjänsteställe då."""
+def _workplace_ids(db: Session, user_id: uuid.UUID, on: date | None) -> tuple[set[uuid.UUID], bool, set[uuid.UUID]]:
+    """Tjänsteställen som gäller ett visst datum, om bostaden är tjänsteställe då, samt
+    alla platser som har minst en giltighetsperiod (för dem avgör perioderna ensamma)."""
     ids: set[uuid.UUID] = set()
+    with_periods: set[uuid.UUID] = set()
     home = False
     for wp in db.execute(select(WorkplacePeriod).where(WorkplacePeriod.user_id == user_id)).scalars():
+        if wp.location_id:
+            with_periods.add(wp.location_id)
         if on is not None:
             if wp.valid_from and on < wp.valid_from:
                 continue
@@ -108,7 +119,57 @@ def _workplace_ids(db: Session, user_id: uuid.UUID, on: date | None) -> tuple[se
             home = True
         elif wp.location_id:
             ids.add(wp.location_id)
-    return ids, home
+    return ids, home, with_periods
+
+
+def _is_regular_workplace(loc: KnownLocation | None, ids: set[uuid.UUID], with_periods: set[uuid.UUID]) -> bool:
+    if loc is None:
+        return False
+    if loc.id in with_periods:
+        return loc.id in ids  # användarens giltighetsperioder går före platstypen
+    return loc.type == LocationType.REGULAR_WORKPLACE and loc.confirmed
+
+
+_NEUTRAL_STOP_TYPES = (LocationType.FUEL_STATION, LocationType.CHARGING_STATION, LocationType.UNKNOWN)
+COMMUTE_CHAIN_MAX_STOPS = 3
+COMMUTE_CHAIN_MAX_PAUSE = timedelta(minutes=60)
+
+
+def _is_neutral_stop(loc: KnownLocation | None) -> bool:
+    return loc is None or not loc.confirmed or loc.type in _NEUTRAL_STOP_TYPES
+
+
+def _commute_chain_from_home(db: Session, trip: LogicalTrip, origin: KnownLocation | None) -> bool:
+    """Startar resan vid ett kort, neutralt stopp (tankning, laddning, okänd plats) på väg
+    från bostaden? Följer kedjan bakåt högst några stopp."""
+    if not _is_neutral_stop(origin) or trip.sort_time is None:
+        return False
+    current = trip
+    for _ in range(COMMUTE_CHAIN_MAX_STOPS):
+        prev = db.execute(
+            select(LogicalTrip)
+            .where(
+                LogicalTrip.vehicle_id == current.vehicle_id,
+                LogicalTrip.state == LogicalState.ACTIVE,
+                LogicalTrip.sort_time < current.sort_time,
+                LogicalTrip.id != current.id,
+            )
+            .order_by(LogicalTrip.sort_time.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        if prev is None or prev.ended_at is None or current.started_at is None:
+            return False
+        if current.started_at - prev.ended_at > COMMUTE_CHAIN_MAX_PAUSE:
+            return False
+        if current.start_location_id is None or prev.end_location_id != current.start_location_id:
+            return False
+        prev_origin = db.get(KnownLocation, prev.start_location_id) if prev.start_location_id else None
+        if _is_home(prev_origin):
+            return True
+        if not _is_neutral_stop(prev_origin):
+            return False
+        current = prev
+    return False
 
 
 def build_context(
@@ -158,7 +219,11 @@ def build_context(
         db.execute(
             select(CalendarMatch, CalendarEvent)
             .join(CalendarEvent, CalendarEvent.id == CalendarMatch.calendar_event_id)
-            .where(CalendarMatch.logical_trip_id == trip.id)
+            .where(
+                CalendarMatch.logical_trip_id == trip.id,
+                CalendarEvent.removed_at.is_(None),
+                CalendarEvent.is_cancelled.is_(False),
+            )
             .order_by(CalendarMatch.score.desc())
         ).all()
     )
@@ -166,7 +231,7 @@ def build_context(
     when = trip.started_at or trip.sort_time
     if when is not None:
         local_day = when.astimezone(tz).date()
-    wp_ids, wp_home = _workplace_ids(db, user_id, local_day)
+    wp_ids, wp_home, wp_any = _workplace_ids(db, user_id, local_day)
     ctx = TripContext(
         trip=trip,
         user_id=user_id,
@@ -183,13 +248,10 @@ def build_context(
         abbreviations=abbreviations,
     )
     ctx.home_is_workplace = bool(tax.get("home_is_workplace")) or wp_home
-    ctx.dest_is_regular_workplace = bool(
-        destination is not None
-        and (destination.id in wp_ids or (destination.type == LocationType.REGULAR_WORKPLACE and destination.confirmed))
-    )
-    ctx.origin_is_regular_workplace = bool(
-        origin is not None and (origin.id in wp_ids or (origin.type == LocationType.REGULAR_WORKPLACE and origin.confirmed))
-    )
+    ctx.dest_is_regular_workplace = _is_regular_workplace(destination, wp_ids, wp_any)
+    ctx.origin_is_regular_workplace = _is_regular_workplace(origin, wp_ids, wp_any)
+    if ctx.dest_is_regular_workplace and not _is_home(origin):
+        ctx.commute_via_stop = _commute_chain_from_home(db, trip, origin)
     return ctx
 
 
@@ -343,7 +405,7 @@ def _location_signals(ctx: TripContext) -> tuple[list[Signal], str | None, str |
         sub = Subcategory.PRIVATE_ERRAND
 
     # Bostad ↔ ordinarie tjänsteställe: skattemässig bedömning enligt konfigurationen.
-    commute_out = _is_home(o) and ctx.dest_is_regular_workplace
+    commute_out = (_is_home(o) or ctx.commute_via_stop) and ctx.dest_is_regular_workplace
     commute_back = ctx.origin_is_regular_workplace and _is_home(d)
     if commute_out or commute_back:
         if ctx.home_is_workplace:
@@ -367,8 +429,9 @@ def _location_signals(ctx: TripContext) -> tuple[list[Signal], str | None, str |
                 )
             )
             tax_note = (
-                "Resan går mellan bostaden och det ordinarie tjänstestället. Sådana resor räknas normalt "
-                "som privata (arbetsresor). Bekräfta klassningen."
+                "Resan går mellan bostaden och det ordinarie tjänstestället"
+                + (" (med ett kort stopp på vägen)" if ctx.commute_via_stop and not _is_home(o) else "")
+                + ". Sådana resor räknas normalt som privata (arbetsresor). Bekräfta klassningen."
             )
             sub = Subcategory.COMMUTE
     elif ctx.dest_is_regular_workplace:
@@ -402,8 +465,8 @@ def _journey_signals(ctx: TripContext, already_commute: bool) -> tuple[list[Sign
     out: list[Signal] = []
     sub: str | None = None
     arr, d, o = ctx.arrival_at_origin, ctx.destination, ctx.origin
-    if arr is None or already_commute:
-        return out, sub
+    if arr is None or already_commute or _is_home(o):
+        return out, sub  # en resa som startar i bostaden fortsätter ingen pågående tjänsteresa
     trusted = arr.review_status in _TRUSTED
     arr_work = arr.category == Category.WORK and not arr.has_mixed_categories
     arr_private = arr.category == Category.PRIVATE and not arr.has_mixed_categories
@@ -443,7 +506,7 @@ def _journey_signals(ctx: TripContext, already_commute: bool) -> tuple[list[Sign
                        "logical_trip", str(arr.id), data)
             )
             sub = Subcategory.HOTEL_TRANSFER
-    elif arr_work and not _is_home(o):
+    elif arr_work:
         within = arr.ended_at and ctx.trip.sort_time and (ctx.trip.sort_time - arr.ended_at) <= timedelta(hours=12)
         if within:
             out.append(
@@ -477,6 +540,13 @@ def _calendar_signals(ctx: TripContext) -> tuple[list[Signal], bool]:
                 out.append(
                     Signal("calendar_private", f"Matchande privat kalenderbokning: {subject}", Category.PRIVATE, 0.35,
                            "calendar_event", str(ev.id), {"score": m.score, "relation": m.relation})
+                )
+            elif m.geo_basis in WEAK_GEO_BASES:
+                # Bokning utan platsuppgift (eller onlinemöte): kontext, aldrig ensamt underlag för Arbete.
+                out.append(
+                    Signal("calendar_context", f"Kalenderbokning vid samma tid, utan platsuppgift: {subject}", "neutral",
+                           0.0, "calendar_event", str(ev.id),
+                           {"score": m.score, "relation": m.relation, "geo_basis": m.geo_basis})
                 )
             else:
                 out.append(

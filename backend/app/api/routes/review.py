@@ -182,7 +182,10 @@ def list_gaps(principal: PrincipalDep, db: DbDep, vehicle_id: uuid.UUID | None =
 def resolve_gap_private(gap_id: uuid.UUID, body: GapResolve, principal: PrincipalDep, db: DbDep) -> TripOut:
     gap = _owned_gap(db, principal, gap_id)
     trip = gaps.resolve_as_private(db, gap, actor=principal.actor, note=body.note)
-    gaps.recompute(db, gap.vehicle_id, float(settings_svc.get_section(db, principal.user.id, "merge")["odometer_tolerance_km"]))
+    gaps.recompute(
+        db, gap.vehicle_id, float(settings_svc.get_section(db, principal.user.id, "merge")["odometer_tolerance_km"]),
+        scope=settings_svc.journal_scope(db, principal.user.id),
+    )
     db.commit()
     return trip_out(db, seg.load_trip(db, trip.id) or trip)
 
@@ -199,7 +202,10 @@ def ignore_gap(gap_id: uuid.UUID, body: GapResolve, principal: PrincipalDep, db:
 def reopen_gap(gap_id: uuid.UUID, principal: PrincipalDep, db: DbDep) -> DataGap:
     gap = _owned_gap(db, principal, gap_id)
     gaps.reopen(db, gap, actor=principal.actor)
-    gaps.recompute(db, gap.vehicle_id, float(settings_svc.get_section(db, principal.user.id, "merge")["odometer_tolerance_km"]))
+    gaps.recompute(
+        db, gap.vehicle_id, float(settings_svc.get_section(db, principal.user.id, "merge")["odometer_tolerance_km"]),
+        scope=settings_svc.journal_scope(db, principal.user.id),
+    )
     db.commit()
     return gap
 

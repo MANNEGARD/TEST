@@ -10,7 +10,7 @@ from typing import Any
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
-from app.models import KnownLocation, LocationAlias, LocationPattern, LogicalTrip, RawTrip
+from app.models import KnownLocation, LearningFeedback, LocationAlias, LocationPattern, LogicalTrip, RawTrip
 from app.models.enums import LocationType
 from app.services.places.normalize import (
     address_key,
@@ -132,19 +132,48 @@ def merge_locations(db: Session, keep: KnownLocation, other: KnownLocation) -> K
     ):
         for col in cols:
             db.execute(update(model).where(getattr(model, col) == other.id).values({col: keep.id}))
+    # Tidigare korrigeringar räknas in för den behållna platsen.
+    for col in ("origin_location_id", "destination_location_id"):
+        db.execute(update(LearningFeedback).where(getattr(LearningFeedback, col) == other.id).values({col: keep.id}))
     # Mönster räknas om av learning.patterns; ta bort de som pekar på den gamla platsen.
-    for pat in db.execute(
-        select(LocationPattern).where(
-            (LocationPattern.destination_location_id == other.id) | (LocationPattern.origin_location_id == other.id)
-        )
-    ).scalars():
+    # Manuella regler flyttas till den behållna platsen med ny nyckel, annars hittas de inte.
+    moved = list(
+        db.execute(
+            select(LocationPattern).where(
+                (LocationPattern.destination_location_id == other.id) | (LocationPattern.origin_location_id == other.id)
+            )
+        ).scalars()
+    )
+    for pat in moved:
         if not pat.is_manual_rule:
             db.delete(pat)
+            continue
+        if pat.destination_location_id == other.id:
+            pat.destination_location_id = keep.id
+        if pat.origin_location_id == other.id:
+            pat.origin_location_id = keep.id
+        new_key = (
+            f"route:{pat.origin_location_id}:{pat.destination_location_id}"
+            if pat.origin_location_id
+            else f"dest:{pat.destination_location_id}"
+        )
+        target = db.execute(
+            select(LocationPattern).where(
+                LocationPattern.owner_user_id == pat.owner_user_id,
+                LocationPattern.pattern_key == new_key,
+                LocationPattern.id != pat.id,
+            )
+        ).scalar_one_or_none()
+        if target is None:
+            pat.pattern_key = new_key
+        elif target.is_manual_rule:
+            db.delete(pat)  # den behållna platsens egen regel gäller
         else:
-            if pat.destination_location_id == other.id:
-                pat.destination_location_id = keep.id
-            if pat.origin_location_id == other.id:
-                pat.origin_location_id = keep.id
+            target.is_manual_rule = True
+            target.manual_category, target.manual_purpose = pat.manual_category, pat.manual_purpose
+            target.status = pat.status
+            db.delete(pat)
+        db.flush()
     if keep.latitude is None and other.latitude is not None:
         keep.latitude, keep.longitude, keep.coordinate_source = other.latitude, other.longitude, other.coordinate_source
     other.merged_into_id = keep.id

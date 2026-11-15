@@ -107,7 +107,7 @@ def geo_match(
             return 0.7, "coordinates_near", False
         if d <= 10_000:
             return 0.3, "coordinates_same_area", False
-        return 0.0, "coordinates_far", d >= CONFLICT_DISTANCE_M
+        return 0.0, "coordinates_far", d >= CONFLICT_DISTANCE_M and not _is_online(ev)
 
     ev_text_tokens = _tokens(f"{ev.location_name or ''} {ev.location_address or ''}", abbreviations)
     subject_tokens = _tokens(ev.subject, abbreviations)
@@ -131,12 +131,19 @@ def geo_match(
 
     has_physical = bool(ev.location_name or ev.location_address) and not _looks_online(ev)
     if has_physical:
-        # Bokningen har en fysisk plats som inte liknar resans mål.
-        conflict = bool(ev_city and place_city and ev_city != place_city)
+        # Bokningen har en fysisk plats som inte liknar resans mål. Ett onlinemöte (t.ex. Teams
+        # med bokat rum) kan följas var som helst ifrån och är därför ingen konflikt.
+        conflict = bool(ev_city and place_city and ev_city != place_city) and not _is_online(ev)
         return 0.0, "different_place", conflict
-    if ev.is_online or _looks_online(ev):
+    if place is not None and place.confirmed and place.type in (LocationType.HOME, LocationType.PRIVATE):
+        return 0.0, "no_location", False  # bokning utan platsstöd matchas aldrig mot bostaden eller privat plats
+    if _is_online(ev):
         return 0.15, "online", False
     return 0.2, "no_location", False
+
+
+def _is_online(ev: CalendarEvent) -> bool:
+    return bool(ev.is_online or ev.online_provider) or _looks_online(ev)
 
 
 def _looks_online(ev: CalendarEvent) -> bool:
@@ -193,12 +200,44 @@ def candidates_for_trip(
             )
         if geo == 0.0 and not conflict:
             continue
+        if conflict and _later_trip_reaches(db, trip, ev, abbreviations):
+            continue  # mellanstopp på väg till mötet: en senare resa når mötesplatsen i tid
         out.append(
             Candidate(ev, relation, tscore, geo, basis, conflict and tscore >= CONFLICT_MIN_TIME_SCORE)
         )
     out = [c for c in out if c.score > 0 or c.is_conflict]
     out.sort(key=lambda c: (c.is_conflict, -c.score))
     return out
+
+
+def _later_trip_reaches(db: Session, trip: LogicalTrip, ev: CalendarEvent, abbreviations: dict[str, str]) -> bool:
+    """Når en senare resa (som startar före mötets slut) bokningens plats?"""
+    if trip.sort_time is None:
+        return False
+    later = db.execute(
+        select(LogicalTrip)
+        .where(
+            LogicalTrip.vehicle_id == trip.vehicle_id,
+            LogicalTrip.state == LogicalState.ACTIVE,
+            LogicalTrip.id != trip.id,
+            LogicalTrip.sort_time > trip.sort_time,
+            LogicalTrip.sort_time <= ev.end_at,
+        )
+        .order_by(LogicalTrip.sort_time)
+        .limit(5)
+    ).scalars()
+    for nxt in later:
+        if nxt.source == TripSource.GAP_FILL:
+            continue
+        dest = db.get(KnownLocation, nxt.end_location_id) if nxt.end_location_id else None
+        raws = seg.ordered_raws(nxt)
+        last = raws[-1] if raws else None
+        geo, basis, conflict = geo_match(
+            ev, dest, nxt.end_address, last.end_lat if last else None, last.end_lon if last else None, abbreviations
+        )
+        if geo >= 0.6 and not conflict:
+            return True
+    return False
 
 
 def match_trip(
@@ -217,6 +256,14 @@ def match_trip(
         m.calendar_event_id: m
         for m in db.execute(select(CalendarMatch).where(CalendarMatch.logical_trip_id == trip.id)).scalars()
     }
+    # Användarval för en bokning som sedan ställts in eller tagits bort i Outlook gäller inte längre.
+    for ev_id, m in list(existing.items()):
+        if m.decided_by != "user":
+            continue
+        ev = db.get(CalendarEvent, ev_id)
+        if ev is None or ev.is_cancelled or ev.removed_at is not None:
+            db.delete(m)
+            del existing[ev_id]
     user_rows = [m for m in existing.values() if m.decided_by == "user"]
     user_selected = any(m.is_selected for m in user_rows)
     user_rejected = {m.calendar_event_id for m in user_rows if not m.is_selected}

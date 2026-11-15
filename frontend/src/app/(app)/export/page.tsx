@@ -1,8 +1,13 @@
 import type { Metadata } from "next";
-import { PlaceholderPage } from "@/components/placeholder-page";
+import { Suspense } from "react";
+import { ExportView } from "@/components/export/export-view";
 
 export const metadata: Metadata = { title: "Export" };
 
-export default function Page() {
-  return <PlaceholderPage title="Export" description="Exportera körjournalen för arbetsgivare och Skatteverket." />;
+export default function ExportPage() {
+  return (
+    <Suspense>
+      <ExportView />
+    </Suspense>
+  );
 }

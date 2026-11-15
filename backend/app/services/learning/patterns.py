@@ -193,7 +193,7 @@ def rebuild(db: Session, user_id: uuid.UUID) -> int:
 def get_patterns(
     db: Session, user_id: uuid.UUID, origin_id: uuid.UUID | None, dest_id: uuid.UUID | None
 ) -> tuple[LocationPattern | None, LocationPattern | None]:
-    """Returnerar (ruttmönster, destinationsmönster)."""
+    """Returnerar (ruttmönster, destinationsmönster). Mönster som användaren avvisat används inte."""
     if dest_id is None:
         return None, None
     keys = [dest_key(dest_id)]
@@ -202,7 +202,11 @@ def get_patterns(
     rows = {
         p.pattern_key: p
         for p in db.execute(
-            select(LocationPattern).where(LocationPattern.owner_user_id == user_id, LocationPattern.pattern_key.in_(keys))
+            select(LocationPattern).where(
+                LocationPattern.owner_user_id == user_id,
+                LocationPattern.pattern_key.in_(keys),
+                LocationPattern.status != PatternStatus.REJECTED,
+            )
         ).scalars()
     }
     route = rows.get(route_key(origin_id, dest_id)) if origin_id is not None else None

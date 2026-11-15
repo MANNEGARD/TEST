@@ -37,6 +37,7 @@ from app.models.enums import (
 from app.services import audit
 from app.services import settings as settings_svc
 from app.services.audit import Actor
+from app.services.importer import parse
 from app.services.importer.parse import ImportFileError, ParsedFile, natural_key, parse_file
 from app.services.places import registry as places
 from app.services.trips import segments as seg
@@ -357,6 +358,7 @@ def commit(
         .all()
     )
     rows.sort(key=lambda r: r.parsed.get("started_at") or "")
+    tz: ZoneInfo = settings_svc.user_timezone(db, batch.user_id)
     imported = 0
     new_trips: list[LogicalTrip] = []
     location_cache: dict[str, Any] = {}
@@ -384,6 +386,10 @@ def commit(
             flags.append("source_includes_stops")
         if not has_odo:
             flags.append("missing_odometer")
+        # Endast datum i källan: starttiden är bara känd till dygnet (inget påhittat klockslag).
+        start_date_only = v.get("started_kind") in parse.DATE_ONLY_KINDS
+        end_date_only = v.get("ended_kind") in parse.DATE_ONLY_KINDS
+        day_bounds = _local_day_bounds(v["started_local"], tz) if start_date_only else (None, None)
         raw = RawTrip(
             vehicle_id=vehicle.id,
             source=TripSource.DEMO if vehicle.is_demo else TripSource.VOLVO_IMPORT,
@@ -392,8 +398,10 @@ def commit(
             import_batch_id=batch.id,
             started_at=datetime.fromisoformat(v["started_at"]),
             ended_at=datetime.fromisoformat(v["ended_at"]),
-            start_time_quality=TimeQuality.EXACT,
-            end_time_quality=TimeQuality.EXACT,
+            start_time_quality=TimeQuality.BOUNDED if start_date_only else TimeQuality.EXACT,
+            end_time_quality=TimeQuality.BOUNDED if end_date_only else TimeQuality.EXACT,
+            start_earliest=day_bounds[0] if start_date_only else None,
+            start_latest=day_bounds[1] if start_date_only else None,
             odometer_start=v.get("odometer_start"),
             odometer_end=v.get("odometer_end"),
             odometer_source="export" if has_odo else "none",
@@ -561,6 +569,16 @@ def undo(db: Session, batch: ImportBatch, *, actor: Actor) -> dict[str, Any]:
     audit.record(db, actor, "import.undo", "import_batch", batch.id, after={"voided": len(raws)})
     db.flush()
     return {"batch_id": str(batch.id), "voided": len(raws), "already_undone": False}
+
+
+def _local_day_bounds(local_iso: str, tz: ZoneInfo) -> tuple[datetime, datetime]:
+    """Första och sista sekunden (UTC) av det lokala dygn som ``local_iso`` ligger i."""
+    from datetime import UTC, time, timedelta
+
+    day = datetime.fromisoformat(local_iso).date()
+    start = datetime.combine(day, time.min, tzinfo=tz)
+    end = datetime.combine(day + timedelta(days=1), time.min, tzinfo=tz) - timedelta(seconds=1)
+    return start.astimezone(UTC), end.astimezone(UTC)
 
 
 def delete_original_files(db: Session, batch: ImportBatch, *, actor: Actor) -> int:

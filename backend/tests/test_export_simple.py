@@ -54,14 +54,32 @@ def books(path: Path):
 
 
 def header_row(ws) -> int:
+    """Rubrikens första rad. Rubriken har två rader: "Mätarställning" står över "start" och "slut"."""
     return next(r for r in range(1, ws.max_row + 1) if ws.cell(r, 1).value == "Datum")
+
+
+def first_data_row(ws) -> int:
+    return header_row(ws) + simple.HEADER_ROWS
+
+
+def header_titles(ws) -> list[str]:
+    """Kolumnrubrikerna så som de läses: den gemensamma rubriken följd av underrubriken."""
+    hr = header_row(ws)
+    titles = []
+    group = None
+    for c in range(1, len(HEADERS) + 1):
+        top, sub = ws.cell(hr, c).value, ws.cell(hr + 1, c).value
+        if top is not None and sub is not None:
+            group = top
+        titles.append(f"{group} {sub}" if sub is not None else top)
+    return titles
 
 
 def table(ws) -> list[dict[str, object]]:
     """Tabellraderna som {rubrik: värde}, fram till summaraden."""
     hr = header_row(ws)
     out = []
-    for r in range(hr + 1, ws.max_row + 1):
+    for r in range(hr + simple.HEADER_ROWS, ws.max_row + 1):
         if ws.cell(r, 1).value == "Summa":
             return out
         out.append({h: ws.cell(r, c).value for c, h in enumerate(HEADERS, start=1)})
@@ -83,7 +101,9 @@ def summary_rows(ws) -> dict[str, int]:
 
 def header_info(ws) -> dict[str, str]:
     hr = header_row(ws)
-    return {ws.cell(r, 1).value: ws.cell(r, 2).value for r in range(2, hr) if ws.cell(r, 1).value}
+    left, right = 1, simple.INFO_RIGHT_COL + 1  # sidhuvudet har två spalter med etikett + värde
+    return {ws.cell(r, c).value: ws.cell(r, c + 1).value for r in range(2, hr) for c in (left, right)
+            if ws.cell(r, c).value}
 
 
 def standard_month(db, trips, vehicle):
@@ -112,14 +132,15 @@ def test_one_sheet_with_exactly_the_eight_columns_and_only_reported_business_tri
     assert wf.sheetnames == ["Körjournal"]
     ws = wv["Körjournal"]
     hr = header_row(ws)
-    assert [ws.cell(hr, c).value for c in range(1, ws.max_column + 1) if ws.cell(hr, c).value] == HEADERS
-    assert hr <= 6  # kompakt sidhuvud: titel + högst fyra rader
+    assert header_titles(ws) == HEADERS
+    assert ws.max_column == len(HEADERS)
+    assert hr <= 5  # kompakt sidhuvud: titel + högst två rader i två spalter
 
     rows = table(ws)
     assert len(rows) == 2
     first, second = rows
     assert first["Datum"] == datetime(2026, 9, 14)
-    assert wf["Körjournal"].cell(hr + 1, 1).number_format == "yyyy-mm-dd"
+    assert wf["Körjournal"].cell(first_data_row(ws), 1).number_format == "yyyy-mm-dd"
     assert first["Tid"] == "08:00–08:20"
     assert (first["Från"], first["Till"]) == (A, C)
     assert first["Ärende"] == "Kundbesök Exempelbolaget – Anna Andersson"
@@ -278,7 +299,7 @@ def test_sums_and_amount_match_hand_computation_with_formulas_and_cached_values(
     assert job.summary["rate_per_mil"] == 18.5
 
     # Summeringen står direkt under tabellen.
-    assert t == header_row(fs) + 5
+    assert t == first_data_row(fs) + 4
     # Samma tal som dashboardens milersättning.
     trips_ = common.load_trips(db, vehicle.id, SEPT.start, SEPT.end)
     r = common.reimbursement(trips_, rate_per_mil=18.5)
@@ -309,7 +330,7 @@ def test_empty_period_keeps_valid_formulas(db, user, vehicle, actor):
     job, path = export(db, user, vehicle, actor)
     wf, wv = books(path)
     ws = wv["Körjournal"]
-    assert ws.cell(header_row(ws) + 1, 1).value == simple.EMPTY_TEXT
+    assert ws.cell(first_data_row(ws), 1).value == simple.EMPTY_TEXT
     pos = summary_rows(ws)
     assert ws.cell(pos["total"], 2).value == 0 and ws.cell(pos["total"], 8).value == 0
     assert ws.cell(pos["amount"], 7).value == 0
@@ -396,8 +417,8 @@ def test_print_setup(db, user, vehicle, actor, trips):
     ws = wf["Körjournal"]
     hr = header_row(ws)
     assert ws.page_setup.orientation == "landscape" and ws.page_setup.paperSize == 9
-    assert ws.print_title_rows == f"${hr}:${hr}"
-    assert ws.freeze_panes == f"A{hr + 1}"
+    assert ws.print_title_rows == f"${hr}:${hr + 1}"
+    assert ws.freeze_panes == f"A{hr + 2}"
     assert ws.auto_filter.ref is None  # inga filterknappar
     assert "Sida &P av &N" in ws.oddFooter.right.text
     breaks = [b.id for b in ws.row_breaks.brk]

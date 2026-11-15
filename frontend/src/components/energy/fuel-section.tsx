@@ -58,7 +58,7 @@ export function FuelSection({ period, onShowAll }: { period: PeriodValue; onShow
   const detect = useDetectRefuels();
   const [dialog, setDialog] = React.useState<{ open: boolean; record: FuelRecord | null }>({ open: false, record: null });
 
-  const rows = React.useMemo(() => [...(list.data ?? [])].reverse(), [list.data]);
+  const rows = React.useMemo(() => [...(list.data ?? [])].sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime()), [list.data]);
   const suggestions = rows.filter(isSuggestion).length;
   const liters = rows.reduce((sum, r) => sum + (r.liters ?? 0), 0);
   const costs = rows.filter((r) => r.total_cost != null);

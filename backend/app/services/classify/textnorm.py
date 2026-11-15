@@ -50,6 +50,7 @@ _GENERIC_CAPITALIZED = {
     "konferens", "seminarium", "rekrytering", "anställningsintervju", "platsbesök", "besiktning", "inventering",
     "resor", "förflyttning", "dagsresa", "övernattning", "ordinarie", "arbetsplats", "bostaden", "hemmet",
 }
+GENERIC_WORDS = frozenset(_GENERIC_CAPITALIZED)
 
 
 @dataclass(frozen=True)

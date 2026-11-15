@@ -70,6 +70,8 @@ _DT_FORMATS = (
     "%d.%m.%Y %H:%M",
     "%Y-%m-%d",
 )
+# Tolkningssätt där cellen bara innehöll ett datum (klockslaget är okänt).
+DATE_ONLY_KINDS = ("date_cell", "date_string")
 _DURATION_HM = re.compile(r"^\s*(\d{1,3}):(\d{2})(?::(\d{2}))?\s*(?:h|tim|t)?\s*$", re.IGNORECASE)
 _DURATION_WORDS = re.compile(r"^\s*(?:(\d+)\s*(?:h|tim|t))?\s*(?:(\d+)\s*(?:m|min))?\s*$", re.IGNORECASE)
 _EXCEL_EPOCH_1900 = datetime(1899, 12, 30)
@@ -139,9 +141,10 @@ def parse_local_datetime(value: Any, *, date1904: bool = False) -> tuple[datetim
         return None, None
     for fmt in _DT_FORMATS:
         try:
-            return datetime.strptime(text, fmt), "string"  # noqa: DTZ007 - lokal tid, zon sätts senare
+            parsed = datetime.strptime(text, fmt)  # noqa: DTZ007 - lokal tid, zon sätts senare
         except ValueError:
             continue
+        return parsed, ("date_string" if "%H" not in fmt else "string")
     try:
         num = float(text.replace(",", "."))
     except ValueError:
@@ -214,6 +217,19 @@ def to_utc(local_naive: datetime, tz: ZoneInfo) -> tuple[datetime, str | None]:
         else:
             note = "Tidpunkten är tvetydig (omställning till normaltid); första förekomsten används."
     return first.astimezone(UTC), note
+
+
+def _second_occurrence(local_naive: datetime, tz: ZoneInfo) -> datetime | None:
+    """UTC för andra förekomsten av en tvetydig lokal tid (omställning till normaltid), annars None."""
+    from datetime import UTC
+
+    first = local_naive.replace(tzinfo=tz, fold=0)
+    second = local_naive.replace(tzinfo=tz, fold=1)
+    if first.utcoffset() == second.utcoffset():
+        return None
+    if first.astimezone(UTC).astimezone(tz).replace(tzinfo=None) != local_naive:
+        return None  # obefintlig tid (omställning till sommartid), inte tvetydig
+    return second.astimezone(UTC)
 
 
 def map_category(value: Any) -> tuple[str, str | None]:
@@ -353,11 +369,14 @@ def parse_file(filename: str, data: bytes, tz: ZoneInfo, *, max_bytes: int, max_
         raise ImportFileError("Okänt filformat. Ladda upp en XLSX- eller CSV-export från Volvo.")
 
     chosen = None
+    skipped: list[str] = []
     for sheet_name, rows, date1904 in sheets:
         found = _find_header(rows)
-        if found:
+        if found and chosen is None:
             chosen = (sheet_name, rows, date1904, *found)
-            break
+        elif found:
+            n = sum(1 for r in rows[found[0] + 1 :] if any(c is not None and str(c).strip() for c in r))
+            skipped.append(f"{sheet_name} ({n} rader)")
     if chosen is None:
         raise ImportFileError(
             "Inga igenkända kolumnrubriker hittades. Förväntade minst Startade, Stannade och Avstånd (km)."
@@ -379,6 +398,11 @@ def parse_file(filename: str, data: bytes, tz: ZoneInfo, *, max_bytes: int, max_
         parsed.warnings.append("Filen saknar mätarställningar; resorna markeras som ofullständiga.")
     if "notes" not in mapping:
         parsed.warnings.append("Filen saknar kolumnen Anteckningar; resornas syfte måste anges manuellt.")
+    if skipped:
+        parsed.warnings.append(
+            f"Endast bladet {sheet_name!r} har lästs. Även dessa blad har resekolumner men importerades inte: "
+            f"{', '.join(skipped)}. Spara varje blad som en egen fil för att importera dem."
+        )
 
     for i in range(header_idx + 1, len(rows)):
         row = rows[i]
@@ -402,17 +426,33 @@ def _parse_row(pr: ParsedRow, cell: dict[str, Any], tz: ZoneInfo, date1904: bool
         pr.errors.append("Starttid saknas eller kan inte tolkas.")
     if stop_local is None:
         pr.errors.append("Sluttid saknas eller kan inte tolkas.")
+    duration, _ = parse_duration_seconds(cell.get("duration"))
+    for label, kind in (("Starttiden", start_kind), ("Sluttiden", stop_kind)):
+        if kind in DATE_ONLY_KINDS:
+            # Ett datum utan klockslag görs aldrig om till ett exakt klockslag (00:00).
+            pr.messages.append(f"{label} saknar klockslag; endast datumet används och tiden markeras som okänd.")
+    start_utc = stop_utc = None
     if start_local is not None:
-        utc, note = to_utc(start_local, tz)
-        v["started_at"], v["started_local"], v["started_kind"] = utc.isoformat(), start_local.isoformat(), start_kind
+        start_utc, note = to_utc(start_local, tz)
+        v["started_at"], v["started_local"], v["started_kind"] = start_utc.isoformat(), start_local.isoformat(), start_kind
         if note:
             pr.messages.append(f"Start: {note}")
     if stop_local is not None:
-        utc, note = to_utc(stop_local, tz)
-        v["ended_at"], v["ended_local"], v["ended_kind"] = utc.isoformat(), stop_local.isoformat(), stop_kind
+        stop_utc, note = to_utc(stop_local, tz)
+        later = _second_occurrence(stop_local, tz)
+        if later is not None and start_utc is not None:
+            # Tvetydig sluttid vid omställning till normaltid: välj den förekomst som går ihop
+            # med starttiden och körtiden i stället för att avvisa eller korta resan.
+            def off(end: datetime) -> float:
+                return abs((end - start_utc).total_seconds() - duration) if duration is not None else 0.0
+
+            if stop_utc < start_utc <= later or (duration is not None and off(later) < off(stop_utc)):
+                stop_utc = later
+                note = "Tidpunkten är tvetydig (omställning till normaltid); andra förekomsten används."
+        v["ended_at"], v["ended_local"], v["ended_kind"] = stop_utc.isoformat(), stop_local.isoformat(), stop_kind
         if note:
             pr.messages.append(f"Slut: {note}")
-    if start_local and stop_local and stop_local < start_local:
+    if start_utc is not None and stop_utc is not None and stop_utc < start_utc:
         pr.errors.append("Sluttiden ligger före starttiden.")
 
     distance = parse_number(cell.get("distance"))
@@ -435,12 +475,11 @@ def _parse_row(pr: ParsedRow, cell: dict[str, Any], tz: ZoneInfo, date1904: bool
             f"Avstånd ({distance:.1f} km) avviker från mätarställningarna ({odo_e - odo_s:.0f} km)."
         )
 
-    duration, _ = parse_duration_seconds(cell.get("duration"))
     v["duration_seconds"] = duration
     if cell.get("duration") not in (None, "") and duration is None:
         pr.messages.append("Körtiden kunde inte tolkas.")
-    if duration is not None and start_local and stop_local:
-        elapsed = (stop_local - start_local).total_seconds()
+    if duration is not None and start_utc is not None and stop_utc is not None:
+        elapsed = (stop_utc - start_utc).total_seconds()
         if duration > elapsed + 120:
             pr.messages.append("Körtiden är längre än tiden mellan start och slut.")
         elif elapsed - duration > 300:

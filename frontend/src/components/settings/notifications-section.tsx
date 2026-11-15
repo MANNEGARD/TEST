@@ -48,7 +48,7 @@ function TimeInput({ form, path, id, label }: { form: SettingsForm; path: string
       value={form.text(path)}
       onChange={(e) => form.set(path, e.target.value)}
       aria-invalid={form.error(path) ? true : undefined}
-      className="w-full font-mono sm:w-28"
+      className="w-[7.5rem] shrink-0 font-mono"
     />
   );
 }

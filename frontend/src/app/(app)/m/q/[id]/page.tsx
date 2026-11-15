@@ -1,10 +1,10 @@
 import type { Metadata } from "next";
-import { PlaceholderPage } from "@/components/placeholder-page";
+import { QuickQuestionView } from "@/components/quick/quick-question-view";
 
 export const metadata: Metadata = { title: "Snabbfråga" };
 
-/** Snabbsvar på en notisfråga (länk från Home Assistant-notis). Byggs i nästa steg. */
+/** Snabbsvar på en notisfråga (länk från Home Assistant-notisen på telefonen). */
 export default async function Page({ params }: PageProps<"/m/q/[id]">) {
-  await params;
-  return <PlaceholderPage title="Snabbfråga" description="Besvara en fråga från en notis." />;
+  const { id } = await params;
+  return <QuickQuestionView publicId={id} />;
 }

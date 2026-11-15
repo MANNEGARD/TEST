@@ -7,6 +7,7 @@ Finns inget tillräckligt underlag sägs det rakt ut ("syfte behöver bekräftas
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -15,7 +16,7 @@ from sqlalchemy.orm import Session
 from app.models import LogicalTrip
 from app.models.enums import Category, LocationType, ReviewStatus
 from app.services.classify import textnorm
-from app.services.classify.signals import RuleResult, TripContext
+from app.services.classify.signals import WEAK_GEO_BASES, RuleResult, TripContext
 from app.services.learning import patterns as patterns_svc
 from app.services.places import registry as places
 from app.services.places.normalize import fold, parse_address
@@ -81,7 +82,10 @@ def propose(db: Session, ctx: TripContext, rules: RuleResult) -> PurposeProposal
             )
 
     # 2. Matchande kalenderbokning – ger kontext, användaren bekräftar.
-    event = ctx.selected_event
+    selected = ctx.selected_match
+    event = selected[1] if selected else None
+    if event is not None and selected[0].geo_basis in WEAK_GEO_BASES and rules.category != Category.WORK:
+        event = None  # bokning utan platsuppgift ger syfte bara när resan av andra skäl är en tjänsteresa
     if event is not None and (event.sensitivity or "").lower() not in ("personal", "private"):
         subject = textnorm.strip_trailing_period(event.subject or "")
         if subject:
@@ -220,8 +224,66 @@ def unsupported_tokens(text: str, corpus: set[str]) -> list[str]:
     return missing
 
 
+# Allmänna ord som får förekomma i ett genererat syfte utan att vara belagda i underlaget.
+# Namn, orter, företag och ärenden måste däremot alltid finnas i underlaget – oavsett skiftläge.
+_ALLOWED_WORDS = frozenset(
+    {
+        # funktionsord
+        "i", "på", "hos", "med", "och", "samt", "till", "från", "för", "av", "om", "vid", "efter", "inför", "under",
+        "mellan", "via", "mot", "inom", "utan", "över", "en", "ett", "den", "det", "de", "som", "att", "är", "var",
+        "har", "hade", "fick", "nya", "ny", "nytt", "ordinarie", "flera", "andra", "annat", "egen", "eget",
+        "vår", "vårt", "våra", "min", "mitt", "mina", "dag", "dagen", "dagens", "samma", "tillbaka", "vidare", "hem",
+        # vanliga ord i körjournalssyften
+        "kund", "kunden", "kunder", "kundbesök", "kundmöte", "kundmöten", "besök", "besöket", "möte", "mötet",
+        "möten", "resa", "resan", "resor", "rest", "åkt", "hemresa", "återresa", "tjänsteresa", "tjänsteärende",
+        "ärende", "arbete", "arbetsplats", "kontor", "kontoret", "hotell", "hotellet", "övernattning", "dagsresa",
+        "förflyttning", "fortsättning", "leverans", "hämtning", "service", "avstämning", "uppföljning", "genomgång",
+        "planering", "workshop", "konferens", "seminarium", "utbildning", "kurs", "intervju", "rekrytering",
+        "personalmöte", "ledningsgrupp", "ledningsgruppsmöte", "styrelsemöte", "kvartalsmöte", "verksamhetsmöte",
+        "verksamhetsuppföljning", "platsbesök", "besiktning", "inventering", "upphandling", "internrevision",
+        "revision", "upplärning", "introduktion", "lunch", "lunchmöte", "syfte", "behöver", "bekräftas",
+        "jobbat", "arbetat", "driftat", "tankning", "laddning", "material", "offert", "avtal", "projekt",
+    }
+)
+# Böjnings- och sammansättningsändelser som får läggas till ett belagt ord.
+_ALLOWED_SUFFIXES = (
+    "s", "en", "et", "n", "t", "er", "ar", "or", "na", "erna", "arna", "orna",
+    "kontoret", "kontor", "kontorets", "skontoret", "skontor", "besök", "möte", "mötet",
+)
+
+
+def _word_supported(key: str, corpus: set[str]) -> bool:
+    if key in corpus or key in _ALLOWED_WORDS:
+        return True
+    if any(c.isdigit() for c in key):
+        return False  # siffror måste stå ordagrant i underlaget
+    # Böjningsform eller sammansättning av ett belagt ord, t.ex. "Örebrokontoret" eller "Exempelbolagets".
+    for c in corpus:
+        if len(c) >= 4 and key.startswith(c) and key[len(c):] in _ALLOWED_SUFFIXES:
+            return True
+    return False
+
+
+def unsupported_words(text: str, corpus: set[str]) -> list[str]:
+    """Alla ord (oavsett skiftläge) som varken är belagda i underlaget eller allmänna ord.
+
+    Bindestrecks- och apostrofsammansättningar granskas del för del.
+    """
+    missing: list[str] = []
+    for tok in textnorm.tokens(text):
+        parts = [p for p in re.split(r"[-']", tok) if p]
+        if all(_word_supported(fold(p), corpus) for p in parts):
+            continue
+        # Ett belagt bindestrecksord (t.ex. "Coca-Cola") godtas som helhet.
+        if len(parts) > 1 and fold(tok) in corpus:
+            continue
+        missing.append(tok)
+    return missing
+
+
 def validate_generated(text: str | None, ctx: TripContext) -> tuple[bool, list[str]]:
-    """Godkänner ett AI-genererat syfte endast om alla namn finns i underlaget."""
+    """Godkänner ett AI-genererat syfte endast om varje ord är belagt i underlaget eller
+    är ett allmänt ord. Skiftläge spelar ingen roll – påhittade namn i gemener stoppas också."""
     if not text or not text.strip():
         return False, []
     cleaned = text.strip()
@@ -230,7 +292,9 @@ def validate_generated(text: str | None, ctx: TripContext) -> tuple[bool, list[s
     lowered = fold(cleaned)
     if any(marker in lowered for marker in ("http://", "https://", "<", ">", "{", "}")):
         return False, ["otillåtet innehåll"]
-    missing = unsupported_tokens(cleaned, grounding_corpus(ctx))
+    corpus = grounding_corpus(ctx)
+    corpus |= {fold(w) for w in textnorm.GENERIC_WORDS}
+    missing = unsupported_words(cleaned, corpus)
     return (not missing), missing
 
 
@@ -277,6 +341,7 @@ __all__ = [
     "propose",
     "similar_trips",
     "unsupported_tokens",
+    "unsupported_words",
     "validate_generated",
     "places",
 ]

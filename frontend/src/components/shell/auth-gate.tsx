@@ -30,7 +30,10 @@ export function AuthGate({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (setup.data?.needs_setup) router.replace("/setup");
-    else if (me.isSuccess && me.data === null) router.replace(`/login?next=${encodeURIComponent(pathname)}`);
+    else if (me.isSuccess && me.data === null) {
+      // Ta med frågesträngen så att t.ex. /export?manad=… överlever inloggningen.
+      router.replace(`/login?next=${encodeURIComponent(pathname + window.location.search)}`);
+    }
   }, [setup.data, me.isSuccess, me.data, router, pathname]);
 
   // Tidszonen måste vara satt innan sidorna formaterar datum. setTimeZone är idempotent.

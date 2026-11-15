@@ -176,8 +176,8 @@ export function WorkplaceSection({ data }: { data: SettingsPayload }) {
 
   return (
     <section aria-labelledby="settings-tjanstestalle">
-      <SectionIntro id="settings-tjanstestalle" title="Tjänsteställe">
-        Avancerat – skatteregler. Resor mellan bostaden och ditt tjänsteställe räknas som privata enligt Skatteverket och ger ingen
+      <SectionIntro id="settings-tjanstestalle" title="Tjänsteställe" badge="Avancerat – skatteregler">
+        Resor mellan bostaden och ditt tjänsteställe räknas som privata enligt Skatteverket och ger ingen
         milersättning. Ange ett tjänsteställe om du vill att förslagen tar hänsyn till det.
       </SectionIntro>
 

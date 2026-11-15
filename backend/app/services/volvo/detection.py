@@ -239,6 +239,15 @@ def _imported_coverage(db: Session, vehicle_id: uuid.UUID, odo_s: float, odo_e: 
     return sum(max(0.0, min(odo_e, e) - max(odo_s, s)) for s, e in rows)
 
 
+def _covered_by_imports(covered: float, length: float, tolerance: float) -> bool:
+    """Täcks sträckan (i praktiken helt) av importerade resor?
+
+    Toleransen får aldrig ensam göra en sträcka täckt: det krävs verkligt överlapp och
+    minst halva sträckan, så att korta resor (1–2 km) inte försvinner utan import.
+    """
+    return covered > 0 and covered >= length - min(tolerance, length / 2)
+
+
 def _raw_from_leg(
     db: Session,
     vehicle: Vehicle,
@@ -267,7 +276,7 @@ def _raw_from_leg(
 
     if odo_s is not None and odo_e is not None and odo_e - odo_s >= min_delta:
         distance, dq = round(odo_e - odo_s, 1), DistanceQuality.ODOMETER
-        if _imported_coverage(db, vehicle.id, odo_s, odo_e) >= (odo_e - odo_s) - tolerance:
+        if _covered_by_imports(_imported_coverage(db, vehicle.id, odo_s, odo_e), odo_e - odo_s, tolerance):
             return None  # sträckan finns redan som verifierad importerad resa
     elif moved_pos:
         # Kortare än mätarställningens upplösning: uppskatta ur fågelvägen och märk det.
@@ -540,11 +549,18 @@ def _void_reconstructed(db: Session, raw: RawTrip, superseded_by: RawTrip, actor
     from app.services.trips import merge
 
     trip = _active_trip_for(db, raw.id)
-    if trip is not None and trip.segment_count > 1:
-        # Ingår i en sammanslagning: lös upp den så att övriga delresor finns kvar.
+    # Ingår resan i en sammanslagning löses den upp – nivå för nivå vid kedjor (A+B)+C –
+    # tills den ersatta delresan ligger ensam i en journalresa. Övriga delresor (och en
+    # tidigare importerad, verifierad resa) finns då kvar som egna aktiva resor; bara den
+    # ersatta delresans journalresa makuleras nedan.
+    for _ in range(50):
+        if trip is None or trip.segment_count <= 1:
+            break
         merge.dissolve(db, trip, actor=actor, reason="superseded_by_import", remember=False)
         db.flush()
         trip = _active_trip_for(db, raw.id)
+    if trip is not None and trip.segment_count > 1:  # pragma: no cover - skydd mot oväntad struktur
+        raise RuntimeError("Den rekonstruerade resan kunde inte lösas ut ur sammanslagningen.")
     raw.voided_at = now
     raw.void_reason = VOID_REASON_SUPERSEDED
     raw.superseded_by_id = superseded_by.id
@@ -612,8 +628,12 @@ def reconcile_with_imports(db: Session, vehicle: Vehicle, *, actor: Actor, now: 
         return min(a.odometer_end, b.odometer_end) - max(a.odometer_start, b.odometer_start)
 
     for rec in reconstructed:
+        # Träff kräver verkligt överlapp: två korta resor som bara gränsar till varandra
+        # ligger annars inom toleransen och skulle felaktigt ersätta varandra.
         hits = [i for i in imported if overlap(rec, i) > tol or (
-            abs(i.odometer_start - rec.odometer_start) <= tol and abs(i.odometer_end - rec.odometer_end) <= tol
+            overlap(rec, i) > 0
+            and abs(i.odometer_start - rec.odometer_start) <= tol
+            and abs(i.odometer_end - rec.odometer_end) <= tol
         )]
         if not hits:
             continue
@@ -660,7 +680,7 @@ def reconcile_with_imports(db: Session, vehicle: Vehicle, *, actor: Actor, now: 
             out["exact"] += 1
         else:
             covered = sum(max(0.0, overlap(rec, i)) for i in hits)
-            full = covered >= (rec.odometer_end - rec.odometer_start) - tol
+            full = _covered_by_imports(covered, rec.odometer_end - rec.odometer_start, tol)
             if full:
                 first, last = hits[0], hits[-1]
                 _learn_positions(db, user_id, rec, first, start=abs(first.odometer_start - rec.odometer_start) <= tol, end=False)

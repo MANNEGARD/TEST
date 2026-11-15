@@ -27,7 +27,7 @@ from typing import Any
 from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
-from app.models import LogicalTrip, TripClassification, TripEvidence, TripPurpose, Vehicle
+from app.models import KnownLocation, LogicalTrip, TripClassification, TripEvidence, TripPurpose, Vehicle
 from app.models.enums import (
     LOCATION_TYPE_LABELS_SV,
     Category,
@@ -106,6 +106,68 @@ def _safe(text: str | None, limit: int = 120) -> str | None:
     return cleaned[:limit] if cleaned else None
 
 
+_REDACTED = "[borttaget]"
+# Gatuadress med nummer, t.ex. "Storgatan 5" eller "Västra vägen 12B".
+_STREET_RE = re.compile(
+    r"\b[0-9A-Za-zÀ-ÖØ-öø-ÿ-]*(?:gatan|gata|vägen|väg|gränd|gränden|stigen|backen|allén|allé|torget|torg|leden|"
+    r"plan|platsen|stråket|kajen|esplanaden|parken)\s+\d+\s*[A-Za-z]?\b",
+    re.IGNORECASE,
+)
+# Decimaltal med minst fyra decimaler (koordinater).
+_COORD_RE = re.compile(r"-?\d{1,3}[.,]\d{4,}")
+_GENERIC_LABELS = {"hemmet", "hem", "bostaden", "privat plats", "privat", "okänd plats", "kontoret", "kontor"}
+_PRIVATE_SENSITIVITY = ("personal", "private")
+
+# Regelsignaler vars UI-text bara består av fasta formuleringar och siffror.
+_SAFE_SIGNAL_KINDS = {
+    "manual_rule", "confirmed_history", "imported_history", "user_corrections", "private_place", "home_is_workplace",
+    "commute", "regular_workplace", "refuel_stop", "return_trip", "hotel", "continuation", "unknown_destination",
+}
+# Sanerade beskrivningar för signaler vars UI-text kan innehålla platsnamn, adresser eller kalenderrubriker.
+_LLM_SIGNAL_TEXT = {
+    "unconfirmed_destination": "Destinationen är inte bekräftad i platsregistret",
+    "known_customer": "Destinationen är en känd kund",
+    "known_office": "Destinationen är ett känt kontor",
+    "calendar_match": "Matchande kalenderbokning vid resans tid",
+    "calendar_context": "Kalenderbokning vid resans tid utan platsuppgift",
+    "calendar_private": "Matchande kalenderbokning märkt som privat",
+    "calendar_conflict": "Kalenderbokning på annan plats vid samma tid",
+}
+
+
+def _is_private_event(ev) -> bool:
+    return (ev.sensitivity or "").lower() in _PRIVATE_SENSITIVITY
+
+
+def _street_terms(address: str | None) -> list[str]:
+    """Gatuadressdelar av en adress (hela adressen, gata + nummer, gatunamn)."""
+    if not address:
+        return []
+    parsed = parse_address(address)
+    if parsed.city is None and parsed.number is None:
+        return []  # bara ett ortnamn eller liknande – ingen gatuadress
+    out = [address]
+    if parsed.street and (parsed.city or parsed.number) and parsed.street != parsed.city:
+        out.append(parsed.street)
+        if parsed.number:
+            out.append(f"{parsed.street} {parsed.number}")
+    return out
+
+
+def _name_is_address(loc) -> bool:
+    """Platsens namn är (en del av) gatuadressen – t.ex. standardnamnet för en ny plats."""
+    name = (loc.name or "").strip()
+    if not name:
+        return True
+    if loc.address:
+        if name.casefold() == loc.address.strip().casefold():
+            return True
+        street = parse_address(loc.address).street
+        if street and parse_address(loc.address).city and street.casefold() in name.casefold():
+            return True
+    return bool(_STREET_RE.search(name))
+
+
 def _place_doc(loc, address: str | None, send_street: bool) -> dict[str, Any]:
     if loc is None:
         return {"label": parse_address(address).city or "okänd plats", "type": "Okänd", "known": False}
@@ -113,10 +175,15 @@ def _place_doc(loc, address: str | None, send_street: bool) -> dict[str, Any]:
         return {"label": "Hemmet", "type": "Hem", "known": True}
     if loc.confirmed and loc.type == LocationType.PRIVATE:
         return {"label": "Privat plats", "type": "Privat destination", "known": True}
+    city = _safe(loc.city) or parse_address(address).city
+    if loc.confirmed and not _name_is_address(loc):
+        label = _safe(loc.name)
+    else:
+        label = city or "okänd plats"  # obekräftad plats eller namn som bara är adressen: endast ort
     doc: dict[str, Any] = {
-        "label": _safe(loc.name) if loc.confirmed else (loc.city or "okänd plats"),
+        "label": label,
         "type": LOCATION_TYPE_LABELS_SV.get(LocationType(loc.type), "Okänd") if loc.confirmed else "Obekräftad plats",
-        "city": _safe(loc.city),
+        "city": city,
         "known": bool(loc.confirmed),
         "previous_visits": loc.visit_count,
     }
@@ -127,13 +194,89 @@ def _place_doc(loc, address: str | None, send_street: bool) -> dict[str, Any]:
     return doc
 
 
-def build_llm_document(ctx: TripContext, rules: RuleResult, proposal: PurposeProposal | None) -> dict[str, Any]:
-    """Minimalt, avidentifierat underlag till AI-leverantören."""
+def _llm_signal_text(s: Signal) -> str:
+    if s.kind in _SAFE_SIGNAL_KINDS:
+        return s.label
+    return _LLM_SIGNAL_TEXT.get(s.kind, f"Regelsignal: {s.kind}")
+
+
+def _redaction_terms(ctx: TripContext, send_street: bool, send_subjects: bool, private_terms: list[str]) -> list[str]:
+    """Texter som aldrig får förekomma i underlaget, var de än skulle hamna."""
+    terms: list[str] = list(private_terms)
+    for loc in (ctx.origin, ctx.destination):
+        if loc is None:
+            continue
+        if loc.type in (LocationType.HOME, LocationType.PRIVATE):
+            terms += [loc.name or "", *_street_terms(loc.address)]
+        elif not send_street:
+            terms += _street_terms(loc.address)
+            if _name_is_address(loc):
+                terms.append(loc.name or "")
+    if not send_street:
+        terms += _street_terms(ctx.trip.start_address) + _street_terms(ctx.trip.end_address)
+    for _m, ev in ctx.calendar_matches:
+        if not send_subjects or _is_private_event(ev):
+            terms.append(ev.subject or "")
+        if _is_private_event(ev):
+            terms.append(ev.location_name or "")
+        if not send_street:
+            terms += _street_terms(ev.location_address)
+            if ev.location_name and _STREET_RE.search(ev.location_name):
+                terms.append(ev.location_name)
+    out = {t.strip() for t in terms if t and len(t.strip()) >= 3 and t.strip().casefold() not in _GENERIC_LABELS}
+    return sorted(out, key=len, reverse=True)
+
+
+def _redact(value: Any, pattern: re.Pattern[str] | None, send_street: bool) -> Any:
+    if isinstance(value, dict):
+        return {k: _redact(v, pattern, send_street) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_redact(v, pattern, send_street) for v in value]
+    if isinstance(value, str):
+        text = pattern.sub(_REDACTED, value) if pattern is not None else value
+        if not send_street:
+            text = _STREET_RE.sub(_REDACTED, text)
+        return _COORD_RE.sub(_REDACTED, text)
+    return value
+
+
+def private_location_terms(db: Session, user_id: uuid.UUID) -> list[str]:
+    """Namn och adresser för användarens hem och privata platser (skickas aldrig till AI)."""
+    rows = db.execute(
+        select(KnownLocation.name, KnownLocation.address).where(
+            KnownLocation.owner_user_id == user_id,
+            KnownLocation.type.in_((LocationType.HOME, LocationType.PRIVATE)),
+        )
+    ).all()
+    terms: list[str] = []
+    for name, address in rows:
+        terms += [name or "", *_street_terms(address)]
+    return terms
+
+
+def build_llm_document(
+    ctx: TripContext,
+    rules: RuleResult,
+    proposal: PurposeProposal | None,
+    *,
+    private_terms: list[str] | None = None,
+) -> dict[str, Any]:
+    """Minimalt, avidentifierat underlag till AI-leverantören.
+
+    Allt som skickas byggs här. Signalbeskrivningarna är särskilda, sanerade texter (inte
+    gränssnittets etiketter), och hela dokumentet saneras till sist: kalenderrubriker när
+    de inte får skickas, gatuadresser när de inte får skickas samt alltid hemadress,
+    privata platsnamn, privata kalenderbokningar och koordinater.
+    """
     trip = ctx.trip
     ai = ctx.ai
     local_start = ctx.local_start
     local_end = trip.ended_at.astimezone(ctx.tz) if trip.ended_at else None
     send_street = bool(ai.get("send_street_addresses"))
+    send_subjects = bool(ai.get("send_calendar_subjects", True))
+    rule_purpose = proposal.text if proposal else None
+    if proposal is not None and proposal.based_on.get("calendar_event_id") and not send_subjects:
+        rule_purpose = None  # förslaget bygger på kalenderrubriken
     doc: dict[str, Any] = {
         "trip": {
             "weekday": _WEEKDAYS[local_start.weekday()] if local_start else None,
@@ -151,7 +294,7 @@ def build_llm_document(ctx: TripContext, rules: RuleResult, proposal: PurposePro
             "confidence": rules.confidence,
             "limits": rules.caps,
             "signals": [
-                {"description": _safe(s.label, 200), "direction": s.direction, "weight": round(s.weight, 2)}
+                {"description": _llm_signal_text(s), "direction": s.direction, "weight": round(s.weight, 2)}
                 for s in rules.signals
             ],
         },
@@ -159,23 +302,27 @@ def build_llm_document(ctx: TripContext, rules: RuleResult, proposal: PurposePro
             {"text": _safe(p["text"]), "times": p.get("count", 0), "confirmed_by_user": p.get("user_count", 0)}
             for p in purpose_mod.candidate_purposes(ctx, limit=6)
         ],
-        "rule_based_purpose": proposal.text if proposal else None,
+        "rule_based_purpose": rule_purpose,
         "tax": {"note": rules.tax_note, "car_benefit": bool(ctx.tax.get("car_benefit"))},
     }
-    if ai.get("send_calendar_subjects", True):
+    if send_subjects:
         events = []
         for m, ev in ctx.calendar_matches[:3]:
+            private_event = _is_private_event(ev)
             item: dict[str, Any] = {
-                "subject": _safe(ev.subject),
+                "subject": None if private_event else _safe(ev.subject),
+                "marked_private": private_event,
                 "start": ev.start_at.astimezone(ctx.tz).strftime("%Y-%m-%d %H:%M"),
                 "end": ev.end_at.astimezone(ctx.tz).strftime("%H:%M"),
-                "location": _safe(ev.location_name),
+                "city": _safe(ev.location_city),
                 "online_meeting": ev.is_online,
                 "relation_to_trip": m.relation,
                 "match_score": round(m.score, 2),
                 "conflicts_with_vehicle_data": m.is_conflict,
             }
-            if ai.get("send_calendar_body") and ev.body_preview:
+            if send_street and not private_event:
+                item["location"] = _safe(ev.location_name)
+            if ai.get("send_calendar_body") and ev.body_preview and not private_event:
                 item["description_excerpt"] = _safe(ev.body_preview, 300)
             events.append(item)
         doc["calendar"] = events
@@ -186,7 +333,9 @@ def build_llm_document(ctx: TripContext, rules: RuleResult, proposal: PurposePro
             "confirmed": prior.review_status in _DECIDED,
             "purpose": _safe(prior.purpose) if prior.purpose_confirmed else None,
         }
-    return doc
+    terms = _redaction_terms(ctx, send_street, send_subjects, private_terms or [])
+    pattern = re.compile("|".join(re.escape(t) for t in terms), re.IGNORECASE) if terms else None
+    return _redact(doc, pattern, send_street)
 
 
 def _should_call_llm(rules: RuleResult, proposal: PurposeProposal | None, ctx: TripContext) -> bool:
@@ -261,16 +410,25 @@ def _report_llm_outcome(db: Session, user_id: uuid.UUID, error: llm_mod.LLMError
 # ----------------------------------------------------------------------------- huvudflöde
 
 
-def assess_trip(
+@dataclass
+class _Prepared:
+    ai: dict[str, Any]
+    ctx: TripContext
+    rules: RuleResult
+    proposal: PurposeProposal | None
+    inputs_hash: str
+
+
+def _prepare(
     db: Session,
     trip: LogicalTrip,
     *,
     user_id: uuid.UUID,
-    provider: llm_mod.LLMProvider | None = None,
-    use_llm: bool = True,
-    settings_cache: dict[str, Any] | None = None,
-) -> tuple[Assessment, TripContext, RuleResult, str]:
-    """Beräknar en bedömning utan att spara den."""
+    provider: llm_mod.LLMProvider | None,
+    use_llm: bool,
+    settings_cache: dict[str, Any] | None,
+) -> _Prepared:
+    """Regelmotorns resultat och underlagets hash – utan att anropa AI-leverantören."""
     cache = settings_cache if settings_cache is not None else {}
     if "ai" not in cache:
         cache["ai"] = settings_svc.get_section(db, user_id, "ai")
@@ -284,16 +442,45 @@ def assess_trip(
     rules = sig.evaluate(ctx)
     proposal = purpose_mod.propose(db, ctx, rules)
     provider_id = f"{provider.name}:{provider.model}" if (provider is not None and use_llm) else "none"
-    inputs_hash = _inputs_hash(rules, proposal, ai, provider_id)
+    return _Prepared(ai, ctx, rules, proposal, _inputs_hash(rules, proposal, ai, provider_id))
 
+
+def assess_trip(
+    db: Session,
+    trip: LogicalTrip,
+    *,
+    user_id: uuid.UUID,
+    provider: llm_mod.LLMProvider | None = None,
+    use_llm: bool = True,
+    settings_cache: dict[str, Any] | None = None,
+) -> tuple[Assessment, TripContext, RuleResult, str]:
+    """Beräknar en bedömning utan att spara den."""
+    cache = settings_cache if settings_cache is not None else {}
+    prep = _prepare(db, trip, user_id=user_id, provider=provider, use_llm=use_llm, settings_cache=cache)
+    assessment = _assess(db, trip, prep, user_id=user_id, provider=provider if use_llm else None, cache=cache)
+    return assessment, prep.ctx, prep.rules, prep.inputs_hash
+
+
+def _assess(
+    db: Session,
+    trip: LogicalTrip,
+    prep: _Prepared,
+    *,
+    user_id: uuid.UUID,
+    provider: llm_mod.LLMProvider | None,
+    cache: dict[str, Any],
+) -> Assessment:
+    ai, ctx, rules, proposal = prep.ai, prep.ctx, prep.rules, prep.proposal
     category, confidence, requires_review = rules.category, rules.confidence, rules.requires_review
     signals = list(rules.signals)
     source, model, llm_info = DecisionSource.RULE, None, None
     suggested = rules.category if rules.category != Category.UNDECIDED else None
 
-    if provider is not None and use_llm and _should_call_llm(rules, proposal, ctx):
+    if provider is not None and _should_call_llm(rules, proposal, ctx):
+        if "private_terms" not in cache:
+            cache["private_terms"] = private_location_terms(db, user_id)
         try:
-            result = provider.assess(build_llm_document(ctx, rules, proposal))
+            result = provider.assess(build_llm_document(ctx, rules, proposal, private_terms=cache["private_terms"]))
             _report_llm_outcome(db, user_id, None)
         except llm_mod.LLMError as exc:
             logger.warning("AI-leverantören svarade med fel: %s", exc)
@@ -375,7 +562,7 @@ def assess_trip(
         suggested_category=suggested,
         llm=llm_info,
     )
-    return assessment, ctx, rules, inputs_hash
+    return assessment
 
 
 def _current_classification(db: Session, trip_id: uuid.UUID) -> TripClassification | None:
@@ -405,16 +592,31 @@ def classify_trip(
     if decided and not (trip.work_km > 0 and (not trip.purpose or not trip.purpose.strip())):
         return None  # användarbeslut och källmärkt import rörs inte
 
-    assessment, _ctx, rules, inputs_hash = assess_trip(
-        db, trip, user_id=user_id, provider=provider, use_llm=use_llm, settings_cache=settings_cache
-    )
+    cache = settings_cache if settings_cache is not None else {}
+    active_provider = provider if use_llm else None
+    prep = _prepare(db, trip, user_id=user_id, provider=provider, use_llm=use_llm, settings_cache=cache)
+    rules, inputs_hash = prep.rules, prep.inputs_hash
     current = _current_classification(db, trip.id)
-    if (
-        not force
-        and current is not None
-        and current.source in (DecisionSource.RULE, DecisionSource.AI)
-        and (current.signals or {}).get("inputs_hash") == inputs_hash
-    ):
+    stored = (current.signals or {}) if current is not None else {}
+    if decided:
+        unchanged = stored.get("purpose_inputs_hash") == inputs_hash
+    else:
+        unchanged = (
+            current is not None
+            and current.source in (DecisionSource.RULE, DecisionSource.AI)
+            and stored.get("inputs_hash") == inputs_hash
+        )
+    # Ett misslyckat AI-anrop prövas igen vid nästa körning, men skrivs inte om i onödan.
+    retry_llm = unchanged and bool(stored.get("llm_failed")) and active_provider is not None
+    if not force and unchanged and not retry_llm:
+        # Underlaget är oförändrat: varken AI-anrop eller databasskrivning.
+        assessment = _assess(db, trip, prep, user_id=user_id, provider=None, cache=cache)
+        assessment.changed = False
+        return assessment
+
+    assessment = _assess(db, trip, prep, user_id=user_id, provider=active_provider, cache=cache)
+    llm_failed = any(s.kind == "ai_unavailable" for s in assessment.signals)
+    if not force and retry_llm and llm_failed:
         assessment.changed = False
         return assessment
 
@@ -423,6 +625,9 @@ def classify_trip(
         # Endast syftesförslag – kategorin är redan avgjord av användaren/källan.
         if proposal is not None and trip.category == Category.WORK:
             _store_purpose(db, trip, proposal, actor)
+        if current is not None:
+            # Markering så att samma underlag inte skickas till AI-leverantören igen.
+            current.signals = {**stored, "purpose_inputs_hash": inputs_hash, "llm_failed": llm_failed}
         return assessment
 
     db.execute(
@@ -443,6 +648,7 @@ def classify_trip(
         engine_version=ENGINE_VERSION,
         signals={
             "inputs_hash": inputs_hash,
+            "llm_failed": llm_failed,
             "work_score": rules.work_score,
             "private_score": rules.private_score,
             "caps": assessment.caps,

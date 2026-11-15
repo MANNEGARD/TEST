@@ -33,7 +33,7 @@ export function ChargingSection({ period, onShowAll }: { period: PeriodValue; on
   const del = useDeleteCharging();
   const [dialog, setDialog] = React.useState<{ open: boolean; record: ChargingRecord | null }>({ open: false, record: null });
 
-  const rows = React.useMemo(() => [...(list.data ?? [])].reverse(), [list.data]);
+  const rows = React.useMemo(() => [...(list.data ?? [])].sort((a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime()), [list.data]);
   const kwh = rows.reduce((sum, r) => sum + (r.kwh ?? 0), 0);
   const costs = rows.filter((r) => r.total_cost != null);
   const cost = costs.length ? costs.reduce((sum, r) => sum + (r.total_cost ?? 0), 0) : null;

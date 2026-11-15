@@ -10,8 +10,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import utcnow
-from app.models import ReviewItem
-from app.models.enums import ReviewKind, ReviewState
+from app.models import LogicalTrip, RawTrip, ReviewItem, TripSegment
+from app.models.enums import LogicalState, ReviewKind, ReviewState
 
 
 def upsert(
@@ -145,6 +145,66 @@ def wake_snoozed(db: Session, now: datetime | None = None) -> int:
 
 # Orsak när ett ärende stängs för att journalen bara omfattar tjänsteresor (business_only).
 SCOPE_REASON = "journal_scope"
+# Orsak när ett ärende stängs för att resan det gäller inte längre finns i journalen.
+INACTIVE_REASON = "trip_inactive"
+
+# Ärenden som gäller en viss journalresa och saknar mening när resan inte längre är aktiv.
+_PER_TRIP_KINDS = (
+    ReviewKind.CATEGORY,
+    ReviewKind.PURPOSE,
+    ReviewKind.TAX_UNCERTAIN,
+    ReviewKind.MIXED_ALLOCATION,
+    ReviewKind.MISSING_ODOMETER,
+    ReviewKind.DATA_GAP,
+)
+
+
+def close_orphaned(db: Session, vehicle_id: uuid.UUID, *, by: str = "system") -> int:
+    """Stänger öppna ärenden som gäller resor som inte längre finns i journalen.
+
+    * Resebundna ärenden (kategori, syfte, mätarställning …) för resor som inte är aktiva.
+    * Övriga ärenden för makulerade resor (ångrad import, borttagen manuell resa).
+    * Sammanslagningsfrågor där någon av de fysiska resorna är makulerad eller saknar
+      aktiv journalresa – frågan kan då inte längre besvaras.
+    """
+    items = (
+        db.execute(
+            select(ReviewItem).where(
+                ReviewItem.vehicle_id == vehicle_id, ReviewItem.status.in_((ReviewState.OPEN, ReviewState.SNOOZED))
+            )
+        )
+        .scalars()
+        .all()
+    )
+    closed = 0
+    for item in items:
+        stale = False
+        if item.kind == ReviewKind.MERGE:
+            data = item.data or {}
+            for key in ("first_raw_trip_id", "second_raw_trip_id"):
+                try:
+                    raw_id = uuid.UUID(str(data.get(key)))
+                except ValueError:
+                    continue
+                raw = db.get(RawTrip, raw_id)
+                active = db.execute(
+                    select(LogicalTrip.id)
+                    .join(TripSegment, TripSegment.logical_trip_id == LogicalTrip.id)
+                    .where(TripSegment.raw_trip_id == raw_id, LogicalTrip.state == LogicalState.ACTIVE)
+                    .limit(1)
+                ).first()
+                if raw is None or raw.voided_at is not None or active is None:
+                    stale = True
+        elif item.logical_trip_id is not None:
+            trip = db.get(LogicalTrip, item.logical_trip_id)
+            if trip is None or trip.state == LogicalState.VOIDED:
+                stale = True
+            elif trip.state != LogicalState.ACTIVE and item.kind in _PER_TRIP_KINDS:
+                stale = True
+        if stale:
+            resolve(db, item, by=by, resolution={"auto": True, "reason": INACTIVE_REASON})
+            closed += 1
+    return closed
 
 
 def trip_key(kind: str, trip_id: uuid.UUID) -> str:

@@ -16,6 +16,7 @@ from app.api.serializers import trip_out, trips_out
 from app.models import LogicalTrip, ReviewItem, TripMerge, TripSegment
 from app.models.enums import ReviewKind, ReviewState
 from app.schemas.common import TripOut
+from app.services import audit
 from app.services import settings as settings_svc
 from app.services.trips import merge, pipeline
 from app.services.trips import segments as seg
@@ -96,14 +97,23 @@ def split(trip_id: uuid.UUID, body: SplitRequest, principal: PrincipalDep, db: D
     return trips_out(db, [left, right])
 
 
+def _allocation(trip: LogicalTrip, raw_trip_id: uuid.UUID) -> list[dict[str, Any]]:
+    """Delresans nuvarande delsträckor med effektiv kategori (för ändringshistoriken)."""
+    return [
+        {"distance_km": s.distance_km, "category": seg.segment_category(trip, s), "note": s.note}
+        for s in sorted(trip.segments, key=lambda s: s.part)
+        if s.raw_trip_id == raw_trip_id
+    ]
+
+
 @router.post("/trips/{trip_id}/allocate", response_model=TripOut,
              summary="Fördela en delresa på privat och tjänst (delsträckor)")
 def allocate(trip_id: uuid.UUID, body: AllocateRequest, principal: PrincipalDep, db: DbDep) -> TripOut:
     trip = get_owned_trip(db, principal, trip_id)
+    before = _allocation(trip, body.raw_trip_id)
     seg.allocate_raw_trip(db, trip, body.raw_trip_id, [p.model_dump() for p in body.parts], principal.actor.label)
-    from app.services import audit
-
     audit.record(db, principal.actor, "trip.allocate", "logical_trip", trip.id,
+                 before={"raw_trip_id": str(body.raw_trip_id), "parts": before},
                  after={"raw_trip_id": str(body.raw_trip_id), "parts": [p.model_dump() for p in body.parts]})
     _sync(db, trip)
     db.commit()
@@ -113,7 +123,11 @@ def allocate(trip_id: uuid.UUID, body: AllocateRequest, principal: PrincipalDep,
 @router.delete("/trips/{trip_id}/allocate/{raw_trip_id}", response_model=TripOut, summary="Ta bort fördelningen av en delresa")
 def clear_allocation(trip_id: uuid.UUID, raw_trip_id: uuid.UUID, principal: PrincipalDep, db: DbDep) -> TripOut:
     trip = get_owned_trip(db, principal, trip_id)
+    before = _allocation(trip, raw_trip_id)
     seg.clear_allocation(db, trip, raw_trip_id, principal.actor.label)
+    audit.record(db, principal.actor, "trip.allocation_cleared", "logical_trip", trip.id,
+                 before={"raw_trip_id": str(raw_trip_id), "parts": before},
+                 after={"raw_trip_id": str(raw_trip_id), "parts": _allocation(trip, raw_trip_id)})
     _sync(db, trip)
     db.commit()
     return trip_out(db, get_owned_trip(db, principal, trip_id))

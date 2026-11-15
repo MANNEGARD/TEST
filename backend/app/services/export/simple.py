@@ -44,16 +44,22 @@ EMPTY_TEXT = "Inga tjänsteresor att redovisa i perioden."
 
 # (nyckel, rubrik, kolumnbredd i Excels teckenenheter). Tabellen skrivs ut i 100 % skala
 # och bredderna är avvägda så att den fyller en liggande A4 med smala marginaler.
+# Textkolumnerna får så mycket bredd som möjligt: ju färre adresser och ärenden som
+# bryts på två rader, desto färre sidor blir underlaget. Mätarställningens två kolumner
+# delar därför en gemensam rubrik ("Mätarställning" över "start" och "slut").
 COLUMNS: list[tuple[str, str, float]] = [
     ("date", "Datum", 10),
-    ("time", "Tid", 13.5),
-    ("from", "Från", 23.5),
-    ("to", "Till", 25.5),
-    ("purpose", "Ärende", 28),
-    ("odometer_start", "Mätarställning start", 12.5),
-    ("odometer_end", "Mätarställning slut", 12.5),
+    ("time", "Tid", 10.5),
+    ("from", "Från", 25.5),
+    ("to", "Till", 28),
+    ("purpose", "Ärende", 33.5),
+    ("odometer_start", "Mätarställning start", 9),
+    ("odometer_end", "Mätarställning slut", 9),
     ("km", "Km", 7.5),
 ]
+INFO_RIGHT_COL = 3  # sidhuvudets högra spalt: etikett i "Till"-kolumnen, värde i "Ärende"-kolumnen
+ODOMETER_GROUP = "Mätarställning"  # gemensam rubrik över de två mätarkolumnerna
+ODOMETER_SUB = {"odometer_start": "start", "odometer_end": "slut"}
 HEADERS = [title for _, title, _ in COLUMNS]
 COL = {key: i for i, (key, _, _) in enumerate(COLUMNS)}
 WIDTH = {key: width for key, _, width in COLUMNS}
@@ -75,19 +81,20 @@ ZEBRA = "#F7F9FB"  # mycket ljus toning på varannan rad
 
 # Radhöjder i punkter. Alla rader får en uttrycklig höjd så att sidbrytningarna kan
 # beräknas i förväg (summeringen ska inte hamna ensam på en sida).
-TITLE_PT = 28.0
-INFO_ROW_PT = 15.0
-SPACER_PT = 9.0
-HEADER_PT = 30.0
+TITLE_PT = 25.0
+INFO_ROW_PT = 14.0
+SPACER_PT = 6.0
+HEADER_ROWS = 2  # rubriken har två rader: "Mätarställning" över "start" och "slut"
+HEADER_PT = 30.0  # rubrikens hela höjd (båda raderna)
 LINE_PT = 12.75  # en textrad i tabellen
-ROW_PAD_PT = 5.25  # luft över och under texten
-TOTAL_PT = 21.0
-SUM_ROW_PT = 16.5
-NOTE_PT = 18.0
+ROW_PAD_PT = 3.0  # luft över och under texten – kompakt, så att en månad ryms på få sidor
+TOTAL_PT = 19.5
+SUM_ROW_PT = 15.0
+NOTE_PT = 16.5
 
 # Utskrift: A4 liggande, 100 % skala.
 PAGE_W_IN, PAGE_H_IN = 11.69, 8.27
-MARGIN_LR_IN, MARGIN_TOP_IN, MARGIN_BOTTOM_IN = 0.3, 0.4, 0.6
+MARGIN_LR_IN, MARGIN_TOP_IN, MARGIN_BOTTOM_IN = 0.3, 0.35, 0.55
 PAGE_FILL = 0.98  # säkerhetsmarginal mot avvikande radhöjder i olika program
 
 
@@ -443,6 +450,7 @@ def wrapped_lines(text: str, width: float) -> int:
 
 def row_height(row: SimpleRow) -> float:
     lines = max(
+        wrapped_lines(row.time, WIDTH["time"]),  # "(+1)" efter en resa över midnatt får en egen rad
         wrapped_lines(row.from_address, WIDTH["from"]),
         wrapped_lines(row.to_text, WIDTH["to"]),
         wrapped_lines(row.purpose, WIDTH["purpose"]),
@@ -486,7 +494,7 @@ def write_workbook(path: Path, journal: SimpleJournal) -> dict[str, Any]:
 
     Bladets uppställning:
 
-    * rad 1: titel, därefter högst fyra rader: period, förare, arbetsgivare och bil
+    * rad 1: titel, därefter högst två rader i två spalter: period och förare, arbetsgivare och bil
     * tabellen med en rad per tjänsteresa
     * summering direkt under tabellen: antal resor och km, mil och (valfritt) ersättning
     * en förklarande rad om att endast tjänsteresor redovisas
@@ -512,9 +520,13 @@ def write_workbook(path: Path, journal: SimpleJournal) -> dict[str, Any]:
     fmt_title = f({**base, "font_size": 16, "bold": True})
     fmt_label = f({**base, "font_color": MUTED})
     fmt_value = f({**base})
+    fmt_label_right = f({**base, "font_color": MUTED, "align": "right"})
+    fmt_value_right = f({**base, "indent": 1})
     head = {**base, "bold": True, "font_color": "#FFFFFF", "bg_color": HEADER_BG, "text_wrap": True}
     fmt_head = f({**head, "align": "left", "indent": 1})
     fmt_head_num = f({**head, "align": "right", "indent": 1})
+    fmt_head_group = f({**head, "align": "center", "valign": "bottom"})
+    fmt_head_sub = f({**head, "align": "right", "indent": 1, "valign": "top"})
 
     def cell_formats(shaded: bool) -> dict[str, Any]:
         row = {**base, "valign": "top", "bottom": 1, "bottom_color": LINE}
@@ -522,7 +534,7 @@ def write_workbook(path: Path, journal: SimpleJournal) -> dict[str, Any]:
             row["bg_color"] = ZEBRA
         return {
             "date": f({**row, "num_format": "yyyy-mm-dd", "align": "left", "indent": 1}),
-            "time": f({**row, "align": "left", "indent": 1}),
+            "time": f({**row, "text_wrap": True, "align": "left", "indent": 1}),
             "text": f({**row, "text_wrap": True, "align": "left", "indent": 1}),
             "odo": f({**row, "num_format": "0", "align": "right", "indent": 1}),
             "km": f({**row, "num_format": "#,##0.0", "align": "right", "indent": 1}),
@@ -535,7 +547,7 @@ def write_workbook(path: Path, journal: SimpleJournal) -> dict[str, Any]:
     fmt_total_km = f({**total, "align": "right", "indent": 1, "num_format": "#,##0.0"})
     sums = {**base, "align": "right", "indent": 1}
     fmt_sum_label = f({**sums, "font_color": MUTED})
-    fmt_sum_mil = f({**sums, "num_format": "#,##0.00"})
+    fmt_sum_mil = f({**sums, "num_format": '#,##0.00" mil"'})
     fmt_amount_label = f({**sums, "bold": True})
     fmt_amount = f({**sums, "bold": True, "num_format": '#,##0.00" kr"'})
     fmt_note = f({**base, "font_size": 9, "italic": True, "font_color": MUTED})
@@ -554,15 +566,23 @@ def write_workbook(path: Path, journal: SimpleJournal) -> dict[str, Any]:
         info.append(("Arbetsgivare", journal.employer_name))  # raden utelämnas när arbetsgivare saknas
     if journal.vehicle_text:
         info.append(("Bil", journal.vehicle_text))
+    # Uppgifterna står i två spalter (vänster: period och förare, höger: arbetsgivare och bil)
+    # så att sidhuvudet tar så lite höjd som möjligt.
+    info_rows = (len(info) + 1) // 2
     for i, (label, value) in enumerate(info):
-        ws.set_row(1 + i, INFO_ROW_PT)
-        ws.write_string(1 + i, 0, label, fmt_label)
-        ws.write_string(1 + i, 1, safe_text(value), fmt_value)
-    spacer = 1 + len(info)
+        r = 1 + i % info_rows
+        if i < info_rows:
+            ws.set_row(r, INFO_ROW_PT)
+            ws.write_string(r, 0, label, fmt_label)
+            ws.write_string(r, 1, safe_text(value), fmt_value)
+        else:
+            ws.write_string(r, INFO_RIGHT_COL, label, fmt_label_right)
+            ws.write_string(r, INFO_RIGHT_COL + 1, safe_text(value), fmt_value_right)
+    spacer = 1 + info_rows
     ws.set_row(spacer, SPACER_PT)
 
     header_row = spacer + 1
-    first = header_row + 1
+    first = header_row + HEADER_ROWS
     last = first + max(len(journal.rows), 1) - 1
     total_row = last + 1
     mil_row = total_row + 1
@@ -570,9 +590,15 @@ def write_workbook(path: Path, journal: SimpleJournal) -> dict[str, Any]:
     note_row = (amount_row if amount_row is not None else mil_row) + 1
 
     # --- tabell -----------------------------------------------------------------------------
-    ws.set_row(header_row, HEADER_PT)
+    sub_row = header_row + 1
+    ws.set_row(header_row, HEADER_PT / HEADER_ROWS)
+    ws.set_row(sub_row, HEADER_PT / HEADER_ROWS)
     for c, (key, title, _) in enumerate(COLUMNS):
-        ws.write_string(header_row, c, title, fmt_head_num if key in NUMERIC else fmt_head)
+        if key in ODOMETER_SUB:
+            ws.write_string(sub_row, c, ODOMETER_SUB[key], fmt_head_sub)
+        else:
+            ws.merge_range(header_row, c, sub_row, c, title, fmt_head_num if key in NUMERIC else fmt_head)
+    ws.merge_range(header_row, COL["odometer_start"], header_row, COL["odometer_end"], ODOMETER_GROUP, fmt_head_group)
     heights: list[float] = []
     for i, row in enumerate(journal.rows):
         r = first + i
@@ -642,9 +668,9 @@ def write_workbook(path: Path, journal: SimpleJournal) -> dict[str, Any]:
     ws.set_print_scale(100)
     ws.set_margins(left=MARGIN_LR_IN, right=MARGIN_LR_IN, top=MARGIN_TOP_IN, bottom=MARGIN_BOTTOM_IN)
     ws.center_horizontally()
-    ws.repeat_rows(header_row)
+    ws.repeat_rows(header_row, header_row + HEADER_ROWS - 1)
     ws.print_area(0, 0, note_row, last_col)
-    top_pt = TITLE_PT + INFO_ROW_PT * len(info) + SPACER_PT + HEADER_PT
+    top_pt = TITLE_PT + INFO_ROW_PT * info_rows + SPACER_PT + HEADER_PT
     tail_pt = TOTAL_PT + SUM_ROW_PT * (note_row - total_row - 1) + NOTE_PT
     breaks = page_breaks(top_pt, heights, tail_pt, first)
     if breaks:
@@ -657,6 +683,7 @@ def write_workbook(path: Path, journal: SimpleJournal) -> dict[str, Any]:
         **totals,
         "sheet": SHEET_NAME,
         "header_row": header_row,
+        "header_rows": HEADER_ROWS,
         "first_row": first,
         "last_row": last,
         "total_row": total_row,

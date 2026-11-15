@@ -12,7 +12,7 @@ import { SkeletonBlock } from "@/components/ui/skeleton";
 import { ApiError, errorMessage } from "@/lib/api";
 import { formatDate, formatRelative } from "@/lib/format";
 import { useApiTokens, useChangePassword, useCreateApiToken, useRevokeApiToken } from "@/lib/queries/settings-page";
-import type { ApiToken, ApiTokenCreated, SettingsPayload } from "@/lib/settings-page-types";
+import type { ApiToken, ApiTokenCreated } from "@/lib/settings-page-types";
 import { ConfirmInline, CopyButton } from "./actions";
 import { Field, GroupHeading, SectionIntro } from "./form-parts";
 
@@ -96,7 +96,7 @@ function ChangePassword() {
           const code = err instanceof ApiError ? err.code : null;
           const field = code === "invalid_credentials" ? "current" : code === "weak_password" ? "next" : null;
           setServerError({ field, message: errorMessage(err) });
-          toast.error(errorMessage(err));
+          if (!field) toast.error(errorMessage(err)); // fältfel visas redan vid fältet
         },
       },
     );
@@ -253,7 +253,7 @@ function ApiTokens() {
 }
 
 /** 10. Säkerhet – lösenord och API-tokens. */
-export function SecuritySection(_props: { data: SettingsPayload }) {
+export function SecuritySection() {
   return (
     <section aria-labelledby="settings-sakerhet">
       <SectionIntro id="settings-sakerhet" title="Säkerhet">

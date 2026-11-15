@@ -18,7 +18,7 @@ import {
 import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
 import { Skeleton } from "@/components/ui/skeleton";
-import { errorMessage } from "@/lib/api";
+import { ApiError, errorMessage } from "@/lib/api";
 import { formatDate, formatNumber, plural } from "@/lib/format";
 import type { ImportBatch } from "@/lib/imports-types";
 import { BATCH_STATUS_LABELS, label } from "@/lib/labels";
@@ -42,7 +42,7 @@ function tripCount(b: ImportBatch): number {
 
 type Pending = { kind: "undo" | "files"; batch: ImportBatch } | null;
 
-function ConfirmDialog({ pending: open, onClose }: { pending: Pending; onClose: () => void }) {
+function ConfirmDialog({ pending: open, onClose, onUndone }: { pending: Pending; onClose: () => void; onUndone?: (batchId: string) => void }) {
   // Behåll innehållet medan dialogen animeras bort.
   const [pending, setPending] = React.useState<Pending>(open);
   if (open && open !== pending) setPending(open);
@@ -60,6 +60,7 @@ function ConfirmDialog({ pending: open, onClose }: { pending: Pending; onClose: 
           toast.success("Importen är ångrad.", {
             description: r.voided ? `${plural(r.voided, "resa", "resor")} togs bort ur körjournalen.` : undefined,
           });
+          onUndone?.(pending.batch.id);
           onClose();
         },
         onError: (e) => toast.error(errorMessage(e)),
@@ -146,16 +147,14 @@ function BatchRow({
           {fileNames || "Inga filer"}
         </p>
       </div>
-      <div className="hidden shrink-0 text-right sm:block">
-        <p className={cn("text-sm", batch.status === "undone" && "text-fg-muted line-through decoration-fg-subtle")}>
+      <div className="shrink-0 text-right">
+        <p className={cn("text-sm whitespace-nowrap", batch.status === "undone" && "text-fg-muted line-through decoration-fg-subtle")}>
           <span className="font-mono font-medium">{formatNumber(n, 0)}</span> {n === 1 ? "resa" : "resor"}
         </p>
-        {batch.summary.period_start ? <p className="text-xs text-fg-subtle num">{periodLabel(batch.summary.period_start, batch.summary.period_end)}</p> : null}
+        {batch.summary.period_start ? (
+          <p className="hidden text-xs text-fg-subtle num sm:block">{periodLabel(batch.summary.period_start, batch.summary.period_end)}</p>
+        ) : null}
       </div>
-      <p className="shrink-0 text-right text-sm sm:hidden">
-        <span className="font-mono font-medium">{formatNumber(n, 0)}</span>
-        <span className="sr-only"> {n === 1 ? "resa" : "resor"}</span>
-      </p>
       {isPreview ? (
         <Button size="sm" variant="secondary" onClick={onResume} className="shrink-0">
           <Play aria-hidden /> Fortsätt
@@ -175,7 +174,9 @@ function BatchRow({
                 <DropdownMenuItem
                   key={f.id}
                   onSelect={() => {
-                    downloadImportFile(batch.id, f.id, f.filename).catch((e) => toast.error(errorMessage(e)));
+                    downloadImportFile(batch.id, f.id, f.filename).catch((e) =>
+                      toast.error(e instanceof ApiError && e.status === 404 ? "Originalfilen finns inte längre – den har raderats." : errorMessage(e)),
+                    );
                   }}
                 >
                   <Download aria-hidden /> <span className="truncate">{f.filename}</span>
@@ -208,7 +209,16 @@ function BatchRow({
  * "Tidigare importer" för valt fordon. Förhandsgranskningar som slängts visas inte;
  * en som lämnats öppen kan återupptas.
  */
-export function ImportHistory({ currentBatchId, onResume }: { currentBatchId?: string; onResume: (batch: ImportBatch) => void }) {
+export function ImportHistory({
+  currentBatchId,
+  onResume,
+  onUndone,
+}: {
+  currentBatchId?: string;
+  onResume: (batch: ImportBatch) => void;
+  /** Anropas när en import har ångrats (t.ex. för att stänga dess kvitto). */
+  onUndone?: (batchId: string) => void;
+}) {
   const q = useImportBatches();
   const discard = useDiscardPreview();
   const [pending, setPending] = React.useState<Pending>(null);
@@ -268,7 +278,7 @@ export function ImportHistory({ currentBatchId, onResume }: { currentBatchId?: s
         Tidigare importer
       </h2>
       <Card data-testid="import-history">{body}</Card>
-      <ConfirmDialog pending={pending} onClose={() => setPending(null)} />
+      <ConfirmDialog pending={pending} onClose={() => setPending(null)} onUndone={onUndone} />
     </section>
   );
 }

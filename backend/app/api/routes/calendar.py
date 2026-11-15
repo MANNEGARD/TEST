@@ -10,7 +10,7 @@ from typing import Any
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.api.deps import (
     DbDep,
@@ -49,8 +49,12 @@ class MatchChoice(BaseModel):
     selected: bool
 
 
+class DisconnectOptions(BaseModel):
+    forget_app: bool = False  # radera även Microsoft-appens klient-ID och klienthemlighet
+
+
 def _calendar_error(exc: sync.CalendarError) -> ApiError:
-    status = {"not_connected": 409, "not_configured": 409, "needs_reauth": 409}.get(exc.code, 502)
+    status = {"not_connected": 409, "not_configured": 409, "needs_reauth": 409, "throttled": 429}.get(exc.code, 502)
     return ApiError(status, exc.message, exc.code)
 
 
@@ -76,8 +80,15 @@ def status(principal: PrincipalDep, db: DbDep) -> dict[str, Any]:
         select(CalendarEvent.id).where(CalendarEvent.user_id == principal.user.id, CalendarEvent.is_demo.is_(False),
                                        CalendarEvent.removed_at.is_(None))
     ).all()
+    demo_events = db.execute(
+        select(func.count(CalendarEvent.id)).where(
+            CalendarEvent.user_id == principal.user.id, CalendarEvent.is_demo.is_(True),
+            CalendarEvent.removed_at.is_(None),
+        )
+    ).scalar_one()
     view.update(
         {
+            "demo_events": demo_events,
             "redirect_uri": sync.redirect_uri(),
             "required_permissions": ["Calendars.Read", "offline_access"],
             "selected_calendar_ids": cal["calendar_ids"],
@@ -162,6 +173,9 @@ def calendars(principal: WebPrincipalDep, db: DbDep) -> list[dict[str, Any]]:
 @router.put("/integrations/microsoft/calendars", summary="Välj vilka kalendrar som ska användas", tags=["Integration health"])
 def select_calendars(body: CalendarSelection, principal: WebPrincipalDep, db: DbDep) -> dict[str, Any]:
     settings_svc.update_section(db, principal.user.id, "calendar", {"calendar_ids": body.calendar_ids})
+    # Händelser från bortvalda kalendrar ska inte längre påverka matchning och klassning.
+    if sync.retire_unselected(db, principal.user.id, body.calendar_ids):
+        _rematch(db, principal)
     db.commit()
     return {"calendar_ids": body.calendar_ids}
 
@@ -180,8 +194,8 @@ def sync_now(principal: WebPrincipalDep, db: DbDep) -> dict[str, Any]:
 
 @router.post("/integrations/microsoft/disconnect", summary="Koppla bort Outlook och radera tokens och kalenderposter",
              tags=["Integration health"])
-def disconnect(principal: WebPrincipalDep, db: DbDep) -> dict[str, Any]:
-    sync.disconnect(db, principal.user.id, delete_events=True)
+def disconnect(principal: WebPrincipalDep, db: DbDep, body: DisconnectOptions | None = None) -> dict[str, Any]:
+    sync.disconnect(db, principal.user.id, delete_events=True, forget_app=bool(body and body.forget_app))
     _rematch(db, principal, since_days=3650)
     audit.record(db, principal.actor, "integration.disconnected", "integration", None, after={"provider": PROVIDER})
     db.commit()

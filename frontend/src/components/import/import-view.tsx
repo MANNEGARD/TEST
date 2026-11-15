@@ -164,7 +164,13 @@ export function ImportView() {
       <PageHeader title="Import" description="Läs in körjournalen från Volvo Cars-appen. Du ser vad som läggs till innan något sparas." />
       <div className="space-y-10">
         {current}
-        <ImportHistory currentBatchId={previewId} onResume={resume} />
+        <ImportHistory
+          currentBatchId={previewId}
+          onResume={resume}
+          onUndone={(id) => {
+            if (view.kind === "receipt" && view.result.batch_id === id) setStep({ kind: "upload" }, false);
+          }}
+        />
       </div>
     </div>
   );

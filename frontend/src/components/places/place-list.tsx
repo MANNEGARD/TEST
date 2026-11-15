@@ -216,8 +216,9 @@ function PlaceRow({ place: p, onOpen }: { place: Place; onOpen: (id: string) => 
       >
         <PlaceAvatar type={p.type} confirmed={p.confirmed} />
         <span className="min-w-0">
-          <span className="flex min-w-0 items-center gap-2">
-            <span className="truncate text-sm font-medium">{p.name}</span>
+          {/* Mobil: namnet bryts hellre än kapas, märket hamnar på egen rad vid behov. */}
+          <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 sm:flex-nowrap">
+            <span className="min-w-0 text-sm font-medium [overflow-wrap:anywhere] sm:truncate">{p.name}</span>
             {!p.confirmed ? (
               <Badge tone="undecided" size="sm" className="shrink-0">
                 <CircleDashed aria-hidden /> Obekräftad

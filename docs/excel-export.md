@@ -16,14 +16,15 @@ följt av en rad per tjänsteresa:
 | Till | Slutadress (mellanstopp anges som "via …") |
 | Ärende | Resans syfte, med besökt företag eller kontaktperson när det är ifyllt |
 | Mätarställning start / slut | Ur bilens körjournal |
-| Km | Körd sträcka |
+| Km | Körd sträcka, en decimal |
 
 Under tabellen summeras antal resor, kilometer och mil, samt ersättningen
 (mil × kronor per mil). Summorna är riktiga Excel-formler, så de följer med om du justerar en
 rad, och de har förberäknade värden så att filen visar rätt även i förhandsvisning på telefon.
 
-Filen är formaterad för utskrift på liggande A4: rubrikraden upprepas på varje sida och
-sidorna numreras.
+Filen är formaterad för utskrift på liggande A4: rubrikraden upprepas på varje sida,
+sidorna numreras och summeringen hamnar aldrig ensam på en sista sida. En vanlig månad ryms
+på en eller två sidor (ungefär 25 resor på första sidan och 30 på varje följande).
 
 ## Vad som inte ingår
 
@@ -110,3 +111,8 @@ som något som ska redas ut.
   bli en formel.
 - Formlerna är kontrollerade i LibreOffice, inte i Microsoft Excel.
 - En okänd starttid lämnas tom – den hittas aldrig på.
+- Varje resas sträcka redovisas med en decimal, och summan är summan av de redovisade
+  värdena. Den går alltså att kontrollräkna för hand. Översiktens milersättning räknas på
+  samma sätt; den totala körsträckan i statistiken summerar däremot oavrundade värden och kan
+  skilja någon tiondels kilometer.
+- En resa som slutar efter midnatt visas som `23:37–02:08 (+1)`.

@@ -29,6 +29,7 @@ from app.models.enums import (
     ValueQuality,
 )
 from app.services import audit
+from app.services import settings as settings_svc
 from app.services.audit import Actor
 from app.services.trips import review
 from app.services.trips import segments as seg
@@ -37,8 +38,17 @@ from app.services.trips.segments import TripError
 GAP_FILL_PURPOSE = "Privat körning (sammanfattad, ej detaljredovisad)"
 
 
-def recompute(db: Session, vehicle_id: uuid.UUID, tolerance_km: float = 2.0) -> dict[str, Any]:
-    """Räknar om odometerluckor för ett fordon. Idempotent; tidigare beslut bevaras."""
+def recompute(
+    db: Session, vehicle_id: uuid.UUID, tolerance_km: float = 2.0, *, scope: str | None = None
+) -> dict[str, Any]:
+    """Räknar om odometerluckor för ett fordon. Idempotent; tidigare beslut bevaras.
+
+    En lucka som intygats som privat körning men inte längre finns (t.ex. för att en
+    senare importerad resa ligger i intervallet) får sin sammanfattande privatpost
+    makulerad – annars skulle samma mätarsträcka redovisas två gånger. Kvarvarande
+    delar av intervallet blir nya luckor. I omfånget ``complete`` skapas även ett
+    granskningsärende; med ``business_only`` är luckor privat körning och ger inga ärenden.
+    """
     raws = list(
         db.execute(
             select(RawTrip)
@@ -93,6 +103,23 @@ def recompute(db: Session, vehicle_id: uuid.UUID, tolerance_km: float = 2.0) -> 
     for key, gap in existing.items():
         if key not in seen:
             gap.is_current = False
+            if gap.status == GapStatus.RESOLVED_PRIVATE and gap.resolved_raw_trip_id is not None:
+                km = gap.km
+                reopen(db, gap, actor=audit.SYSTEM, reason="Luckan har ändrats av nya resor")
+                if scope != settings_svc.SCOPE_BUSINESS_ONLY:
+                    review.upsert(
+                        db,
+                        vehicle_id=vehicle_id,
+                        kind=ReviewKind.ANOMALY,
+                        dedupe_key=f"gap-fill-stale:{gap.id}",
+                        title="Intygad privat körning har ändrats",
+                        detail=(
+                            f"Luckan {gap.odometer_start:.0f}–{gap.odometer_end:.0f} km ({km:.0f} km) som intygats "
+                            "som privat körning innehåller nu andra resor. Den sammanfattande privatposten har "
+                            "makulerats så att ingen sträcka räknas två gånger. Hantera de nya luckorna."
+                        ),
+                        data={"type": "gap_fill_stale", "gap_id": str(gap.id)},
+                    )
     db.flush()
     current = [g for g in db.execute(
         select(DataGap).where(DataGap.vehicle_id == vehicle_id, DataGap.is_current.is_(True))
@@ -182,7 +209,7 @@ def ignore(db: Session, gap: DataGap, *, actor: Actor, note: str | None = None) 
     return gap
 
 
-def reopen(db: Session, gap: DataGap, *, actor: Actor) -> DataGap:
+def reopen(db: Session, gap: DataGap, *, actor: Actor, reason: str = "Lucka återöppnad") -> DataGap:
     """Ångrar hanteringen av en lucka; en ev. sammanfattande privatpost makuleras."""
     if gap.status == GapStatus.OPEN:
         return gap
@@ -190,7 +217,7 @@ def reopen(db: Session, gap: DataGap, *, actor: Actor) -> DataGap:
         raw = db.get(RawTrip, gap.resolved_raw_trip_id)
         if raw is not None and raw.voided_at is None:
             raw.voided_at = utcnow()
-            raw.void_reason = "Lucka återöppnad"
+            raw.void_reason = reason
             for trip in db.execute(
                 select(LogicalTrip)
                 .join(TripSegment, TripSegment.logical_trip_id == LogicalTrip.id)

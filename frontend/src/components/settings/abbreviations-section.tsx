@@ -9,7 +9,6 @@ import { Input } from "@/components/ui/input";
 import { errorMessage } from "@/lib/api";
 import { useSaveSettings } from "@/lib/queries/settings-page";
 import type { SettingsPayload } from "@/lib/settings-page-types";
-import { cn } from "@/lib/utils";
 import { useReportDirty } from "./dirty-context";
 import { FormCard, SaveBar, SectionIntro } from "./form-parts";
 
@@ -182,7 +181,7 @@ export function AbbreviationsSection({ data }: { data: SettingsPayload }) {
                         />
                         {e?.short ? <p className="mt-1 text-xs font-medium text-err-ink">{e.short}</p> : null}
                       </td>
-                      <td className="pt-2.5 text-center text-fg-subtle">
+                      <td className="pt-3 text-center text-fg-subtle">
                         <ArrowRight className="inline size-3.5" aria-hidden />
                       </td>
                       <td className="pl-1">
@@ -207,7 +206,7 @@ export function AbbreviationsSection({ data }: { data: SettingsPayload }) {
                 })}
               </tbody>
             </table>
-            <Button variant="ghost" size="sm" className={cn("mt-1 -ml-2")} onClick={addRow}>
+            <Button variant="ghost" size="sm" className="mt-1 -ml-2" onClick={addRow}>
               <Plus aria-hidden /> Lägg till rad
             </Button>
           </div>

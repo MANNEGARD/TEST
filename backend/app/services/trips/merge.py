@@ -20,8 +20,16 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import utcnow
-from app.models import LogicalTrip, MergeDecision, RawTrip, TripMerge, TripSegment
-from app.models.enums import Category, LogicalState, MergeKind, ReviewKind, ReviewStatus, TimeQuality
+from app.models import LogicalTrip, MergeDecision, RawTrip, ReviewItem, TripMerge, TripSegment
+from app.models.enums import (
+    Category,
+    LogicalState,
+    MergeKind,
+    ReviewKind,
+    ReviewState,
+    ReviewStatus,
+    TimeQuality,
+)
 from app.services import audit
 from app.services.audit import Actor
 from app.services.trips import review
@@ -36,6 +44,8 @@ _REVIEW_ORDER = {
     ReviewStatus.APPROVED: 4,
 }
 _EXACT = {TimeQuality.EXACT, TimeQuality.REPORTED}
+# Starttid som bara är en gräns (t.ex. endast datum i en import): räkna med gränserna.
+_UNCERTAIN_START = {TimeQuality.BOUNDED, TimeQuality.UNKNOWN}
 
 
 @dataclass(frozen=True)
@@ -69,7 +79,7 @@ def stop_gap(prev: RawTrip, nxt: RawTrip) -> StopGap:
         odo_gap = nxt.odometer_start - prev.odometer_end
     if prev.ended_at is None:
         return StopGap(None, None, False, odo_gap)
-    if nxt.started_at is not None:
+    if nxt.started_at is not None and nxt.start_time_quality not in _UNCERTAIN_START:
         minutes = (nxt.started_at - prev.ended_at).total_seconds() / 60
         exact = prev.end_time_quality in _EXACT and nxt.start_time_quality in _EXACT
         if minutes < -1:
@@ -239,14 +249,17 @@ def merge_trips(
             by_raw.setdefault(s.raw_trip_id, []).append(s)
         for parts in by_raw.values():
             for s in parts:
+                # Bevara varje delsträckas egen kategori när källorna skiljer sig åt. En oavgjord
+                # delsträcka får ingen egen kategori utan följer resans, så att den avgörs när
+                # resan avgörs (annars kan resan se avgjord ut medan sträckan förblir oavgjord).
+                own = None if uniform else (s.category_override or t.category)
                 merged.segments.append(
                     TripSegment(
                         raw_trip=s.raw_trip,
                         seq=seq,
                         part=s.part,
                         distance_km=s.distance_km,
-                        # Bevara varje delsträckas egen kategori när källorna skiljer sig åt.
-                        category_override=None if uniform else (s.category_override or t.category),
+                        category_override=None if own == Category.UNDECIDED else own,
                         note=s.note,
                     )
                 )
@@ -333,38 +346,187 @@ def _combined_single(values: list[str | None]) -> str | None:
     return next(iter(distinct)) if len(distinct) == 1 else None
 
 
-def _sources_of(db: Session, trip: LogicalTrip) -> list[LogicalTrip]:
-    return list(
-        db.execute(
-            select(LogicalTrip)
-            .where(LogicalTrip.merged_into_id == trip.id, LogicalTrip.state == LogicalState.MERGED)
-            .order_by(LogicalTrip.sort_time.asc())
-        ).scalars()
+_SUPERSEDED_KINDS = (ReviewKind.CATEGORY, ReviewKind.PURPOSE, ReviewKind.TAX_UNCERTAIN, ReviewKind.MIXED_ALLOCATION)
+
+
+def _sources_of(db: Session, trip: LogicalTrip, *, any_state: bool = False) -> list[LogicalTrip]:
+    q = select(LogicalTrip).where(LogicalTrip.merged_into_id == trip.id)
+    if not any_state:
+        q = q.where(LogicalTrip.state == LogicalState.MERGED)
+    return list(db.execute(q.order_by(LogicalTrip.sort_time.asc())).scalars())
+
+
+def _raw_ids(trip: LogicalTrip) -> set[uuid.UUID]:
+    return {s.raw_trip_id for s in trip.segments}
+
+
+def _segment_signature(trip: LogicalTrip, segments: list[TripSegment]) -> list[tuple[str, int, float, str]]:
+    return sorted(
+        (str(s.raw_trip_id), s.part, round(s.distance_km, 3), seg.segment_category(trip, s)) for s in segments
     )
+
+
+def _carry_decisions(db: Session, from_trip: LogicalTrip, to_trip: LogicalTrip) -> bool:
+    """För över beslut från en resa som upphör till en resa som återställs.
+
+    Används när en sammanslagning eller delning ångras. Har kategorin eller fördelningen
+    för de gemensamma fysiska resorna ändrats efter åtgärden får den återställda resan
+    samma kategorier för just de delsträckorna (km per RawTrip oförändrade). Annars
+    återställs resan som den var; ett godkännande av samma kategorier följer med.
+    En privat sträcka blir därmed aldrig tjänst för att en åtgärd ångras.
+    """
+    ids = _raw_ids(to_trip) & _raw_ids(from_trip)
+    if not ids:
+        return False
+    full = ids == _raw_ids(to_trip)
+    from_segs = [s for s in from_trip.segments if s.raw_trip_id in ids]
+    to_segs = [s for s in to_trip.segments if s.raw_trip_id in ids]
+    if _segment_signature(from_trip, from_segs) == _segment_signature(to_trip, to_segs):
+        if full and from_trip.review_status == ReviewStatus.APPROVED and to_trip.review_status != ReviewStatus.APPROVED:
+            to_trip.review_status = ReviewStatus.APPROVED
+            to_trip.category_source = from_trip.category_source
+            to_trip.tax_note = None
+        return False
+    seq_map = {r.id: i for i, r in enumerate(seg.ordered_raws(to_trip))}
+    wanted = [
+        (s.raw_trip, s.seq, s.part, s.distance_km, seg.segment_category(to_trip, s), s.note)
+        for s in to_trip.segments
+        if s.raw_trip_id not in ids
+    ] + [
+        (s.raw_trip, seq_map[s.raw_trip_id], s.part, s.distance_km, seg.segment_category(from_trip, s), s.note)
+        for s in from_segs
+    ]
+    cats = {w[4] for w in wanted}
+    single = next(iter(cats)) if len(cats) == 1 else None
+    for s in list(to_trip.segments):
+        to_trip.segments.remove(s)
+    db.flush()
+    for raw, seq, part, km, cat, note in sorted(wanted, key=lambda w: (w[1], w[2])):
+        to_trip.segments.append(
+            TripSegment(
+                raw_trip=raw,
+                seq=seq,
+                part=part,
+                distance_km=km,
+                # Oavgjorda delsträckor följer resans kategori (som då är oavgjord).
+                category_override=None if single or cat == Category.UNDECIDED else cat,
+                note=note,
+            )
+        )
+    if single:
+        to_trip.category = single
+    elif Category.UNDECIDED in cats:
+        to_trip.category = Category.UNDECIDED
+    else:
+        to_trip.category = from_trip.category if from_trip.category != Category.UNDECIDED else to_trip.category
+    to_trip.category_source = from_trip.category_source
+    if full:
+        to_trip.subcategory = from_trip.subcategory
+        to_trip.review_status = from_trip.review_status
+        to_trip.confidence = from_trip.confidence
+        to_trip.tax_note = from_trip.tax_note
+    else:
+        to_trip.review_status = min(
+            (to_trip.review_status, from_trip.review_status), key=lambda st: _REVIEW_ORDER.get(st, 0)
+        )
+    if to_trip.category == Category.UNDECIDED and to_trip.review_status not in (ReviewStatus.NEEDS_REVIEW,):
+        if any(seg.segment_category(to_trip, s) == Category.UNDECIDED for s in to_trip.segments):
+            to_trip.review_status = ReviewStatus.NEEDS_REVIEW
+    seg.refresh_logical(db, to_trip)
+    return True
+
+
+def _part_texts(trip: LogicalTrip, sources: list[LogicalTrip], part_ids: set[uuid.UUID]) -> dict[str, Any]:
+    """Syfte, kontakter och anteckningar för en del av en resa som delas.
+
+    Om syftet inte ändrats sedan sammanslagningen och delen består av hela källresor
+    används källresornas egna uppgifter. Annars kopieras resans syfte men måste
+    bekräftas på nytt – ett hopslaget syfte påstås aldrig gälla en enskild del.
+    """
+    if sources and trip.purpose == _combined_text([s.purpose for s in sources]):
+        inside = [s for s in sources if _raw_ids(s) <= part_ids]
+        covered: set[uuid.UUID] = set().union(*(_raw_ids(s) for s in inside)) if inside else set()
+        if inside and covered == part_ids:
+            purpose = _combined_text([s.purpose for s in inside])
+            sources_with_purpose = {s.purpose_source for s in inside if s.purpose}
+            return {
+                "purpose": purpose,
+                "purpose_source": next(iter(sources_with_purpose)) if len(sources_with_purpose) == 1
+                else ("merged" if sources_with_purpose else None),
+                "purpose_confirmed": bool(purpose) and all(s.purpose_confirmed for s in inside if s.purpose),
+                "contacts": _combined_text([s.contacts for s in inside]),
+                "notes": _combined_text([s.notes for s in inside], sep="\n"),
+            }
+    return {
+        "purpose": trip.purpose,
+        "purpose_source": trip.purpose_source,
+        "purpose_confirmed": False,
+        "contacts": trip.contacts,
+        "notes": trip.notes,
+    }
+
+
+def _build_part(
+    db: Session, trip: LogicalTrip, part_raws: list[RawTrip], sources: list[LogicalTrip], actor: Actor
+) -> LogicalTrip:
+    """Ny journalresa av en del av ``trip`` med delsträckornas kategorier bevarade."""
+    ids = {r.id for r in part_raws}
+    new = LogicalTrip(
+        vehicle_id=trip.vehicle_id,
+        driver_id=trip.driver_id,
+        state=LogicalState.ACTIVE,
+        category=trip.category,
+        subcategory=trip.subcategory,
+        category_source=trip.category_source,
+        review_status=trip.review_status,
+        confidence=trip.confidence,
+        tax_note=trip.tax_note,
+        journey_id=trip.journey_id,
+        is_favorite=trip.is_favorite,
+        merge_kind=MergeKind.MANUAL if len(part_raws) > 1 else MergeKind.NONE,
+        updated_by=actor.label,
+        **_part_texts(trip, sources, ids),
+    )
+    seq_map = {r.id: i for i, r in enumerate(part_raws)}
+    for s in sorted(trip.segments, key=lambda s: (s.seq, s.part)):
+        if s.raw_trip_id in ids:
+            new.segments.append(
+                TripSegment(
+                    raw_trip=s.raw_trip,
+                    seq=seq_map[s.raw_trip_id],
+                    part=s.part,
+                    distance_km=s.distance_km,
+                    category_override=s.category_override,
+                    note=s.note,
+                )
+            )
+    db.add(new)
+    seg.refresh_logical(db, new)
+    return new
 
 
 def dissolve(
     db: Session, trip: LogicalTrip, *, actor: Actor, reason: str = "user", remember: bool = True
 ) -> list[LogicalTrip]:
-    """Ångrar en sammanslagning: källresorna återaktiveras med sina tidigare beslut."""
+    """Ångrar en sammanslagning: källresorna återaktiveras med sina tidigare beslut.
+
+    Beslut som fattats på den sammanslagna resan (kategori, fördelning) följer med till
+    källresorna. En flerdelsresa utan källresor (resultatet av en delning) bryts ned till
+    en journalresa per fysisk resa med bevarade delsträckor.
+    """
     if trip.state != LogicalState.ACTIVE:
         raise TripError("Resan är inte aktiv och kan inte delas upp.", "not_active")
     sources = _sources_of(db, trip)
     if not sources:
-        raise TripError("Resan är inte en sammanslagning.", "not_merged")
+        return _break_down(db, trip, actor=actor, reason=reason, remember=remember)
     for s in sources:
         s.state = LogicalState.ACTIVE
         s.merged_into_id = None
         s.updated_by = actor.label
+        _carry_decisions(db, trip, s)
     trip.state = LogicalState.SPLIT
     trip.updated_by = actor.label
-    review.resolve_for_trip(
-        db,
-        trip.id,
-        (ReviewKind.CATEGORY, ReviewKind.PURPOSE, ReviewKind.TAX_UNCERTAIN, ReviewKind.MIXED_ALLOCATION),
-        by=actor.label,
-        resolution={"dissolved": True},
-    )
+    review.resolve_for_trip(db, trip.id, _SUPERSEDED_KINDS, by=actor.label, resolution={"dissolved": True})
     for op in db.execute(
         select(TripMerge).where(
             TripMerge.vehicle_id == trip.vehicle_id, TripMerge.operation == "merge", TripMerge.undone_at.is_(None)
@@ -390,6 +552,43 @@ def dissolve(
     return sources
 
 
+def _break_down(db: Session, trip: LogicalTrip, *, actor: Actor, reason: str, remember: bool) -> list[LogicalTrip]:
+    raws = seg.ordered_raws(trip)
+    if len(raws) < 2:
+        raise TripError("Resan är inte en sammanslagning.", "not_merged")
+    parts = [_build_part(db, trip, [r], [], actor) for r in raws]
+    trip.state = LogicalState.SPLIT
+    trip.updated_by = actor.label
+    db.flush()
+    if remember:
+        for a, b in zip(raws, raws[1:], strict=False):
+            remember_decision(db, trip.vehicle_id, a.id, b.id, "unmerged", actor.label)
+    review.resolve_for_trip(
+        db, trip.id, _SUPERSEDED_KINDS, by=actor.label, resolution={"split_into": [str(p.id) for p in parts]}
+    )
+    db.add(
+        TripMerge(
+            vehicle_id=trip.vehicle_id,
+            operation="split",
+            trigger="unmerge",
+            source_trip_ids=[str(trip.id)],
+            result_trip_ids=[str(p.id) for p in parts],
+            details={"reason": reason},
+            created_by=actor.label,
+        )
+    )
+    audit.record(
+        db,
+        actor,
+        "trip.unmerge",
+        "logical_trip",
+        trip.id,
+        after={"result_trip_ids": [str(p.id) for p in parts], "reason": reason},
+    )
+    db.flush()
+    return parts
+
+
 def split_trip(db: Session, trip: LogicalTrip, *, after_index: int, actor: Actor) -> tuple[LogicalTrip, LogicalTrip]:
     """Delar en sammanslagen resa i två vid gränsen efter delresa ``after_index`` (0-baserat)."""
     if trip.state != LogicalState.ACTIVE:
@@ -403,55 +602,15 @@ def split_trip(db: Session, trip: LogicalTrip, *, after_index: int, actor: Actor
     if not (0 <= after_index < len(raws) - 1):
         raise TripError("Ogiltig delningspunkt.", "invalid_split_point")
 
-    def build(part_raws: list[RawTrip]) -> LogicalTrip:
-        ids = {r.id for r in part_raws}
-        new = LogicalTrip(
-            vehicle_id=trip.vehicle_id,
-            driver_id=trip.driver_id,
-            state=LogicalState.ACTIVE,
-            category=trip.category,
-            subcategory=trip.subcategory,
-            category_source=trip.category_source,
-            purpose=trip.purpose,
-            purpose_source=trip.purpose_source,
-            purpose_confirmed=trip.purpose_confirmed,
-            review_status=trip.review_status,
-            confidence=trip.confidence,
-            tax_note=trip.tax_note,
-            contacts=trip.contacts,
-            notes=trip.notes,
-            journey_id=trip.journey_id,
-            merge_kind=MergeKind.MANUAL if len(part_raws) > 1 else MergeKind.NONE,
-            updated_by=actor.label,
-        )
-        seq_map = {r.id: i for i, r in enumerate(part_raws)}
-        for s in sorted(trip.segments, key=lambda s: (s.seq, s.part)):
-            if s.raw_trip_id in ids:
-                new.segments.append(
-                    TripSegment(
-                        raw_trip=s.raw_trip,
-                        seq=seq_map[s.raw_trip_id],
-                        part=s.part,
-                        distance_km=s.distance_km,
-                        category_override=s.category_override,
-                        note=s.note,
-                    )
-                )
-        db.add(new)
-        seg.refresh_logical(db, new)
-        return new
-
-    left, right = build(raws[: after_index + 1]), build(raws[after_index + 1 :])
+    sources = _sources_of(db, trip)
+    left = _build_part(db, trip, raws[: after_index + 1], sources, actor)
+    right = _build_part(db, trip, raws[after_index + 1 :], sources, actor)
     trip.state = LogicalState.SPLIT
     trip.updated_by = actor.label
     db.flush()
     remember_decision(db, trip.vehicle_id, raws[after_index].id, raws[after_index + 1].id, "unmerged", actor.label)
     review.resolve_for_trip(
-        db,
-        trip.id,
-        (ReviewKind.CATEGORY, ReviewKind.PURPOSE, ReviewKind.TAX_UNCERTAIN, ReviewKind.MIXED_ALLOCATION),
-        by=actor.label,
-        resolution={"split_into": [str(left.id), str(right.id)]},
+        db, trip.id, _SUPERSEDED_KINDS, by=actor.label, resolution={"split_into": [str(left.id), str(right.id)]}
     )
     db.add(
         TripMerge(
@@ -489,6 +648,8 @@ def undo_operation(db: Session, op: TripMerge, *, actor: Actor) -> list[LogicalT
         raise TripError("De uppdelade resorna har ändrats av en senare åtgärd.", "stale_operation")
     for r in results:
         assert r is not None
+        # Beslut som fattats på delarna efter delningen följer med tillbaka.
+        _carry_decisions(db, seg.load_trip(db, r.id) or r, seg.load_trip(db, source.id) or source)
         r.state = LogicalState.VOIDED
         r.updated_by = actor.label
         review.resolve_for_trip(
@@ -558,7 +719,10 @@ def evaluate_vehicle(
             continue
 
         decision = _decision_for(db, prev_raw.id, next_raw.id)
-        if verdict == "auto" and apply_auto and (decision is None or decision.decision == "merged"):
+        # En obesvarad fråga om paret (t.ex. från en import utan automatisk sammanslagning)
+        # väntar på användarens svar och avgörs inte i tysthet av en senare körning.
+        pending = decision is None and _open_question(db, vehicle_id, prev_raw.id, next_raw.id)
+        if verdict == "auto" and apply_auto and not pending and (decision is None or decision.decision == "merged"):
             merged = merge_trips(db, [a, b], trigger="rule_a", actor=actor, odometer_tolerance=tol)
             merged = seg.load_trip(db, merged.id) or merged
             trips[i : i + 2] = [merged]
@@ -591,6 +755,19 @@ def evaluate_vehicle(
                 result["questions"].append(item)
         i += 1
     return result
+
+
+def _open_question(db: Session, vehicle_id: uuid.UUID, first_raw: uuid.UUID, second_raw: uuid.UUID) -> bool:
+    return (
+        db.execute(
+            select(ReviewItem.id).where(
+                ReviewItem.vehicle_id == vehicle_id,
+                ReviewItem.dedupe_key == review.merge_key(first_raw, second_raw),
+                ReviewItem.status.in_((ReviewState.OPEN, ReviewState.SNOOZED)),
+            )
+        ).first()
+        is not None
+    )
 
 
 def _merge_detail(a: LogicalTrip, b: LogicalTrip) -> str:

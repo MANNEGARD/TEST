@@ -62,7 +62,16 @@ export function PlaceSheet({
   const place = placeId ? places.find((p) => p.id === placeId) : undefined;
   return (
     <Sheet open={!!place} onOpenChange={(o) => !o && onClose()}>
-      <SheetContent side="right" className="w-[min(480px,100vw)] gap-5" onCloseAutoFocus={onCloseAutoFocus}>
+      <SheetContent
+        side="right"
+        className="w-[min(480px,100vw)] gap-5"
+        onOpenAutoFocus={(e) => {
+          // Fokusera panelen, inte namnfältet – annars fälls tangentbordet upp direkt på mobil.
+          e.preventDefault();
+          (e.currentTarget as HTMLElement | null)?.focus();
+        }}
+        onCloseAutoFocus={onCloseAutoFocus}
+      >
         {place ? <PlaceEditor key={place.id} place={place} places={places} onClose={onClose} onOpenPlace={onOpenPlace} /> : null}
       </SheetContent>
     </Sheet>

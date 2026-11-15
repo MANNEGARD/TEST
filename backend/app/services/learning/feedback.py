@@ -162,9 +162,13 @@ def apply_decision(
             )
 
     if approve:
-        if trip.category == Category.UNDECIDED and category is None:
+        # Godkännandet gäller fördelningen per delsträcka. En resa vars alla delsträckor är
+        # fördelade kan godkännas även om resan som helhet saknar kategori; oavgjorda km
+        # får däremot aldrig godkännas i tysthet.
+        undecided = [s for s in trip.segments if seg.segment_category(trip, s) == Category.UNDECIDED]
+        if undecided and len(undecided) == len(trip.segments):
             raise TripError("Välj Arbete eller Privat innan resan godkänns.", "undecided")
-        if trip.has_mixed_categories and category is None and trip.undecided_km > 0.05:
+        if sum(s.distance_km for s in undecided) > seg.KM_EPS:
             raise TripError("Fördela alla delsträckor innan resan godkänns.", "unallocated")
         trip.review_status = ReviewStatus.APPROVED
         trip.category_source = decision_source
@@ -260,7 +264,29 @@ def after_decisions(db: Session, *, user_id: uuid.UUID, vehicle_id: uuid.UUID, a
     vehicle = db.get(Vehicle, vehicle_id)
     if vehicle is None:
         return
-    engine.classify_pending(db, user_id=user_id, vehicle=vehicle, actor=audit.SYSTEM, provider=None, use_llm=False)
+    # Regelkörning utan LLM. Resor vars aktuella bedömning kommer från AI lämnas orörda:
+    # en regelbedömning utan AI skulle annars ersätta AI-förslaget (annan indatahash) och
+    # förslaget gå förlorat tills nästa AI-körning.
+    cache: dict[str, Any] = {}
+    ai_trips = set(
+        db.execute(
+            select(TripClassification.logical_trip_id)
+            .join(LogicalTrip, LogicalTrip.id == TripClassification.logical_trip_id)
+            .where(
+                LogicalTrip.vehicle_id == vehicle_id,
+                LogicalTrip.state == LogicalState.ACTIVE,
+                TripClassification.is_current.is_(True),
+                TripClassification.source == DecisionSource.AI,
+            )
+        ).scalars()
+    )
+    for trip in seg.active_trips(db, vehicle_id):
+        if trip.id in ai_trips:
+            continue
+        engine.classify_trip(
+            db, trip, user_id=user_id, actor=audit.SYSTEM, provider=None, use_llm=False, settings_cache=cache
+        )
+    db.flush()
     for trip in seg.active_trips(db, vehicle_id):
         pipeline.sync_trip_review_items(db, trip, by=actor.label)
     db.flush()
@@ -346,6 +372,7 @@ def undo(db: Session, feedback: LearningFeedback, *, actor: Actor) -> LogicalTri
         )
         .values(is_current=False)
     )
+    _restore_proposal_rows(db, trip, feedback)
     seg.refresh_logical(db, trip)
     audit.record(
         db, actor, "trip.undo_change", "logical_trip", trip.id,
@@ -354,6 +381,48 @@ def undo(db: Session, feedback: LearningFeedback, *, actor: Actor) -> LogicalTri
     db.flush()
     after_decisions(db, user_id=feedback.user_id, vehicle_id=trip.vehicle_id, actor=actor)
     return trip
+
+
+def _restore_proposal_rows(db: Session, trip: LogicalTrip, feedback: LearningFeedback) -> None:
+    """Gör bedömningen och syftet från före beslutet aktuella igen vid ångra.
+
+    Utan detta saknar resan aktuell bedömning efter ångra och regelmotorn skriver
+    direkt över den återställda ögonblicksbilden (t.ex. ett AI-förslag), och den
+    ångrade användartexten låg kvar som aktuellt syfte.
+    """
+    has_current = db.execute(
+        select(TripClassification.id).where(
+            TripClassification.logical_trip_id == trip.id, TripClassification.is_current.is_(True)
+        ).limit(1)
+    ).first()
+    if has_current is None:
+        prior = db.execute(
+            select(TripClassification)
+            .where(
+                TripClassification.logical_trip_id == trip.id,
+                TripClassification.created_at <= feedback.created_at,
+                TripClassification.source.not_in((DecisionSource.USER, DecisionSource.HA)),
+            )
+            .order_by(TripClassification.created_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        if prior is not None and prior.category == trip.category:
+            prior.is_current = True
+    if (feedback.original_purpose or None) != (feedback.new_purpose or None):
+        db.execute(
+            update(TripPurpose)
+            .where(TripPurpose.logical_trip_id == trip.id, TripPurpose.is_current.is_(True))
+            .values(is_current=False)
+        )
+        if trip.purpose:
+            row = db.execute(
+                select(TripPurpose)
+                .where(TripPurpose.logical_trip_id == trip.id, TripPurpose.text == trip.purpose)
+                .order_by(TripPurpose.created_at.desc())
+                .limit(1)
+            ).scalar_one_or_none()
+            if row is not None:
+                row.is_current = True
 
 
 def history(db: Session, trip_id: uuid.UUID) -> list[LearningFeedback]:

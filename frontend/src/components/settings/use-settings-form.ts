@@ -154,7 +154,7 @@ export interface SettingsForm {
 export function useSettingsForm(
   data: SettingsPayload,
   specs: FieldSpecs,
-  cross?: (num: (path: string) => number | null) => Record<string, string>,
+  cross?: (num: (path: string) => number | null) => Partial<Record<string, string>>,
 ): SettingsForm {
   const [overrides, setOverrides] = React.useState<Record<string, FormValue>>({});
 
@@ -189,7 +189,7 @@ export function useSettingsForm(
     if (fallback !== undefined && (parsed.error !== null || !same(spec, parsed.value, fallback))) differsFromDefaults = true;
   }
   if (cross) {
-    for (const [path, message] of Object.entries(cross(number))) if (!errors[path]) errors[path] = message;
+    for (const [path, message] of Object.entries(cross(number))) if (message && !errors[path]) errors[path] = message;
   }
 
   const order = Object.keys(specs);

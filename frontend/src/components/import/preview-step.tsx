@@ -139,7 +139,7 @@ export function PreviewStep({
           <p className="mt-1 text-sm text-fg-muted">{lead}</p>
 
           {rowsTotal > 0 ? (
-            <dl className="mt-5 grid grid-cols-3 gap-x-4 gap-y-5 rounded-lg border border-border bg-surface-2/40 p-4 sm:grid-cols-4 lg:grid-cols-7">
+            <dl className="mt-5 grid grid-cols-3 gap-x-4 gap-y-5 rounded-lg border border-border bg-surface-2/40 p-4 sm:grid-cols-4 lg:grid-cols-8">
               <Metric label="Nya resor" value={formatNumber(rowsNew, 0)} tone={rowsNew > 0 ? "accent" : undefined} />
               <Metric
                 label="Dubbletter"
