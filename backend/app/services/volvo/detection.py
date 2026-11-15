@@ -56,6 +56,7 @@ logger = logging.getLogger(__name__)
 CLOCK_SKEW = timedelta(minutes=2)
 ROAD_FACTOR = 1.3  # väg/fågelväg vid uppskattning av mycket korta förflyttningar
 LAG_KM = 2.0  # mätarställning som släpar efter positionsrapporten
+LAG_SETTLE_FACTOR = 3  # längre väntan när bara mätarställning eller position har ändrats
 MAX_AVG_SPEED_KMH = 130.0  # högsta rimliga snittfart (ger senaste möjliga start)
 VOID_REASON_SUPERSEDED = "Ersatt av importerad originalresa"
 _USER_SOURCES = (DecisionSource.USER, DecisionSource.HA)
@@ -144,6 +145,18 @@ def _settled(steps: list[Step], settings: dict[str, Any]) -> bool:
     stable = latest_seen - stable_since
     settle = timedelta(minutes=float(settings.get("settle_minutes", 10)))
     sightings = sum(s.obs.seen_count or 1 for s in tail)
+
+    # Mätarställning och position kommer från olika API:er och kan släpa efter varandra.
+    # Har bara den ena ändrats (och den andra är känd) väntar vi längre innan rörelsen
+    # stängs, så att ett sent värde hamnar i samma resa i stället för att bli en ny
+    # resa för samma körning (dubbla kilometer).
+    odo_changed = any(s.odo_moved for s in steps)
+    pos_changed = any(s.pos_moved for s in steps)
+    one_sided = (pos_changed and not odo_changed and final.eff.odo is not None) or (
+        odo_changed and not pos_changed and final.eff.has_pos
+    )
+    if one_sided:
+        return stable >= LAG_SETTLE_FACTOR * settle
 
     last = tail[-1].obs
     engine_obs = next((s.obs for s in reversed(tail) if s.obs.engine_running is not None), None)
@@ -347,8 +360,10 @@ def _raw_from_leg(
     else:
         earliest = min(earliest, latest)
 
-    start_loc, _ = places.resolve_position(db, user_id, leg.start.lat, leg.start.lon)
-    end_loc, _ = places.resolve_position(db, user_id, leg.end.lat, leg.end.lon)
+    # Demoplatser matchas aldrig mot ett riktigt fordon (och tvärtom).
+    demo = bool(vehicle.is_demo)
+    start_loc, _ = places.resolve_position(db, user_id, leg.start.lat, leg.start.lon, demo=demo)
+    end_loc, _ = places.resolve_position(db, user_id, leg.end.lat, leg.end.lon, demo=demo)
     obs_ids = [str(leg.start_obs.id)] + [str(s.obs.id) for s in leg.steps]
     raw = RawTrip(
         vehicle_id=vehicle.id,
@@ -392,6 +407,38 @@ def _raw_from_leg(
     return raw
 
 
+def _anchor_eff(db: Session, vehicle_id: uuid.UUID, anchor: VehicleObservation) -> Eff:
+    """Ankarets kända läge, med ärvda värden från tidigare observationer.
+
+    Saknar ankarraden mätarställning eller position (t.ex. ett misslyckat anrop) används
+    det senast kända värdet före ankaret. Annars skulle nästa ökning inte märkas och den
+    körda sträckan tappas utan spår.
+    """
+    eff = Eff.carry(None, anchor)
+    base = (VehicleObservation.vehicle_id == vehicle_id, VehicleObservation.fetched_at <= anchor.fetched_at)
+    if eff.odo is None:
+        row = db.execute(
+            select(VehicleObservation.odometer_km, VehicleObservation.odometer_reported_at)
+            .where(*base, VehicleObservation.odometer_km.is_not(None))
+            .order_by(VehicleObservation.fetched_at.desc())
+            .limit(1)
+        ).first()
+        if row is not None:
+            eff.odo, eff.odo_ts = row
+    if not eff.has_pos:
+        rows = db.execute(
+            select(VehicleObservation.latitude, VehicleObservation.longitude, VehicleObservation.position_reported_at)
+            .where(*base, VehicleObservation.latitude.is_not(None), VehicleObservation.longitude.is_not(None))
+            .order_by(VehicleObservation.fetched_at.desc())
+            .limit(20)
+        ).all()
+        for lat, lon, ts in rows:
+            if valid_coordinates(lat, lon):
+                eff.lat, eff.lon, eff.pos_ts = lat, lon, ts
+                break
+    return eff
+
+
 def process_vehicle(
     db: Session,
     vehicle: Vehicle,
@@ -429,7 +476,7 @@ def process_vehicle(
             return []
         anchor = pending.pop(0)
         anchor.processed_at = now
-    anchor_eff = Eff.carry(None, anchor)
+    anchor_eff = _anchor_eff(db, vehicle.id, anchor)
     prev_eff = anchor_eff
     steps: list[Step] = []
     created: list[RawTrip] = []

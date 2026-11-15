@@ -24,10 +24,17 @@ export function PeriodPicker({ value, onChange }: { value: ExportPeriod; onChang
   const month = value.kind === "month" ? value.month : value.from.slice(0, 7);
   const canNext = !custom && month < max;
 
+  // URL:en uppdateras asynkront – snabba tryck i följd ska ändå stega en månad var.
+  const latest = React.useRef(month);
+  React.useEffect(() => {
+    latest.current = month;
+  }, [month]);
+
   const step = (delta: number) => {
     if (custom) return;
-    const next = shiftMonth(month, delta);
+    const next = shiftMonth(latest.current, delta);
     if (next > max) return;
+    latest.current = next;
     onChange({ kind: "month", month: next });
   };
 

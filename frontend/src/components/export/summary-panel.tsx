@@ -18,6 +18,7 @@ export function SummaryPanel({
   onCreate,
   onDownloadAgain,
   footer,
+  hideFilename,
   className,
 }: {
   preview: ExportPreview;
@@ -28,6 +29,8 @@ export function SummaryPanel({
   onCreate: () => void;
   onDownloadAgain: (job: ExportJob) => void;
   footer?: React.ReactNode;
+  /** Den detaljerade arbetsboken får ett annat filnamn än förhandsvisningens. */
+  hideFilename?: boolean;
   className?: string;
 }) {
   const t = preview.totals;
@@ -66,9 +69,11 @@ export function SummaryPanel({
         {creating ? null : <FileSpreadsheet aria-hidden />}
         {creating ? "Skapar filen…" : "Skapa Excel"}
       </Button>
-      <p className="mt-2 truncate text-center font-mono text-[11px] text-fg-subtle" title={preview.filename}>
-        {preview.filename}
-      </p>
+      {hideFilename ? null : (
+        <p className="mt-2 truncate text-center font-mono text-[11px] text-fg-subtle" title={preview.filename}>
+          {preview.filename}
+        </p>
+      )}
 
       {created ? (
         <div role="status" className="mt-4 flex items-center gap-2 rounded-lg bg-ok-soft px-3 py-2 text-[13px] text-ok-ink">

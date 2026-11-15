@@ -22,7 +22,7 @@ from app.models.enums import IntegrationProvider, IntegrationStatus, LocationTyp
 from app.services import audit, integrations, vehicles
 from app.services.places import registry as places
 from app.services.places.normalize import haversine_m
-from app.services.volvo import collector, oauth
+from app.services.volvo import collector, detection, oauth
 from app.services.volvo.client import ApiResult, QuotaTracker, VolvoError
 
 DEMO_VIN = "DEMO0000000000001"
@@ -301,12 +301,16 @@ class _Sim:
         self._set(**changes)
         self.t = arrive
 
-    def settle(self) -> None:
-        """Pollar tills resan bekräftats avslutad (längre än inställd stilleståndstid)."""
+    def settle(self, factor: float = 1) -> None:
+        """Pollar tills resan bekräftats avslutad (längre än inställd stilleståndstid).
+
+        ``factor`` > 1 när bara mätarställningen ändrats: detekteringen väntar då längre
+        på en eventuellt eftersläpande positionsrapport.
+        """
         from app.services import settings as settings_svc
 
         settle = float(settings_svc.get_section(self.db, self.vehicle.owner_user_id, "volvo")["settle_minutes"])
-        self.wait(settle + 2 * POLL.total_seconds() / 60)
+        self.wait(factor * settle + 2 * POLL.total_seconds() / 60)
 
 
 def _duration_estimate(scenario: str) -> timedelta:
@@ -315,8 +319,48 @@ def _duration_estimate(scenario: str) -> timedelta:
         "short_stop": timedelta(minutes=85),
         "customer_visit": timedelta(minutes=130),
         "silent": timedelta(minutes=140),
-        "round_trip": timedelta(minutes=70),
+        "round_trip": timedelta(minutes=90),
     }[scenario]
+
+
+def _clear_demo_places_on_real_trips(db: Session, loc_ids: list[uuid.UUID]) -> None:
+    """Tar bort demoplatsens adress från riktiga, rekonstruerade resor.
+
+    Adressen kom då enbart från demoplatsen (en påhittad uppgift). Importerade resor
+    behåller sin originaladress. Journalresorna räknas om.
+    """
+    from app.services.trips import segments as seg
+
+    names = {
+        loc.id: {v for v in (loc.address, loc.name) if v}
+        for loc in db.execute(select(M.KnownLocation).where(M.KnownLocation.id.in_(loc_ids))).scalars()
+    }
+    raws = db.execute(
+        select(M.RawTrip).where(
+            M.RawTrip.import_batch_id.is_(None),
+            M.RawTrip.start_location_id.in_(loc_ids) | M.RawTrip.end_location_id.in_(loc_ids),
+        )
+    ).scalars().all()
+    touched: set[uuid.UUID] = set()
+    for raw in raws:
+        if raw.start_location_id in names and raw.start_address in names[raw.start_location_id]:
+            raw.start_address = None
+        if raw.end_location_id in names and raw.end_address in names[raw.end_location_id]:
+            raw.end_address = None
+        raw.start_location_id = None if raw.start_location_id in names else raw.start_location_id
+        raw.end_location_id = None if raw.end_location_id in names else raw.end_location_id
+        touched.add(raw.id)
+    if not touched:
+        return
+    db.flush()
+    trip_ids = db.execute(
+        select(M.TripSegment.logical_trip_id).where(M.TripSegment.raw_trip_id.in_(touched)).distinct()
+    ).scalars().all()
+    for trip_id in trip_ids:
+        trip = seg.load_trip(db, trip_id)
+        if trip is not None:
+            seg.refresh_logical(db, trip)
+    db.flush()
 
 
 def simulate_trip(db: Session, user_id: uuid.UUID, scenario: str | None = None, *, now: datetime | None = None) -> dict[str, Any]:
@@ -355,7 +399,7 @@ def simulate_trip(db: Session, user_id: uuid.UUID, scenario: str | None = None, 
         sim.drive("hotel" if place != "hotel" else "home", observed=False)
     elif scenario == "round_trip":
         sim.drive(place, km=24, report_position=False)
-    sim.settle()
+    sim.settle(detection.LAG_SETTLE_FACTOR if scenario == "round_trip" else 1)
 
     demo = _demo_cfg(conn)
     demo["scenario_index"] = int(demo.get("scenario_index", 0)) + 1
@@ -455,6 +499,7 @@ def disable(db: Session, user_id: uuid.UUID) -> dict[str, int]:
     ]
     if loc_ids:
         removed["locations"] = len(loc_ids)
+        _clear_demo_places_on_real_trips(db, loc_ids)
         db.execute(update(M.RawTrip).where(M.RawTrip.start_location_id.in_(loc_ids)).values(start_location_id=None))
         db.execute(update(M.RawTrip).where(M.RawTrip.end_location_id.in_(loc_ids)).values(end_location_id=None))
         db.execute(delete(M.WorkplacePeriod).where(M.WorkplacePeriod.location_id.in_(loc_ids)))

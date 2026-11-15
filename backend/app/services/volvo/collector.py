@@ -318,6 +318,15 @@ def update_capabilities(vehicle: Vehicle, results: dict[str, ApiResult], now: da
         entry["label"] = ep.label
         entry["api"] = ep.api
         state = _cap_state(result)
+        if state == C.CAP_UNSUPPORTED and entry.get("state") == C.CAP_SUPPORTED:
+            # En endpoint som fungerat nedgraderas inte på ett enstaka 403/404 (då hämtas den
+            # inte på ett dygn och körda km kan tappas) – först efter flera svar i rad.
+            streak = int(entry.get("unsupported_streak") or 0) + 1
+            entry["unsupported_streak"] = streak
+            if streak < C.UNSUPPORTED_CONFIRMATIONS:
+                state = None
+        elif state is not None:
+            entry.pop("unsupported_streak", None)
         if state is not None:
             entry.update({"state": state, "http_status": result.http_status, "checked_at": now.isoformat()})
             entry["message"] = None if result.ok else result.message

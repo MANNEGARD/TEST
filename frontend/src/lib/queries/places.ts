@@ -22,7 +22,7 @@ import { invalidateJournalData, qk } from "./keys";
  */
 
 export const placeKeys = {
-  all: ["places"] as const,
+  all: qk.places.all,
   list: (includeDemo: boolean) => ["places", "list", { includeDemo }] as const,
   suggestions: ["places", "suggestions"] as const,
   patterns: ["learning", "patterns"] as const,

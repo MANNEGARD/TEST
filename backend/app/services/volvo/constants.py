@@ -127,6 +127,8 @@ CAP_UNSUPPORTED = "unsupported"
 CAP_NO_DATA = "no_data"
 CAP_UNKNOWN = "unknown"
 REPROBE_UNSUPPORTED_HOURS = 24
+# Antal 403/404-svar i rad innan en tidigare fungerande endpoint räknas som ej stödd.
+UNSUPPORTED_CONFIRMATIONS = 3
 
 MODE_OAUTH = "oauth"
 MODE_TEST_TOKEN = "test_token"  # noqa: S105 - lägesnamn, ingen hemlighet

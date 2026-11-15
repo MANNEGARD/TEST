@@ -110,7 +110,7 @@ _REDACTED = "[borttaget]"
 # Gatuadress med nummer, t.ex. "Storgatan 5" eller "Västra vägen 12B".
 _STREET_RE = re.compile(
     r"\b[0-9A-Za-zÀ-ÖØ-öø-ÿ-]*(?:gatan|gata|vägen|väg|gränd|gränden|stigen|backen|allén|allé|torget|torg|leden|"
-    r"plan|platsen|stråket|kajen|esplanaden|parken)\s+\d+\s*[A-Za-z]?\b",
+    r"platsen|stråket|kajen|esplanaden)\s+\d+\s*[A-Za-z]?\b",
     re.IGNORECASE,
 )
 # Decimaltal med minst fyra decimaler (koordinater).

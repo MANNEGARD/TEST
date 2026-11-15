@@ -145,7 +145,7 @@ export function AttentionCard({ items, className }: { items: Item[]; className?:
                 {it.text}
               </p>
               {it.action ? (
-                <Button asChild variant="link" size="sm" className="mt-0.5 text-[13px]">
+                <Button asChild variant={it.tone === "action" ? "secondary" : "link"} size={it.tone === "action" ? "xs" : "sm"} className={it.tone === "action" ? "mt-2" : "mt-0.5 text-[13px]"}>
                   <Link href={it.action.href}>
                     {it.action.label} <ArrowRight aria-hidden />
                   </Link>

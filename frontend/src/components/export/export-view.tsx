@@ -106,6 +106,7 @@ export function ExportView() {
             created={created?.key === rangeKey ? created.job : null}
             onCreate={onCreate}
             onDownloadAgain={startDownload}
+            hideFilename={detailed}
             footer={!checks.isPending && !items.length ? <AllClear periodLabel={p.period_label} /> : null}
           />
           {checks.isPending ? null : <AttentionCard items={items} />}

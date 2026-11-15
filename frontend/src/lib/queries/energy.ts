@@ -22,7 +22,7 @@ import { qk } from "./keys";
  */
 
 export const energyKeys = {
-  all: ["energy"] as const,
+  all: qk.energy.all,
   summary: (vehicleId: string | undefined, params: Record<string, unknown>) => ["energy", "summary", vehicleId, params] as const,
   fuel: (vehicleId: string | undefined, bounds: PeriodBounds) => ["energy", "fuel", vehicleId, bounds] as const,
   charging: (vehicleId: string | undefined, bounds: PeriodBounds) => ["energy", "charging", vehicleId, bounds] as const,

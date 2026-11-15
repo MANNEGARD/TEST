@@ -11,6 +11,11 @@ const nextConfig: NextConfig = {
   poweredByHeader: false,
   reactStrictMode: true,
   devIndicators: false,
+  experimental: {
+    // Uppladdningar (import, kvitton, backup) passerar proxyn – standard är 10 MB.
+    // Backend avgör den verkliga gränsen och svarar 413 med svensk text.
+    proxyClientMaxBodySize: "25mb",
+  },
   turbopack: {
     rules: {
       "*.css": {

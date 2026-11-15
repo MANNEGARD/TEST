@@ -64,7 +64,7 @@ export function PlaceSheet({
     <Sheet open={!!place} onOpenChange={(o) => !o && onClose()}>
       <SheetContent
         side="right"
-        className="w-[min(480px,100vw)] gap-5"
+        className="w-[min(480px,100vw)] gap-0 overflow-hidden p-0"
         onOpenAutoFocus={(e) => {
           // Fokusera panelen, inte namnfältet – annars fälls tangentbordet upp direkt på mobil.
           e.preventDefault();
@@ -198,7 +198,7 @@ function PlaceEditor({
 
   return (
     <>
-      <SheetHeader className="gap-3">
+      <SheetHeader className="shrink-0 gap-3 border-b border-border px-5 py-4 pr-12">
         <div className="flex items-start gap-3">
           <PlaceAvatar type={place.type} confirmed={place.confirmed} className="mt-0.5" />
           <div className="min-w-0">
@@ -221,221 +221,223 @@ function PlaceEditor({
         ) : null}
       </SheetHeader>
 
-      <section aria-label="Besök" className="rounded-lg bg-surface-2/70 px-4 py-3 text-sm">
-        {place.visit_count > 0 ? (
-          <>
-            <dl className="grid grid-cols-3 gap-3">
-              <div>
-                <dt className="text-xs text-fg-muted">Besök</dt>
-                <dd className="mt-0.5 font-mono font-medium">{formatNumber(place.visit_count, 0)}</dd>
-              </div>
-              <div>
-                <dt className="text-xs text-fg-muted">Körsträcka hit</dt>
-                <dd className="mt-0.5 font-mono font-medium">{formatMil(stats.km)}</dd>
-              </div>
-              <div>
-                <dt className="text-xs text-fg-muted">Senast</dt>
-                <dd className="mt-0.5 font-mono font-medium">{formatDate(place.last_visited_at)}</dd>
-              </div>
-            </dl>
-            {stats.most_common_category || purposes.length ? (
-              <div className="mt-3 space-y-2 border-t border-border pt-3">
-                {stats.most_common_category ? (
-                  <p className="flex flex-wrap items-center gap-2 text-xs text-fg-muted">
-                    Oftast <CategoryPill category={stats.most_common_category} size="sm" />
-                    <span className="num">
-                      {formatNumber(stats.work ?? 0, 0)} arbete · {formatNumber(stats.private ?? 0, 0)} privat
-                    </span>
-                  </p>
-                ) : null}
-                {purposes.length ? (
-                  <ul className="space-y-0.5 text-[13px]" aria-label="Vanligaste syften">
-                    {purposes.slice(0, 3).map((p) => (
-                      <li key={p.text} className="flex items-baseline justify-between gap-3">
-                        <span className="min-w-0 truncate">{p.text}</span>
-                        <span className="shrink-0 font-mono text-xs text-fg-muted">{formatNumber(p.count, 0)}×</span>
-                      </li>
-                    ))}
-                  </ul>
-                ) : null}
-              </div>
-            ) : null}
-            {place.address ? (
-              <Link
-                href={`/journal?q=${encodeURIComponent(place.address)}`}
-                className="mt-3 inline-flex items-center gap-1 rounded-sm text-[13px] font-medium text-accent-ink underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-ring"
-              >
-                Visa resorna i körjournalen <ArrowRight className="size-3.5" aria-hidden />
-              </Link>
-            ) : null}
-          </>
-        ) : (
-          <p className="text-fg-muted">Inga resor hit ännu.</p>
-        )}
-      </section>
-
-      {suggestion ? (
-        <div className="flex items-start gap-2.5 rounded-lg border border-accent/30 bg-accent-soft/60 p-3 text-sm">
-          <Sparkles className="mt-0.5 size-4 shrink-0 text-accent-ink" aria-hidden />
-          <div className="min-w-0 flex-1 space-y-2">
-            <p>
-              <span className="font-medium">
-                Förslag: {typeLabel(suggestion.type)}
-                {suggestion.name ? ` – ${suggestion.name}` : ""}
-              </span>
-              <span className="block text-fg-muted">{suggestionText(place.suggestion_reason)}</span>
-            </p>
-            {suggestionApplied ? (
-              <p className="inline-flex items-center gap-1.5 text-xs font-medium text-accent-ink">
-                <Check className="size-3.5" aria-hidden /> Ifyllt nedan – spara för att bekräfta
-              </p>
-            ) : (
-              <Button size="sm" onClick={applySuggestion}>
-                Använd förslaget
-              </Button>
-            )}
-          </div>
-        </div>
-      ) : null}
-
-      <form id="place-form" onSubmit={submit} className="grid gap-4" noValidate>
-        <div className="space-y-1.5">
-          <Label htmlFor="place-name">Namn</Label>
-          <Input id="place-name" value={name} onChange={(e) => setName(e.target.value)} maxLength={200} required autoComplete="off" aria-invalid={!name.trim() || undefined} />
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="place-type">Typ</Label>
-          <LocationTypeSelect
-            id="place-type"
-            value={type}
-            invalid={!!homeConflict}
-            onChange={(t) => {
-              setType(t);
-              setHomeConflict(null);
-            }}
-          />
-          {homeConflict ? (
-            <div role="alert" className="space-y-2 rounded-md bg-err-soft px-3 py-2.5 text-sm text-err-ink">
-              <p className="flex items-center gap-1.5 font-medium">
-                <Home className="size-4 shrink-0" aria-hidden /> Du har redan ett hem
-              </p>
-              <p>
-                {otherHome ? (
-                  <>
-                    <strong className="font-medium">{otherHome.name}</strong> är redan markerad som hem, och bara en plats kan vara det.
-                  </>
-                ) : (
-                  homeConflict
-                )}{" "}
-                Byt typ på den andra platsen först – eller slå ihop platserna om det är samma ställe.
-              </p>
-              {otherHome ? (
-                <div className="flex flex-wrap gap-2">
-                  <Button size="sm" onClick={() => onOpenPlace(otherHome.id)}>
-                    Öppna {otherHome.name}
-                  </Button>
-                  <Button
-                    size="sm"
-                    onClick={() => {
-                      setMergeTarget(otherHome.id);
-                      setAdvanced("merge");
-                      window.requestAnimationFrame(() => document.getElementById("place-merge")?.scrollIntoView({ block: "nearest" }));
-                    }}
-                  >
-                    <Merge aria-hidden /> Slå ihop platserna
-                  </Button>
+      <div className="scrollbar-thin flex flex-1 flex-col gap-5 overflow-y-auto px-5 py-5">
+        <section aria-label="Besök" className="rounded-lg bg-surface-2/70 px-4 py-3 text-sm">
+          {place.visit_count > 0 ? (
+            <>
+              <dl className="grid grid-cols-3 gap-3">
+                <div>
+                  <dt className="text-xs text-fg-muted">Besök</dt>
+                  <dd className="mt-0.5 font-mono font-medium">{formatNumber(place.visit_count, 0)}</dd>
+                </div>
+                <div>
+                  <dt className="text-xs text-fg-muted">Körsträcka hit</dt>
+                  <dd className="mt-0.5 font-mono font-medium">{formatMil(stats.km)}</dd>
+                </div>
+                <div>
+                  <dt className="text-xs text-fg-muted">Senast</dt>
+                  <dd className="mt-0.5 font-mono font-medium">{formatDate(place.last_visited_at)}</dd>
+                </div>
+              </dl>
+              {stats.most_common_category || purposes.length ? (
+                <div className="mt-3 space-y-2 border-t border-border pt-3">
+                  {stats.most_common_category ? (
+                    <p className="flex flex-wrap items-center gap-2 text-xs text-fg-muted">
+                      Oftast <CategoryPill category={stats.most_common_category} size="sm" />
+                      <span className="num">
+                        {formatNumber(stats.work ?? 0, 0)} arbete · {formatNumber(stats.private ?? 0, 0)} privat
+                      </span>
+                    </p>
+                  ) : null}
+                  {purposes.length ? (
+                    <ul className="space-y-0.5 text-[13px]" aria-label="Vanligaste syften">
+                      {purposes.slice(0, 3).map((p) => (
+                        <li key={p.text} className="flex items-baseline justify-between gap-3">
+                          <span className="min-w-0 truncate">{p.text}</span>
+                          <span className="shrink-0 font-mono text-xs text-fg-muted">{formatNumber(p.count, 0)}×</span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
                 </div>
               ) : null}
-            </div>
-          ) : null}
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="place-company">
-            Företag <span className="font-normal text-fg-muted">(valfritt)</span>
-          </Label>
-          <Input id="place-company" value={company} onChange={(e) => setCompany(e.target.value)} maxLength={200} autoComplete="off" />
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="place-notes">
-            Anteckning <span className="font-normal text-fg-muted">(valfritt)</span>
-          </Label>
-          <Textarea id="place-notes" rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} maxLength={2000} />
-        </div>
+              {place.address ? (
+                <Link
+                  href={`/journal?q=${encodeURIComponent(place.address)}`}
+                  className="mt-3 inline-flex items-center gap-1 rounded-sm text-[13px] font-medium text-accent-ink underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-ring"
+                >
+                  Visa resorna i körjournalen <ArrowRight className="size-3.5" aria-hidden />
+                </Link>
+              ) : null}
+            </>
+          ) : (
+            <p className="text-fg-muted">Inga resor hit ännu.</p>
+          )}
+        </section>
 
-        <fieldset className="space-y-2.5">
-          <div className="flex items-center justify-between gap-2">
-            <legend className="float-left text-[13px] font-medium">Position</legend>
-            {pos ? (
-              <Button variant="ghost" size="xs" onClick={clearPosition}>
-                <X aria-hidden /> Ta bort position
-              </Button>
+        {suggestion ? (
+          <div className="flex items-start gap-2.5 rounded-lg border border-accent/30 bg-accent-soft/60 p-3 text-sm">
+            <Sparkles className="mt-0.5 size-4 shrink-0 text-accent-ink" aria-hidden />
+            <div className="min-w-0 flex-1 space-y-2">
+              <p>
+                <span className="font-medium">
+                  Förslag: {typeLabel(suggestion.type)}
+                  {suggestion.name ? ` – ${suggestion.name}` : ""}
+                </span>
+                <span className="block text-fg-muted">{suggestionText(place.suggestion_reason)}</span>
+              </p>
+              {suggestionApplied ? (
+                <p className="inline-flex items-center gap-1.5 text-xs font-medium text-accent-ink">
+                  <Check className="size-3.5" aria-hidden /> Ifyllt nedan – spara för att bekräfta
+                </p>
+              ) : (
+                <Button size="sm" onClick={applySuggestion}>
+                  Använd förslaget
+                </Button>
+              )}
+            </div>
+          </div>
+        ) : null}
+
+        <form id="place-form" onSubmit={submit} className="grid gap-4" noValidate>
+          <div className="space-y-1.5">
+            <Label htmlFor="place-name">Namn</Label>
+            <Input id="place-name" value={name} onChange={(e) => setName(e.target.value)} maxLength={200} required autoComplete="off" aria-invalid={!name.trim() || undefined} />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="place-type">Typ</Label>
+            <LocationTypeSelect
+              id="place-type"
+              value={type}
+              invalid={!!homeConflict}
+              onChange={(t) => {
+                setType(t);
+                setHomeConflict(null);
+              }}
+            />
+            {homeConflict ? (
+              <div role="alert" className="space-y-2 rounded-md bg-err-soft px-3 py-2.5 text-sm text-err-ink">
+                <p className="flex items-center gap-1.5 font-medium">
+                  <Home className="size-4 shrink-0" aria-hidden /> Du har redan ett hem
+                </p>
+                <p>
+                  {otherHome ? (
+                    <>
+                      <strong className="font-medium">{otherHome.name}</strong> är redan markerad som hem, och bara en plats kan vara det.
+                    </>
+                  ) : (
+                    homeConflict
+                  )}{" "}
+                  Byt typ på den andra platsen först – eller slå ihop platserna om det är samma ställe.
+                </p>
+                {otherHome ? (
+                  <div className="flex flex-wrap gap-2">
+                    <Button size="sm" onClick={() => onOpenPlace(otherHome.id)}>
+                      Öppna {otherHome.name}
+                    </Button>
+                    <Button
+                      size="sm"
+                      onClick={() => {
+                        setMergeTarget(otherHome.id);
+                        setAdvanced("merge");
+                        window.requestAnimationFrame(() => document.getElementById("place-merge")?.scrollIntoView({ block: "nearest" }));
+                      }}
+                    >
+                      <Merge aria-hidden /> Slå ihop platserna
+                    </Button>
+                  </div>
+                ) : null}
+              </div>
             ) : null}
           </div>
-          {mapSettings.loading ? (
-            <Skeleton className="h-56 w-full rounded-lg" />
-          ) : mapSettings.enabled && mapSettings.tilesUrl ? (
-            <PositionPicker value={pos} radius={radiusValue && !Number.isNaN(radiusValue) ? radiusValue : place.radius_m} onChange={pick} tilesUrl={mapSettings.tilesUrl} context={context} />
-          ) : (
-            <MapPlaceholder
-              title="Kartor är avstängda"
-              description="Kartvisning är avstängd i sekretessinställningarna. Du kan ange koordinater för hand nedan."
-              className="h-40 min-h-0"
-            />
-          )}
-          <p className="flex items-center gap-1.5 text-xs text-fg-muted" aria-live="polite">
-            {pos ? (
-              <>
-                <span className="font-mono text-fg">
-                  {formatNumber(pos.lat, 5, 5)}, {formatNumber(pos.lon, 5, 5)}
-                </span>
-                {patch.latitude === undefined && place.coordinate_source ? <span>· {COORDINATE_SOURCE[place.coordinate_source] ?? place.coordinate_source}</span> : null}
-              </>
-            ) : (
-              <>
-                <MapPinOff className="size-3.5 shrink-0" aria-hidden />
-                <span>
-                  <span className="font-medium text-fg">Ingen position satt.</span> Platsen känns igen på adressen.
-                </span>
-              </>
-            )}
-          </p>
-          <div className="grid grid-cols-3 gap-3">
-            <div className="space-y-1.5">
-              <Label htmlFor="place-lat" className="text-xs font-normal text-fg-muted">
-                Latitud
-              </Label>
-              <Input id="place-lat" inputMode="decimal" value={latText} onChange={(e) => typeCoord("lat", e.target.value)} placeholder="59,3293" autoComplete="off" />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="place-lon" className="text-xs font-normal text-fg-muted">
-                Longitud
-              </Label>
-              <Input id="place-lon" inputMode="decimal" value={lonText} onChange={(e) => typeCoord("lon", e.target.value)} placeholder="18,0686" autoComplete="off" />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="place-radius" className="text-xs font-normal text-fg-muted">
-                Geofence (m)
-              </Label>
-              <Input id="place-radius" type="number" inputMode="numeric" min={30} max={5000} step={10} value={radius} onChange={(e) => setRadius(e.target.value)} />
-            </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="place-company">
+              Företag <span className="font-normal text-fg-muted">(valfritt)</span>
+            </Label>
+            <Input id="place-company" value={company} onChange={(e) => setCompany(e.target.value)} maxLength={200} autoComplete="off" />
           </div>
-          <FieldHint>Resor som slutar inom geofencen kopplas till platsen, även om adressen skiljer sig.</FieldHint>
-        </fieldset>
-        <FieldError>{error}</FieldError>
-      </form>
+          <div className="space-y-1.5">
+            <Label htmlFor="place-notes">
+              Anteckning <span className="font-normal text-fg-muted">(valfritt)</span>
+            </Label>
+            <Textarea id="place-notes" rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} maxLength={2000} />
+          </div>
 
-      <PlaceAdvanced
-        place={place}
-        places={places}
-        open={advanced}
-        onOpenChange={setAdvanced}
-        mergeTarget={mergeTarget}
-        onMergeTarget={setMergeTarget}
-        onMerged={(keepId) => (keepId === place.id ? setAdvanced(null) : onOpenPlace(keepId))}
-        onDeleted={onClose}
-      />
+          <fieldset className="space-y-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <legend className="float-left text-[13px] font-medium">Position</legend>
+              {pos ? (
+                <Button variant="ghost" size="xs" onClick={clearPosition}>
+                  <X aria-hidden /> Ta bort position
+                </Button>
+              ) : null}
+            </div>
+            {mapSettings.loading ? (
+              <Skeleton className="h-56 w-full rounded-lg" />
+            ) : mapSettings.enabled && mapSettings.tilesUrl ? (
+              <PositionPicker value={pos} radius={radiusValue && !Number.isNaN(radiusValue) ? radiusValue : place.radius_m} onChange={pick} tilesUrl={mapSettings.tilesUrl} context={context} />
+            ) : (
+              <MapPlaceholder
+                title="Kartor är avstängda"
+                description="Kartvisning är avstängd i sekretessinställningarna. Du kan ange koordinater för hand nedan."
+                className="h-40 min-h-0"
+              />
+            )}
+            <p className="flex items-center gap-1.5 text-xs text-fg-muted" aria-live="polite">
+              {pos ? (
+                <>
+                  <span className="font-mono text-fg">
+                    {formatNumber(pos.lat, 5, 5)}, {formatNumber(pos.lon, 5, 5)}
+                  </span>
+                  {patch.latitude === undefined && place.coordinate_source ? <span>· {COORDINATE_SOURCE[place.coordinate_source] ?? place.coordinate_source}</span> : null}
+                </>
+              ) : (
+                <>
+                  <MapPinOff className="size-3.5 shrink-0" aria-hidden />
+                  <span>
+                    <span className="font-medium text-fg">Ingen position satt.</span> Platsen känns igen på adressen.
+                  </span>
+                </>
+              )}
+            </p>
+            <div className="grid grid-cols-3 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="place-lat" className="text-xs font-normal text-fg-muted">
+                  Latitud
+                </Label>
+                <Input id="place-lat" inputMode="decimal" value={latText} onChange={(e) => typeCoord("lat", e.target.value)} placeholder="59,3293" autoComplete="off" />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="place-lon" className="text-xs font-normal text-fg-muted">
+                  Longitud
+                </Label>
+                <Input id="place-lon" inputMode="decimal" value={lonText} onChange={(e) => typeCoord("lon", e.target.value)} placeholder="18,0686" autoComplete="off" />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="place-radius" className="text-xs font-normal text-fg-muted">
+                  Geofence (m)
+                </Label>
+                <Input id="place-radius" type="number" inputMode="numeric" min={30} max={5000} step={10} value={radius} onChange={(e) => setRadius(e.target.value)} />
+              </div>
+            </div>
+            <FieldHint>Resor som slutar inom geofencen kopplas till platsen, även om adressen skiljer sig.</FieldHint>
+          </fieldset>
+          <FieldError>{error}</FieldError>
+        </form>
 
-      <div className="sticky -bottom-5 z-10 -mx-5 -mb-5 mt-auto flex items-center justify-end gap-2 border-t border-border bg-surface px-5 py-3">
+        <PlaceAdvanced
+          place={place}
+          places={places}
+          open={advanced}
+          onOpenChange={setAdvanced}
+          mergeTarget={mergeTarget}
+          onMergeTarget={setMergeTarget}
+          onMerged={(keepId) => (keepId === place.id ? setAdvanced(null) : onOpenPlace(keepId))}
+          onDeleted={onClose}
+        />
+      </div>
+
+      <div className="flex shrink-0 items-center justify-end gap-2 border-t border-border bg-surface px-5 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
         <Button variant="ghost" onClick={onClose}>
           Avbryt
         </Button>

@@ -4,17 +4,10 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tansta
 import { api, buildUrl } from "../api";
 import type { ExportChecks, ExportJob, ExportPreview, ExportRange } from "../exports-types";
 import { useVehicle } from "../vehicle";
+import { qk } from "./keys";
 
-/**
- * Nycklar för exportsidan. (Ligger här i stället för i keys.ts – se shared_requests:
- * de bör flyttas dit och `invalidateJournalData` bör även invalidera ["exports"].)
- */
-export const exportKeys = {
-  all: ["exports"] as const,
-  preview: (vehicleId: string | undefined, range: ExportRange) => ["exports", "preview", vehicleId, range.from, range.to] as const,
-  checks: (vehicleId: string | undefined, range: ExportRange) => ["exports", "checks", vehicleId, range.from, range.to] as const,
-  list: (vehicleId: string | undefined) => ["exports", "list", vehicleId] as const,
-};
+/** Nycklarna ligger i keys.ts (qk.exports); invalidateJournalData() invaliderar även ["exports"]. */
+const exportKeys = qk.exports;
 
 /** Exakt de rader och summor som Excel-filen kommer att innehålla. */
 export function useExportPreview(range: ExportRange | null) {

@@ -38,9 +38,30 @@ export const qk = {
   learning: {
     feedback: ["learning", "feedback"] as const,
   },
+  /** Exportsidan: förhandsvisning, kontroller och tidigare filer. Beror på resorna och på ersättningsinställningarna. */
+  exports: {
+    all: ["exports"] as const,
+    preview: (vehicleId: string | undefined, range: { from: string; to: string }) =>
+      ["exports", "preview", vehicleId, range.from, range.to] as const,
+    checks: (vehicleId: string | undefined, range: { from: string; to: string }) =>
+      ["exports", "checks", vehicleId, range.from, range.to] as const,
+    list: (vehicleId: string | undefined) => ["exports", "list", vehicleId] as const,
+  },
+  /** Första ledet i platsvyns nycklar (lib/queries/places.ts) – besöksstatistiken bygger på resorna. */
+  places: {
+    all: ["places"] as const,
+  },
+  /** Första ledet i energivyns nycklar (lib/queries/energy.ts) – förbrukningen räknas mot resornas sträcka. */
+  energy: {
+    all: ["energy"] as const,
+  },
 } as const;
 
-/** Invaliderar allt som beror på resornas innehåll. */
+/**
+ * Invaliderar allt som beror på resornas innehåll: körjournal, granskning, översikt,
+ * luckor, export (förhandsvisning/kontroller), platsernas besöksstatistik och energi.
+ * Bara aktiva frågor hämtas om direkt – övriga markeras inaktuella.
+ */
 export function invalidateJournalData(qc: QueryClient): Promise<unknown> {
   return Promise.all([
     qc.invalidateQueries({ queryKey: qk.trips.all }),
@@ -48,5 +69,8 @@ export function invalidateJournalData(qc: QueryClient): Promise<unknown> {
     qc.invalidateQueries({ queryKey: qk.dashboard.all }),
     qc.invalidateQueries({ queryKey: qk.gaps.all }),
     qc.invalidateQueries({ queryKey: qk.learning.feedback }),
+    qc.invalidateQueries({ queryKey: qk.exports.all }),
+    qc.invalidateQueries({ queryKey: qk.places.all }),
+    qc.invalidateQueries({ queryKey: qk.energy.all }),
   ]);
 }

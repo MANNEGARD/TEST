@@ -78,20 +78,25 @@ def resolve_address(
 
 
 def resolve_position(
-    db: Session, user_id: uuid.UUID, lat: float | None, lon: float | None
+    db: Session, user_id: uuid.UUID, lat: float | None, lon: float | None, *, demo: bool | None = None
 ) -> tuple[KnownLocation | None, float | None]:
-    """Närmaste kända plats vars geofence innehåller positionen."""
+    """Närmaste kända plats vars geofence innehåller positionen.
+
+    ``demo=False`` matchar bara verkliga platser (riktigt fordon), ``demo=True`` bara
+    demoplatser (demofordon), ``None`` alla.
+    """
     if not valid_coordinates(lat, lon):
         return None, None
     best: tuple[KnownLocation | None, float | None] = (None, None)
-    rows = db.execute(
-        select(KnownLocation).where(
-            KnownLocation.owner_user_id == user_id,
-            KnownLocation.latitude.is_not(None),
-            KnownLocation.longitude.is_not(None),
-            KnownLocation.merged_into_id.is_(None),
-        )
-    ).scalars()
+    q = select(KnownLocation).where(
+        KnownLocation.owner_user_id == user_id,
+        KnownLocation.latitude.is_not(None),
+        KnownLocation.longitude.is_not(None),
+        KnownLocation.merged_into_id.is_(None),
+    )
+    if demo is not None:
+        q = q.where(KnownLocation.is_demo.is_(demo))
+    rows = db.execute(q).scalars()
     for loc in rows:
         d = haversine_m(lat, lon, loc.latitude, loc.longitude)  # type: ignore[arg-type]
         if d <= max(loc.radius_m, 30) and (best[1] is None or d < best[1]):
