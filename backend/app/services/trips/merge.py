@@ -375,6 +375,10 @@ def _carry_decisions(db: Session, from_trip: LogicalTrip, to_trip: LogicalTrip) 
     återställs resan som den var; ett godkännande av samma kategorier följer med.
     En privat sträcka blir därmed aldrig tjänst för att en åtgärd ångras.
     """
+    # Sessionen flushar inte automatiskt. Delsträckor som byggts om av ett tidigare anrop
+    # (när flera delar förs över till samma resa) saknar annars raw_trip_id, och då skulle
+    # den här delens beslut tappas bort.
+    db.flush()
     ids = _raw_ids(to_trip) & _raw_ids(from_trip)
     if not ids:
         return False

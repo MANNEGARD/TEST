@@ -677,7 +677,8 @@ def test_missing_odometer_item_for_work_trip_in_business_only(db, user, vehicle,
 STRUCTURAL = {"merge", "dissolve", "split", "undo_op", "rules"}
 
 
-@pytest.mark.parametrize("seed", range(12))
+# Fröna 27–184 återskapade ett fel där en ångrad uppdelning tappade beslut på senare delar.
+@pytest.mark.parametrize("seed", [*range(12), 27, 86, 88, 114, 147, 184])
 def test_random_operations_keep_invariants(db, user, vehicle, actor, trips, seed):
     """Slumpade följder av slå ihop / dela / fördela / besluta / ångra.
 
