@@ -4,6 +4,10 @@
 * Regel B – stillestånd > A-gränsen och ≤ ``ask_max_minutes`` (standard 60): fråga.
 * Regel C – längre stillestånd: endast manuell sammanslagning.
 
+Vakten: ett stopp hemma eller vid en bekräftad privat plats slås aldrig ihop när någon
+av resorna är en live-resa. I självgående läge slås live-resor bara ihop vid ett kort
+stopp vid en bekräftad tank- eller laddstation, och inga frågor ställs.
+
 Originalresorna (RawTrip) ändras aldrig. En sammanslagning skapar en ny LogicalTrip
 vars segment pekar på samma RawTrips; källresorna markeras ``merged`` och kan
 återaktiveras. Privat körsträcka omklassas aldrig till tjänst av en sammanslagning,
@@ -21,15 +25,28 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import utcnow
-from app.models import LogicalTrip, MergeDecision, RawTrip, ReviewItem, TripMerge, TripSegment
+from app.models import (
+    KnownLocation,
+    LogicalTrip,
+    MergeDecision,
+    RawTrip,
+    ReviewItem,
+    TripMerge,
+    TripSegment,
+    Vehicle,
+)
 from app.models.enums import (
+    AUTO_APPROVAL_SOURCES,
+    ApprovalSource,
     Category,
+    LocationType,
     LogicalState,
     MergeKind,
     ReviewKind,
     ReviewState,
     ReviewStatus,
     TimeQuality,
+    TripSource,
 )
 from app.services import audit
 from app.services.audit import Actor
@@ -45,6 +62,7 @@ _REVIEW_ORDER = {
     ReviewStatus.APPROVED: 4,
 }
 _EXACT = {TimeQuality.EXACT, TimeQuality.REPORTED}
+_LIVE_SOURCES = (TripSource.VOLVO_API, TripSource.DEMO)
 # Starttid som bara är en gräns (t.ex. endast datum i en import): räkna med gränserna.
 _UNCERTAIN_START = {TimeQuality.BOUNDED, TimeQuality.UNKNOWN}
 # Ett startintervall så brett som (ungefär) ett dygn säger ingenting om stilleståndet.
@@ -285,6 +303,7 @@ def merge_trips(
         merged.review_status = min((t.review_status for t in trips), key=lambda s: _REVIEW_ORDER.get(s, 0))
         confidences = [t.confidence for t in trips if t.confidence is not None]
         merged.confidence = min(confidences) if confidences else None
+        _set_approval(merged, trips)
     else:
         # Motstridiga kategorier: gruppera men kräv manuell fördelning. Ingenting omklassas.
         merged.category = Category.UNDECIDED
@@ -354,6 +373,51 @@ def merge_trips(
     return merged
 
 
+# Vid hopslagning vinner den svagaste godkännandekällan: antaget, övriga automatiska,
+# massgodkännande, ägaren (NULL räknas som ägaren).
+def _approval_rank(source: str | None) -> int:
+    if source == ApprovalSource.ASSUMED:
+        return 0
+    if source in AUTO_APPROVAL_SOURCES:
+        return 1
+    if source == ApprovalSource.BULK:
+        return 2
+    return 3
+
+
+def _set_approval(target: LogicalTrip, sources: list[LogicalTrip]) -> None:
+    """``approval_source``, ``approval_basis`` och ``auto_approved_at`` för en resa som
+    byggts av andra. Bara en godkänd resa har en godkännandekälla."""
+    if target.review_status != ReviewStatus.APPROVED or not sources:
+        target.approval_source = target.approval_basis = target.auto_approved_at = None
+        return
+    weakest = min(sources, key=lambda t: _approval_rank(t.approval_source))
+    target.approval_source = weakest.approval_source
+    target.approval_basis = dict(weakest.approval_basis) if weakest.approval_basis else None
+    target.auto_approved_at = weakest.auto_approved_at
+
+
+def stop_kind(loc: KnownLocation | None) -> str:
+    """Stoppets art för sammanslagningen: home | private | refuel | other.
+
+    Läser bara ``type`` och ``confirmed`` – aldrig kartans förslag (``suggested_type``,
+    ``osm_class``, ``place_kind``).
+    """
+    if loc is None or not loc.confirmed:
+        return "other"
+    if loc.type == LocationType.HOME:
+        return "home"
+    if loc.type == LocationType.PRIVATE:
+        return "private"
+    if loc.type in (LocationType.FUEL_STATION, LocationType.CHARGING_STATION):
+        return "refuel"
+    return "other"
+
+
+def _has_live(trip: LogicalTrip) -> bool:
+    return any(r.source in _LIVE_SOURCES for r in seg.ordered_raws(trip))
+
+
 def _combined_single(values: list[str | None]) -> str | None:
     distinct = {v for v in values if v}
     return next(iter(distinct)) if len(distinct) == 1 else None
@@ -403,6 +467,7 @@ def _carry_decisions(db: Session, from_trip: LogicalTrip, to_trip: LogicalTrip) 
             to_trip.review_status = ReviewStatus.APPROVED
             to_trip.category_source = from_trip.category_source
             to_trip.tax_note = None
+            _set_approval(to_trip, [from_trip])
         return False
     seq_map = {r.id: i for i, r in enumerate(seg.ordered_raws(to_trip))}
     wanted = [
@@ -442,10 +507,12 @@ def _carry_decisions(db: Session, from_trip: LogicalTrip, to_trip: LogicalTrip) 
         to_trip.review_status = from_trip.review_status
         to_trip.confidence = from_trip.confidence
         to_trip.tax_note = from_trip.tax_note
+        _set_approval(to_trip, [from_trip])
     else:
         to_trip.review_status = min(
             (to_trip.review_status, from_trip.review_status), key=lambda st: _REVIEW_ORDER.get(st, 0)
         )
+        _set_approval(to_trip, [to_trip, from_trip])
     if to_trip.category == Category.UNDECIDED and to_trip.review_status not in (ReviewStatus.NEEDS_REVIEW,):
         if any(seg.segment_category(to_trip, s) == Category.UNDECIDED for s in to_trip.segments):
             to_trip.review_status = ReviewStatus.NEEDS_REVIEW
@@ -500,6 +567,9 @@ def _build_part(
         tax_note=trip.tax_note,
         journey_id=trip.journey_id,
         is_favorite=trip.is_favorite,
+        approval_source=trip.approval_source,
+        approval_basis=dict(trip.approval_basis) if trip.approval_basis else None,
+        auto_approved_at=trip.auto_approved_at,
         merge_kind=MergeKind.MANUAL if len(part_raws) > 1 else MergeKind.NONE,
         updated_by=actor.label,
         **_part_texts(trip, sources, ids),
@@ -709,6 +779,11 @@ def evaluate_vehicle(
     if not merge_settings.get("enabled", True):
         return result
 
+    from app.services.classify import autopilot
+
+    vehicle = db.get(Vehicle, vehicle_id)
+    self_driving = vehicle is not None and autopilot.is_active(db, vehicle.owner_user_id)
+
     trips = seg.active_trips(db, vehicle_id)
     i = 0
     while i < len(trips) - 1:
@@ -734,6 +809,18 @@ def evaluate_vehicle(
             result["overlaps"] += 1 if created else 0
             i += 1
             continue
+
+        if verdict in ("auto", "ask") and (_has_live(a) or _has_live(b)):
+            kind = stop_kind(db.get(KnownLocation, prev_raw.end_location_id) if prev_raw.end_location_id else None)
+            if kind in ("home", "private"):
+                # Vakten: ett stopp hemma eller vid en privat plats slås aldrig ihop (A.1).
+                i += 1
+                continue
+            if self_driving and not (verdict == "auto" and kind == "refuel"):
+                # Självgående läge: bara korta stopp vid bekräftad tank- eller laddstation slås
+                # ihop. Allt annat blir separata resor, och ingen fråga ställs.
+                i += 1
+                continue
 
         decision = _decision_for(db, prev_raw.id, next_raw.id)
         # En obesvarad fråga om paret (t.ex. från en import utan automatisk sammanslagning)

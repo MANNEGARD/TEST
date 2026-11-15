@@ -68,7 +68,7 @@ export function TripCard({
         ) : (
           <CategoryToggle value={t.category} onChange={(c) => handlers.onCategory(t, c)} size="md" />
         )}
-        <ReviewStatusBadge status={t.review_status} short />
+        <ReviewStatusBadge status={t.review_status} short approvalSource={t.approval_source} approvalReason={t.approval_reason} />
         {/* "Importerad" + "Importerad" säger samma sak två gånger – källan visas bara när den tillför något. */}
         {t.review_status === "imported" && t.source === "volvo_import" ? null : <SourceBadge source={t.source} short />}
       </div>

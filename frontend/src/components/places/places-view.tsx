@@ -11,6 +11,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatNumber } from "@/lib/format";
 import { usePlaces } from "@/lib/queries/places";
+import { useSettings } from "@/lib/queries/settings";
 import { MemoryTab } from "./memory-tab";
 import { NewPlaceDialog } from "./new-place-dialog";
 import { PlaceList } from "./place-list";
@@ -34,6 +35,8 @@ export function PlacesView() {
   const [selected, setSelected] = React.useState<string | null>(() => params.get("plats"));
   const [newOpen, setNewOpen] = React.useState(false);
   const places = usePlaces();
+  const settings = useSettings();
+  const geocoding = settings.data?.settings.privacy.geocoding_enabled === true;
   const list = places.data ?? [];
   const sheetFocus = useReturnFocus();
   const dialogFocus = useReturnFocus();
@@ -91,6 +94,20 @@ export function PlacesView() {
               <Suggestions onOpenPlace={openPlace} />
               <PlaceList places={list} onOpen={openPlace} onNew={openNew} />
               <PlacesMap places={list} />
+              {geocoding ? (
+                <p className="mt-4 text-xs text-fg-muted" data-testid="osm-attribution">
+                  Adresser för nya platser kommer från OpenStreetMap. Adressdata ©{" "}
+                  <a
+                    href="https://www.openstreetmap.org/copyright"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-accent-ink underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-ring"
+                  >
+                    OpenStreetMap-bidragsgivare
+                  </a>
+                  .
+                </p>
+              ) : null}
             </>
           )}
         </TabsContent>

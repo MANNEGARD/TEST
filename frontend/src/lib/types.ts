@@ -442,7 +442,14 @@ export interface AppSettings {
     map_enabled: boolean;
     observation_retention_days: number;
   };
-  [section: string]: Record<string, unknown>;
+  /** 1.1.0: självgående läge (active_since sätts av DriveLog och kan inte ändras via API:t). */
+  automation?: {
+    mode: "self_driving" | "manual";
+    active_since: string;
+    office_hours: { days: number[]; start: string; end: string };
+    assumption_veto_hours: number;
+  };
+  [section: string]: Record<string, unknown> | undefined;
 }
 
 export interface SettingsResponse {

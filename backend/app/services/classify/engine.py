@@ -620,6 +620,11 @@ def classify_trip(
         return assessment
 
     assessment = _assess(db, trip, prep, user_id=user_id, provider=active_provider, cache=cache)
+    if assessment.review_status == ReviewStatus.AUTO and _autopilot_holds(db, trip, user_id, cache):
+        # Självgående läge: motorns "automatisk preliminär" blir ett förslag, så att resan
+        # antingen godkänns av autopiloten (med skäl) eller ger en fråga (byggkontraktet C.3).
+        assessment.review_status = ReviewStatus.PROPOSED
+        assessment.requires_review = True
     llm_failed = any(s.kind == "ai_unavailable" for s in assessment.signals)
     if not force and retry_llm and llm_failed:
         assessment.changed = False
@@ -700,6 +705,18 @@ def classify_trip(
     seg.refresh_logical(db, trip)
     db.flush()
     return assessment
+
+
+def _autopilot_holds(db: Session, trip: LogicalTrip, user_id: uuid.UUID, cache: dict[str, Any]) -> bool:
+    """Omfattas resan av självgående läge (live-resa efter ``active_since``)?"""
+    from app.services.classify import autopilot
+
+    if "autopilot_since" not in cache:
+        cache["autopilot_since"] = (
+            settings_svc.active_since(db, user_id) if autopilot.is_active(db, user_id) else None
+        )
+    since = cache["autopilot_since"]
+    return since is not None and autopilot.eligible(trip, active_since=since)
 
 
 def _store_purpose(db: Session, trip: LogicalTrip, proposal: PurposeProposal, actor: Actor) -> None:

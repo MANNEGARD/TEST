@@ -25,7 +25,7 @@ from app.models import (
     TripSegment,
     Vehicle,
 )
-from app.models.enums import Category, DecisionSource, LogicalState, ReviewStatus
+from app.models.enums import ApprovalSource, Category, DecisionSource, LogicalState, ReviewStatus
 from app.services import audit
 from app.services import settings as settings_svc
 from app.services.audit import Actor
@@ -48,6 +48,8 @@ _SNAPSHOT_FIELDS = (
     "tax_note",
     "contacts",
     "notes",
+    "approval_source",
+    "approval_basis",
 )
 
 
@@ -184,6 +186,15 @@ def apply_decision(
     if trip.category == Category.PRIVATE and purpose is None and not trip.purpose_confirmed:
         trip.purpose, trip.purpose_source = None, None  # privata resor behöver inget syfte
 
+    if category is not None or purpose is not None or approve:
+        # Ägarens beslut: källan blir ägaren (eller massgodkännandet), aldrig automatiken.
+        if trip.review_status == ReviewStatus.APPROVED:
+            trip.approval_source = ApprovalSource.BULK if channel == "bulk" else ApprovalSource.USER
+        else:
+            trip.approval_source = None
+        trip.approval_basis = None
+        trip.auto_approved_at = None
+
     trip.updated_by = actor.label
     seg.refresh_logical(db, trip)
 
@@ -250,6 +261,11 @@ def apply_decision(
         user_id=user_id,
     )
     db.flush()
+    # Rättelser av automatiska resor (A.2): t.ex. blir en rättad regel "fråga alltid".
+    # Texten till ägaren läses av svaren från telefonen och webben.
+    from app.services.classify import autopilot
+
+    trip._autopilot_notice = autopilot.on_owner_decision(db, trip, before=before, actor=actor)  # type: ignore[attr-defined]
     if rebuild:
         after_decisions(db, user_id=user_id, vehicle_id=trip.vehicle_id, actor=actor)
     return trip
@@ -287,6 +303,10 @@ def after_decisions(db: Session, *, user_id: uuid.UUID, vehicle_id: uuid.UUID, a
             db, trip, user_id=user_id, actor=audit.SYSTEM, provider=None, use_llm=False, settings_cache=cache
         )
     db.flush()
+    # Självgående läge: T och nya regler slår igenom på väntande resor direkt.
+    from app.services.classify import autopilot
+
+    autopilot.run_vehicle(db, user_id=user_id, vehicle=vehicle, actor=audit.SYSTEM)
     for trip in seg.active_trips(db, vehicle_id):
         pipeline.sync_trip_review_items(db, trip, by=actor.label)
     db.flush()

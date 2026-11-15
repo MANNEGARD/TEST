@@ -6706,6 +6706,62 @@
     }
    }
   },
+  "/api/v1/notifications/review-rows/{trip_id}": {
+   "post": {
+    "tags": [
+     "Notifications"
+    ],
+    "summary": "Stämmer eller Fel på en automatiskt godkänd eller antagen rad",
+    "description": "Månadens genomgång (/m/month): ägarens besked om en rad som automatiken avgjorde.\n\n* \"Stämmer\" på en antagen rad gör platsen till bekräftad kund och skapar en regel (A.3 c).\n  På övriga rader blir raden ägarens eget beslut.\n* \"Fel\" på en tjänsteresa gör den privat (på en antagen rad återkallas antagandet, A.3 b).\n  En privat rad öppnas igen och får en fråga.",
+    "operationId": "review_row_api_v1_notifications_review_rows__trip_id__post",
+    "parameters": [
+     {
+      "name": "trip_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid",
+       "title": "Trip Id"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ReviewVerdictIn"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Review Row Api V1 Notifications Review Rows  Trip Id  Post"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
   "/api/v1/ha/callback": {
    "post": {
     "tags": [
@@ -12061,6 +12117,23 @@
      "reason"
     ],
     "title": "ReviewRowOut"
+   },
+   "ReviewVerdictIn": {
+    "properties": {
+     "verdict": {
+      "type": "string",
+      "enum": [
+       "ok",
+       "wrong"
+      ],
+      "title": "Verdict"
+     }
+    },
+    "type": "object",
+    "required": [
+     "verdict"
+    ],
+    "title": "ReviewVerdictIn"
    },
    "RuleIn": {
     "properties": {

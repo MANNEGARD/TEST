@@ -33,7 +33,7 @@ export type FieldSpec =
   | { type: "text"; name?: string; maxLength?: number; validate?: (value: string) => string | null }
   | { type: "time"; name: string }
   | { type: "choice"; options: readonly string[] }
-  | { type: "json" };
+  | { type: "json"; validate?: (value: unknown) => string | null };
 
 export type FieldSpecs = Record<string, FieldSpec>;
 type FormValue = string | boolean | object;
@@ -110,6 +110,8 @@ function parse(spec: FieldSpec, value: FormValue): { value: unknown; error: stri
     }
     case "choice":
       return spec.options.includes(String(value)) ? { value, error: null } : { value, error: "Välj ett av alternativen." };
+    case "json":
+      return { value, error: spec.validate?.(value) ?? null };
     default:
       return { value, error: null };
   }

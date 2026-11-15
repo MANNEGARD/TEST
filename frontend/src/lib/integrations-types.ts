@@ -178,6 +178,8 @@ export interface HaStatus {
   base_url: string | null;
   has_token: boolean;
   notify_service: string | null;
+  /** Sann när DriveLog har frågor att skicka men ingen telefon är vald (och det inte finns exakt en). */
+  phone_missing?: boolean;
   ha_version: string | null;
   location_name: string | null;
   last_success_at: string | null;

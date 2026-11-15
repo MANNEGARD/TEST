@@ -1817,6 +1817,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/notifications/review-rows/{trip_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stämmer eller Fel på en automatiskt godkänd eller antagen rad
+         * @description Månadens genomgång (/m/month): ägarens besked om en rad som automatiken avgjorde.
+         *
+         *     * "Stämmer" på en antagen rad gör platsen till bekräftad kund och skapar en regel (A.3 c).
+         *       På övriga rader blir raden ägarens eget beslut.
+         *     * "Fel" på en tjänsteresa gör den privat (på en antagen rad återkallas antagandet, A.3 b).
+         *       En privat rad öppnas igen och får en fråga.
+         */
+        post: operations["review_row_api_v1_notifications_review_rows__trip_id__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/ha/callback": {
         parameters: {
             query?: never;
@@ -3722,6 +3747,14 @@ export interface components {
             approval_source: string;
             /** Reason */
             reason: string | null;
+        };
+        /** ReviewVerdictIn */
+        ReviewVerdictIn: {
+            /**
+             * Verdict
+             * @enum {string}
+             */
+            verdict: "ok" | "wrong";
         };
         /** RuleIn */
         RuleIn: {
@@ -8154,6 +8187,43 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["SnoozeIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    review_row_api_v1_notifications_review_rows__trip_id__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                trip_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReviewVerdictIn"];
             };
         };
         responses: {

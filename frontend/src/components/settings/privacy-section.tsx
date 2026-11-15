@@ -28,6 +28,33 @@ function validUrl(value: string): string | null {
   }
 }
 
+/**
+ * Geokodarens adress: samma regler som backend (settings.validate_geocoder_url) – bara https
+ * på port 443, ingen användarinfo, frågesträng eller fragment, inte localhost eller en lokal
+ * IP-adress. Backend prövar dessutom DNS-svaret vid varje uppslag.
+ */
+function validGeocoderUrl(value: string): string | null {
+  const v = value.trim();
+  if (!v) return "Ange en adress.";
+  let u: URL;
+  try {
+    u = new URL(v);
+  } catch {
+    return "Ange en fullständig adress, t.ex. https://…";
+  }
+  if (u.protocol !== "https:") return "Adressen ska börja med https://.";
+  if (u.port && u.port !== "443") return "Geokodaren måste nås på den vanliga https-porten.";
+  if (u.username || u.password) return "Adressen får inte innehålla användarnamn eller lösenord.";
+  if (u.search || u.hash || v.includes("?") || v.includes("#")) return "Adressen får inte innehålla ? eller #.";
+  const host = u.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  if (host === "localhost" || host.endsWith(".localhost")) return "Geokodaren kan inte ligga på den här datorn.";
+  if (/^(0|10|127)\./.test(host) || /^192\.168\./.test(host) || /^169\.254\./.test(host) || /^172\.(1[6-9]|2\d|3[01])\./.test(host)) {
+    return "Geokodaren får inte ha en lokal IP-adress.";
+  }
+  if (host.includes(":")) return "Ange geokodaren med ett namn, inte en IP-adress.";
+  return null;
+}
+
 const FIELDS: FieldSpecs = {
   "privacy.map_enabled": { type: "bool" },
   "privacy.map_tiles_url": {
@@ -37,7 +64,7 @@ const FIELDS: FieldSpecs = {
     validate: (v) => validUrl(v) ?? (/\{z\}/.test(v) && /\{x\}/.test(v) && /\{y\}/.test(v) ? null : "Adressen måste innehålla {z}, {x} och {y}."),
   },
   "privacy.geocoding_enabled": { type: "bool" },
-  "privacy.geocoder_url": { type: "text", name: "Geokodarens adress", maxLength: 500, validate: validUrl },
+  "privacy.geocoder_url": { type: "text", name: "Geokodarens adress", maxLength: 500, validate: validGeocoderUrl },
   "privacy.observation_retention_days": { type: "number", name: "Gallring av rådata", min: 0, max: 3650, integer: true },
   "import.keep_original_files": { type: "bool" },
 };
@@ -215,11 +242,31 @@ export function PrivacySection({ data }: { data: SettingsPayload }) {
             path="privacy.geocoding_enabled"
             id="priv-geo"
             label="Slå upp adresser för nya platser"
-            hint="Koordinaterna för nya platser skickas till en extern geokodningstjänst som svarar med gatuadress och ort. Av som standard – utan den namnger du platser själv."
+            hint={
+              <>
+                När bilen stannar på en ny plats frågar DriveLog OpenStreetMap efter gatuadress, ort och – om kartan har det – företagets namn. Bara
+                platsens ungefärliga mittpunkt skickas, aldrig resor, tider eller ditt namn, och ingenting skickas förrän hemmet finns som plats.
+                OpenStreetMap ser serverns adress och när uppslagen görs. Avstängt får nya platser ingen adress, och du namnger dem själv.
+              </>
+            }
           />
+          {geoOn ? (
+            <p className="px-5 py-2.5 text-xs text-fg-muted" data-testid="osm-attribution">
+              Adressdata ©{" "}
+              <a
+                href="https://www.openstreetmap.org/copyright"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-accent-ink underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-ring"
+              >
+                OpenStreetMap-bidragsgivare
+              </a>
+              , under licensen ODbL.
+            </p>
+          ) : null}
           {form.has("privacy.geocoder_url") && geoOn ? (
             <div className="px-5 py-4">
-              <Field id="priv-geocoder" label="Geokodningstjänst" hint="Standard är Nominatim (OpenStreetMap)." error={form.error("privacy.geocoder_url")}>
+              <Field id="priv-geocoder" label="Geokodningstjänst" hint="Standard är Nominatim (OpenStreetMap). Bara https-adresser godtas." error={form.error("privacy.geocoder_url")}>
                 <Input
                   id="priv-geocoder"
                   value={form.text("privacy.geocoder_url")}

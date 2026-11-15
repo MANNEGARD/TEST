@@ -30,6 +30,7 @@ import {
   type ExportPeriod,
 } from "./export-period";
 import { JournalPreview } from "./journal-preview";
+import { MonthCard } from "./month-card";
 import { PeriodPicker } from "./period-picker";
 import { PreviousFiles } from "./previous-files";
 import { SummaryPanel, SummaryPanelSkeleton } from "./summary-panel";
@@ -201,6 +202,8 @@ export function ExportView() {
           </p>
         ) : null}
       </div>
+
+      {vehicleId && !selectionMode ? <MonthCard /> : null}
 
       {body}
 

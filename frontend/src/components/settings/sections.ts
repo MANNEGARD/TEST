@@ -9,6 +9,7 @@ import {
   Merge,
   ShieldCheck,
   Sparkles,
+  Wand2,
   WholeWord,
   type LucideIcon,
 } from "lucide-react";
@@ -21,6 +22,7 @@ export type SectionKey =
   | "fordon"
   | "ersattning"
   | "sammanslagning"
+  | "automatik"
   | "forslag"
   | "notiser"
   | "kalender"
@@ -43,6 +45,7 @@ export const SECTIONS: SectionDef[] = [
   { key: "fordon", label: "Fordon och förare", short: "Fordon", icon: Car, group: "journal" },
   { key: "ersattning", label: "Milersättning och export", short: "Milersättning", icon: HandCoins, group: "journal" },
   { key: "sammanslagning", label: "Sammanslagning av resor", short: "Sammanslagning", icon: Merge, group: "journal" },
+  { key: "automatik", label: "Självgående läge", short: "Automatik", icon: Wand2, group: "automation" },
   { key: "forslag", label: "Förslag och AI", short: "Förslag och AI", icon: Sparkles, group: "automation" },
   { key: "notiser", label: "Notiser", short: "Notiser", icon: Bell, group: "automation" },
   { key: "kalender", label: "Kalender", short: "Kalender", icon: CalendarDays, group: "automation" },

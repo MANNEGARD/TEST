@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { ChevronDown, Download, FileSpreadsheet, Trash2 } from "lucide-react";
+import { ChevronDown, Download, FileSpreadsheet, LinkIcon, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -10,7 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { errorMessage } from "@/lib/api";
 import { formatDateTime, formatKm, plural } from "@/lib/format";
 import type { ExportJob } from "@/lib/exports-types";
-import { exportDownloadUrl, useDeleteExport, useExports } from "@/lib/queries/exports";
+import { exportDownloadUrl, useDeleteExport, useExports, useRevokeLinks } from "@/lib/queries/exports";
 
 const COLLAPSED_COUNT = 4;
 
@@ -19,10 +19,12 @@ function jobTitle(job: ExportJob): string {
 }
 
 function jobMeta(job: ExportJob): string {
-  const parts = [`Skapad ${formatDateTime(job.created_at)}`];
+  const parts = [job.origin === "month_close" ? `Automatiskt skapad ${formatDateTime(job.created_at)}` : `Skapad ${formatDateTime(job.created_at)}`];
   if (typeof job.summary.trips === "number") parts.push(plural(job.summary.trips, "resa", "resor"));
   if (typeof job.summary.km === "number") parts.push(formatKm(job.summary.km));
   if (job.params.layout === "detailed") parts.push("detaljerad");
+  if (job.link_downloads) parts.push(`hämtad ${plural(job.link_downloads, "gång", "gånger")} via länk`);
+  if (job.superseded_by_id) parts.push("ersatt av en nyare fil");
   return parts.join(" · ");
 }
 
@@ -30,6 +32,8 @@ function jobMeta(job: ExportJob): string {
 export function PreviousFiles() {
   const list = useExports();
   const del = useDeleteExport();
+  const revoke = useRevokeLinks();
+  const [revokeOpen, setRevokeOpen] = React.useState(false);
   const [expanded, setExpanded] = React.useState(false);
   const [confirm, setConfirm] = React.useState<ExportJob | null>(null);
   const jobs = list.data ?? [];
@@ -55,6 +59,15 @@ export function PreviousFiles() {
 
   const shown = expanded ? jobs : jobs.slice(0, COLLAPSED_COUNT);
   const hidden = jobs.length - shown.length;
+
+  const closeLinks = () =>
+    revoke.mutate(undefined, {
+      onSuccess: () => {
+        toast.success("Alla nedladdningslänkar är stängda.", { description: "Länkar i tidigare notiser fungerar inte längre." });
+        setRevokeOpen(false);
+      },
+      onError: (e) => toast.error(errorMessage(e)),
+    });
 
   const remove = (job: ExportJob) => {
     del.mutate(job.id, {
@@ -103,12 +116,39 @@ export function PreviousFiles() {
           );
         })}
       </ul>
-      {hidden > 0 || expanded ? (
-        <Button variant="link" size="sm" className="mt-2 text-fg-muted hover:text-fg" onClick={() => setExpanded((v) => !v)} aria-expanded={expanded}>
+      <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+        {hidden > 0 || expanded ? (
+        <Button variant="link" size="sm" className="text-fg-muted hover:text-fg" onClick={() => setExpanded((v) => !v)} aria-expanded={expanded}>
           <ChevronDown className={expanded ? "rotate-180 transition-transform" : "transition-transform"} aria-hidden />
           {expanded ? "Visa färre" : `Visa alla ${jobs.length}`}
         </Button>
-      ) : null}
+        ) : (
+          <span />
+        )}
+        <Button variant="ghost" size="sm" className="text-fg-muted hover:text-fg" onClick={() => setRevokeOpen(true)} data-testid="revoke-links">
+          <LinkIcon aria-hidden /> Stäng alla nedladdningslänkar
+        </Button>
+      </div>
+
+      <Dialog open={revokeOpen} onOpenChange={(o) => !revoke.isPending && setRevokeOpen(o)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Stäng alla nedladdningslänkar?</DialogTitle>
+            <DialogDescription>
+              Länkarna i notiserna går att öppna utan inloggning i 7 dagar. Stänger du dem fungerar ingen tidigare länk längre. Filerna finns kvar här och
+              nästa notis får en ny länk.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="secondary" onClick={() => setRevokeOpen(false)} disabled={revoke.isPending}>
+              Avbryt
+            </Button>
+            <Button variant="danger" onClick={closeLinks} loading={revoke.isPending} data-testid="revoke-links-confirm">
+              Stäng länkarna
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={!!confirm} onOpenChange={(o) => !o && !del.isPending && setConfirm(null)}>
         <DialogContent className="max-w-md">

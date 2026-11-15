@@ -46,6 +46,8 @@ export const qk = {
     checks: (vehicleId: string | undefined, range: { from: string; to: string }) =>
       ["exports", "checks", vehicleId, range.from, range.to] as const,
     list: (vehicleId: string | undefined) => ["exports", "list", vehicleId] as const,
+    /** Månadsskiftet (GET /month-close) – beror på resorna, så det invalideras med dem. */
+    monthClose: (vehicleId: string | undefined) => ["exports", "month-close", vehicleId] as const,
   },
   /** Första ledet i platsvyns nycklar (lib/queries/places.ts) – besöksstatistiken bygger på resorna. */
   places: {

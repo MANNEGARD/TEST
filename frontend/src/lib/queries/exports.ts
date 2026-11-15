@@ -2,7 +2,7 @@
 
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, buildUrl } from "../api";
-import type { ExportChecks, ExportJob, ExportPreview, ExportRange } from "../exports-types";
+import type { ExportChecks, ExportJob, ExportPreview, ExportRange, MonthClose, MonthStatus } from "../exports-types";
 import { useVehicle } from "../vehicle";
 import { qk } from "./keys";
 
@@ -74,6 +74,40 @@ export function useDeleteExport() {
   return useMutation({
     mutationFn: (id: string) => api.del(`/exports/${id}`),
     onSettled: () => qc.invalidateQueries({ queryKey: exportKeys.list(vehicleId) }),
+  });
+}
+
+// ----------------------------------------------------------------------------- månadsskiftet
+
+/** Läget för innevarande och föregående månad för det valda fordonet (GET /month-close). */
+export function useMonthClose() {
+  const { vehicleId, vehicle } = useVehicle();
+  return useQuery({
+    queryKey: exportKeys.monthClose(vehicleId),
+    queryFn: ({ signal }) => api.get<MonthClose>("/month-close", { query: { vehicle_id: vehicleId }, signal }),
+    enabled: !!vehicleId && !vehicle?.is_demo,
+  });
+}
+
+/** "Kontrollera nu": prövar månaden och skapar underlaget om den är klar (POST /month-close/{månad}/run). */
+export function useRunMonthClose() {
+  const qc = useQueryClient();
+  const { vehicleId } = useVehicle();
+  return useMutation({
+    mutationFn: (month: string) =>
+      api.post<MonthStatus>(`/month-close/${encodeURIComponent(month)}/run`, undefined, { query: { vehicle_id: vehicleId } }),
+    onSettled: () =>
+      Promise.all([
+        qc.invalidateQueries({ queryKey: exportKeys.monthClose(vehicleId) }),
+        qc.invalidateQueries({ queryKey: exportKeys.list(vehicleId) }),
+      ]),
+  });
+}
+
+/** Stänger alla nedladdningslänkar som skickats i notiser (POST /month-close/links/revoke). */
+export function useRevokeLinks() {
+  return useMutation({
+    mutationFn: () => api.post<null>("/month-close/links/revoke"),
   });
 }
 

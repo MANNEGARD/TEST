@@ -127,7 +127,7 @@ export function TripTable({
       case "source":
         return <SourceBadge source={t.source} short />;
       case "status":
-        return <ReviewStatusBadge status={t.review_status} short />;
+        return <ReviewStatusBadge status={t.review_status} short approvalSource={t.approval_source} approvalReason={t.approval_reason} />;
       default:
         return null;
     }

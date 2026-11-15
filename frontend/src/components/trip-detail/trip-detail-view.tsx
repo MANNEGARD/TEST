@@ -31,6 +31,7 @@ import { TripMap } from "@/components/map/trip-map";
 import { CategoryPill } from "@/components/trips/category-pill";
 import { QualityValue } from "@/components/trips/quality-value";
 import { SourceBadge } from "@/components/trips/source-badge";
+import { StartTime } from "@/components/trips/start-time";
 import { TripTime } from "@/components/trips/trip-time";
 import { ApiError, errorMessage } from "@/lib/api";
 import {
@@ -97,10 +98,11 @@ function Facts({ d }: { d: TripDetail }) {
           <DescriptionItem label="Körtid">
             <QualityValue value={t.driving_seconds != null ? formatDuration(t.driving_seconds) : null} missingText="Körtid saknas" />
           </DescriptionItem>
-          <DescriptionItem label="Tid">
+          <DescriptionItem label="Start">
+            <StartTime trip={t} earliest={firstRaw?.start_earliest} latest={firstRaw?.start_latest} />
+          </DescriptionItem>
+          <DescriptionItem label="Framme">
             <span className="num">
-              <TripTime at={t.started_at} quality={t.start_time_quality} earliest={firstRaw?.start_earliest} latest={firstRaw?.start_latest} />
-              {" – "}
               <TripTime at={t.ended_at} quality={t.end_time_quality} />
             </span>
           </DescriptionItem>

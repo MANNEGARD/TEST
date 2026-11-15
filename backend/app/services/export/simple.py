@@ -46,6 +46,8 @@ ESTIMATED_PREFIX = "ca\u00a0"
 FOOTNOTE_TIMES = "ca = uträknad ur bilens egna uppgifter, felmarginalen visas i DriveLog; –08:52 = starttid okänd"
 LIVE_SOURCES = (TripSource.VOLVO_API, TripSource.DEMO)
 EMPTY_TEXT = "Inga tjänsteresor att redovisa i perioden."
+# Ett mellanstopp hemma eller vid en privat plats skrivs aldrig med adress (A.5).
+PRIVATE_STOP = "Privat stopp"
 
 # (nyckel, rubrik, kolumnbredd i Excels teckenenheter). Tabellen skrivs ut i 100 % skala
 # och bredderna är avvägda så att den fyller en liggande A4 med smala marginaler.
@@ -281,14 +283,49 @@ def needs_time_note(trip: LogicalTrip, text: str) -> bool:
     return text.startswith("–") and getattr(trip, "source", None) in LIVE_SOURCES
 
 
-def _via(trip: LogicalTrip) -> tuple[str, ...]:
-    """Mellanstoppens adresser i ordning, utan tomma och utan upprepningar i följd."""
+def _via(trip: LogicalTrip, private_ids: frozenset[str] = frozenset()) -> tuple[str, ...]:
+    """Mellanstoppens adresser i ordning, utan tomma och utan upprepningar i följd.
+
+    Ett stopp hemma eller vid en privat plats (``private_ids``) skrivs "Privat stopp".
+    """
     out: list[str] = []
     for stop in trip.via or []:
-        address = clean(stop.get("address")) if isinstance(stop, dict) else ""
+        if not isinstance(stop, dict):
+            continue
+        if stop.get("location_id") and str(stop["location_id"]) in private_ids:
+            address = PRIVATE_STOP
+        else:
+            address = clean(stop.get("address"))
         if address and (not out or out[-1] != address):
             out.append(address)
     return tuple(out)
+
+
+def private_stop_ids(trips: list[LogicalTrip]) -> frozenset[str]:
+    """Id för mellanstopp som är hemmet eller en privat plats (A.5)."""
+    from sqlalchemy import select
+    from sqlalchemy.orm import object_session
+
+    from app.models import KnownLocation
+    from app.models.enums import LocationType
+
+    ids: set[uuid.UUID] = set()
+    for t in trips:
+        for stop in t.via or []:
+            if isinstance(stop, dict) and stop.get("location_id"):
+                try:
+                    ids.add(uuid.UUID(str(stop["location_id"])))
+                except ValueError:
+                    continue
+    session = object_session(trips[0]) if trips else None
+    if not ids or session is None:
+        return frozenset()
+    rows = session.execute(
+        select(KnownLocation.id).where(
+            KnownLocation.id.in_(ids), KnownLocation.type.in_((LocationType.HOME, LocationType.PRIVATE))
+        )
+    ).scalars()
+    return frozenset(str(i) for i in rows)
 
 
 def purpose_text(trip: LogicalTrip) -> str:
@@ -304,7 +341,7 @@ def _row_time(trip: LogicalTrip) -> datetime | None:
     return trip.started_at or common.trip_time(trip)
 
 
-def build_row(trip: LogicalTrip, tz: ZoneInfo) -> SimpleRow:
+def build_row(trip: LogicalTrip, tz: ZoneInfo, private_ids: frozenset[str] = frozenset()) -> SimpleRow:
     when = _row_time(trip)
     km = common.reported_work_km(trip)
     per_category = common.segment_km(trip)
@@ -315,7 +352,7 @@ def build_row(trip: LogicalTrip, tz: ZoneInfo) -> SimpleRow:
         time=time,
         from_address=clean(trip.start_address),
         to_address=clean(trip.end_address),
-        via=_via(trip),
+        via=_via(trip, private_ids),
         purpose=purpose_text(trip),
         odometer_start=trip.odometer_start,
         odometer_end=trip.odometer_end,
@@ -418,7 +455,8 @@ def build_journal(
     reported = [t for t in trips if common.is_reported(t)]
     # Stabil sortering: resor utan känd tid (ovanligt) behåller sin plats sist.
     reported.sort(key=lambda t: (_row_time(t) is None, _row_time(t) or datetime.min.replace(tzinfo=tz)))
-    rows = [build_row(t, tz) for t in reported]
+    private_ids = private_stop_ids(reported)
+    rows = [build_row(t, tz, private_ids) for t in reported]
     return SimpleJournal(
         vehicle=vehicle,
         tz=tz,

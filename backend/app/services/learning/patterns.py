@@ -7,7 +7,7 @@ Mönstren räknas alltid om från grunden ur källdata:
                     ofta är ett urval av enbart tjänsteresor väger dessa lätt och kan
                     aldrig ensamma ge automatisk klassning.
 
-AI:ns egna obekräftade förslag räknas aldrig in – en felaktig gissning kan därför
+AI:ns egna obekräftade förslag och resor som autopiloten godkänt räknas aldrig in – en felaktig gissning kan därför
 inte förstärka sig själv. Eftersom allt räknas om försvinner effekten av en
 korrigering helt när den ångras.
 """
@@ -25,7 +25,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import LearningFeedback, LocationPattern, LogicalTrip, Vehicle
-from app.models.enums import Category, LogicalState, PatternStatus, ReviewStatus
+from app.models.enums import AUTO_APPROVAL_SOURCES, Category, LogicalState, PatternStatus, ReviewStatus
 from app.services import settings as settings_svc
 from app.services.classify.textnorm import normalize_purpose
 
@@ -82,6 +82,8 @@ def rebuild(db: Session, user_id: uuid.UUID) -> int:
         for t in trips:
             if t.has_mixed_categories or t.undecided_km > 0.05:
                 continue  # blandade resor säger inget entydigt om destinationen
+            if t.approval_source in AUTO_APPROVAL_SOURCES:
+                continue  # automatiken förstärker aldrig sina egna mönster
             targets = [acc_for(dest_key(t.end_location_id), "destination", None, t.end_location_id)]
             if t.start_location_id is not None:
                 targets.append(

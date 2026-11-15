@@ -12,6 +12,7 @@ import type { SettingsPayload } from "@/lib/settings-page-types";
 import { cn } from "@/lib/utils";
 import { AbbreviationsSection } from "./abbreviations-section";
 import { AiSection } from "./ai-section";
+import { AutomationSection } from "./automation-section";
 import { BackupSection } from "./backup-section";
 import { CalendarSection } from "./calendar-section";
 import { DirtyContext } from "./dirty-context";
@@ -28,6 +29,7 @@ const PANELS: Record<SectionKey, React.ComponentType<{ data: SettingsPayload }>>
   fordon: VehicleSection,
   ersattning: ReimbursementSection,
   sammanslagning: MergeSection,
+  automatik: AutomationSection,
   forslag: AiSection,
   notiser: NotificationsSection,
   kalender: CalendarSection,

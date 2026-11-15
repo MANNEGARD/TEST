@@ -110,6 +110,51 @@ export const DECISION_SOURCE_LABELS: Record<string, string> = {
   system: "Systemet",
 };
 
+/**
+ * Vem som godkände resan (LogicalTrip.approval_source). Skälen för automatiken är de
+ * som ägaren ser i appen (byggkontraktet A.2). NULL betyder ägaren själv före 1.1.0.
+ */
+export const APPROVAL_SOURCE_LABELS: Record<string, string> = {
+  user: "Du",
+  bulk: "Du (flera resor på en gång)",
+  rule: "Din regel",
+  history: "Som de 3 senaste gångerna",
+  return_trip: "Hemresa",
+  commute: "Resa till arbetet",
+  private_place: "Privat plats",
+  assumed: "Antaget kundbesök",
+};
+
+/** Källor där automatiken – inte ägaren – godkände resan (models/enums.py AUTO_APPROVAL_SOURCES). */
+export const AUTO_APPROVAL_SOURCES: ReadonlySet<string> = new Set(["rule", "history", "return_trip", "commute", "private_place", "assumed"]);
+
+export function isAutoApproval(source: string | null | undefined): boolean {
+  return !!source && AUTO_APPROVAL_SOURCES.has(source);
+}
+
+/** Varifrån starttiden kommer (TripOut.start_time_source). */
+export const START_TIME_SOURCE_LABELS: Record<string, string> = {
+  car: "Bilens tidsstämpel",
+  estimated: "Uträknad ur bilens egna uppgifter",
+  user: "Angiven av dig",
+  unknown: "Starttiden är okänd",
+};
+
+/** Månadsskiftets läge (services/export/month_close.py MonthStatus.state). */
+export const MONTH_STATE_LABELS: Record<string, string> = {
+  open: "Pågår",
+  waiting: "Väntar",
+  exported: "Klart",
+  stale: "Ändrad efter underlaget",
+  empty: "Inga tjänsteresor",
+};
+
+/** Hur en exportfil kom till (ExportOut.origin). */
+export const EXPORT_ORIGIN_LABELS: Record<string, string> = {
+  manual: "Skapad av dig",
+  month_close: "Automatiskt skapad",
+};
+
 export const MERGE_KIND_LABELS: Record<string, string> = {
   none: "Ej sammanslagen",
   auto: "Automatiskt sammanslagen",
@@ -196,6 +241,10 @@ export const NOTIFICATION_KIND_LABELS: Record<string, string> = {
   weekly: "Veckorapport",
   daily: "Daglig avstämning",
   test: "Testnotis",
+  assumed: "Antaget kundbesök",
+  company: "Vilket företag?",
+  alert: "Larm",
+  monthly: "Månadens underlag",
 };
 
 export const NOTIFICATION_STATUS_LABELS: Record<string, string> = {
@@ -284,4 +333,9 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   "trip.split": "Uppdelning",
   "calendar.match_choice": "Kalenderträff vald/avvisad",
   "feedback.undo": "Ändring ångrad",
+  "trip.auto_approved": "Godkänd automatiskt",
+  "trip.start_time_override": "Starttiden ändrades",
+  "export.link_download": "Hämtad via länk",
+  "export.links_revoked": "Nedladdningslänkarna stängdes",
+  "month_close.run": "Månaden kontrollerades",
 };

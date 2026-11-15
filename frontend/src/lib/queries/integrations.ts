@@ -199,12 +199,13 @@ export function useMicrosoftDemo() {
 
 // ----------------------------------------------------------------------------- Home Assistant
 
-export function useHaStatus(options: { poll?: boolean } = {}) {
+export function useHaStatus(options: { poll?: boolean; intervalMs?: number } = {}) {
   return useQuery({
     queryKey: integrationKeys.ha,
     queryFn: ({ signal }) => api.get<HaStatus>("/integrations/home-assistant", { signal }),
     // Medan panelen är öppen: fånga livstecken och bekräftad testnotis utan omladdning.
-    refetchInterval: options.poll ? 15_000 : false,
+    // Banderollen i app-skalet frågar glesare (intervalMs).
+    refetchInterval: options.poll ? 15_000 : (options.intervalMs ?? false),
   });
 }
 

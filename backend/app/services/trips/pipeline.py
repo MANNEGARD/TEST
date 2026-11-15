@@ -1,7 +1,8 @@
 """Gemensam efterbearbetning när resor tillkommit eller ändrats.
 
 Ordningen är: sammanslagningsregler → dataluckor → platsstatistik → mönster →
-klassificering av oavgjorda resor → granskningsärenden → ev. notiser.
+kalender → klassificering av oavgjorda resor → resekedjor → autopiloten (självgående
+läge) → granskningsärenden → ev. notiser.
 
 Luckor i mätarställningen mellan resorna ger aldrig granskningsärenden här – de
 räknas bara fram (``gaps.recompute``). I omfånget ``business_only`` är de privat
@@ -175,6 +176,16 @@ def after_trips_changed(
     out["classified"] = classified
     out["journeys"] = journeys.detect(db, user_id=user_id, vehicle=vehicle)
 
+    # Självgående läge: autopiloten avgör live-resorna efter resekedjorna (så att T ser
+    # utresan) och före granskningsärendena (byggkontraktet C.3).
+    from app.services.classify import autopilot
+
+    self_driving = autopilot.is_active(db, user_id)
+    if self_driving:
+        out["autopilot"] = autopilot.run_vehicle(db, user_id=user_id, vehicle=vehicle, actor=actor)
+        if out["autopilot"].get("approved"):
+            out["journeys"] += journeys.detect(db, user_id=user_id, vehicle=vehicle)
+
     new_trip_items: list[tuple[LogicalTrip, list[str]]] = []
     for trip in seg.active_trips(db, vehicle.id):
         created = sync_trip_review_items(db, trip, scope=scope)
@@ -186,6 +197,9 @@ def after_trips_changed(
     if notify:
         from app.services.ha import notifier
 
+        if self_driving:
+            # Live-resornas frågor ställs en i taget av notifier.ensure_open_questions.
+            new_trip_items = [(t, kinds) for t, kinds in new_trip_items if not autopilot.is_live(t)]
         notifier.enqueue_for_changes(
             db,
             user_id=user_id,

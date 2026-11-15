@@ -296,7 +296,8 @@ def test_stubs_are_neutral(db, user, vehicle, trips, actor):
     d = autopilot.decide(db, trip, user_id=user.id, ctx=None, rules=None, cfg=None)
     assert d == autopilot.AutoDecision("skip") and d.outcome == "skip" and d.candidates == ()
     assert autopilot.apply(db, trip, d, actor=actor) is False
-    assert autopilot.eligible(trip, active_since=now - timedelta(days=365)) is False
+    # S1c: eligible är byggd – live-resan omfattas när den skapats efter active_since.
+    assert autopilot.eligible(trip, active_since=None) is False
     assert autopilot.run_vehicle(db, user_id=user.id, vehicle=vehicle, actor=actor) == {}
     assert autopilot.reconsider(db, user_id=user.id, trip_ids=[trip.id], actor=actor) is None
     assert autopilot.purpose_candidates(db, trip, user_id=user.id) == []

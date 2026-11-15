@@ -1,7 +1,10 @@
 /**
  * Handskrivna typer för export-API:t (svaren beskrivs som dict[str, Any] i backend).
  * Källa: backend/app/api/routes/exports.py, backend/app/services/export/{service,simple,checks}.py.
+ * Månadsskiftet (GET /month-close) har ett Pydantic-schema och hämtas ur api-types.ts.
  */
+
+import type { components } from "./api-types";
 
 /** En redovisad tjänsteresa – exakt raden i den enkla körjournalen (simple.SimpleRow.as_dict). */
 export interface ExportRow {
@@ -116,7 +119,19 @@ export interface ExportJob {
     [key: string]: unknown;
   };
   error: string | null;
+  /** "manual" (skapad av ägaren) eller "month_close" (skapad automatiskt vid månadsskiftet). */
+  origin?: "manual" | "month_close" | string;
+  /** Satt när en nyare fil för samma månad har ersatt den här. */
+  superseded_by_id?: string | null;
+  /** Antal hämtningar via nedladdningslänken i notisen (inte via webben). */
+  link_downloads?: number;
 }
+
+/** GET /month-close → innevarande och föregående månad (routes/month_close.py). */
+export type MonthClose = components["schemas"]["MonthCloseOut"];
+export type MonthStatus = components["schemas"]["MonthStatusOut"];
+export type MonthBlocker = components["schemas"]["BlockerOut"];
+export type MonthReviewRow = components["schemas"]["ReviewRowOut"];
 
 export interface ExportRange {
   from: string;
