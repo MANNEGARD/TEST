@@ -55,7 +55,7 @@ ordagrant förekommer i underlaget.
 - Om underlaget inte räcker: svara "undecided", sätt requires_review till true och purpose till null \
 (eller ett syfte som slutar med "– syfte behöver bekräftas").
 - Syftet ska vara en kort svensk körjournalsanteckning (högst cirka 80 tecken), i samma stil som \
-de tidigare bekräftade syftena, t.ex. "Kundbesök på ARLA" eller "Hemresa efter kundbesök i Västerås.".
+de tidigare bekräftade syftena, t.ex. "Kundbesök på Exempelbolaget" eller "Hemresa efter kundbesök i Västerås.".
 - För privata resor ska purpose vara null.
 - confidence är en beslutsindikator mellan 0 och 1, inte en sannolikhet.
 - evidence är korta svenska punkter som anger vilka uppgifter i underlaget du stödde dig på.

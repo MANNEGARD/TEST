@@ -396,9 +396,9 @@ def test_normalized_purpose_representation():
     assert n.original == "Hemresa  från JKPG" and n.display == "Hemresa från JKPG"
     assert n.key == "hemresa från jönköping" and n.purpose_type == "return_home"
     assert textnorm.normalize_purpose("hemresa från jkpg.", abbr).key == n.key  # skiftläge/punkt spelar ingen roll
-    assert textnorm.normalize_purpose("Kundbesök på ARLA").entities == ("ARLA",)
-    assert textnorm.normalize_purpose("Upplärning av Daniel på HBGkontoret").purpose_type == "training"
-    assert textnorm.normalize_purpose("Fått rycka in och köra DAGAB").purpose_type == "operations"
+    assert textnorm.normalize_purpose("Kundbesök på NORDIA").entities == ("NORDIA",)
+    assert textnorm.normalize_purpose("Upplärning av Kim på HBGkontoret").purpose_type == "training"
+    assert textnorm.normalize_purpose("Fått rycka in och köra LAGRET").purpose_type == "operations"
     assert textnorm.normalize_purpose("   ") is None
 
 
