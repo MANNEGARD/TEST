@@ -6,8 +6,10 @@
  *
  * Flöde: första kontot (/setup) → import via webbgränssnittet → Översikt → Körjournal →
  * Resedetalj → Granskning → Export (förhandsvisning = API = Excel-fil) → Platser →
- * Inställningar (ersättning per mil slår igenom) → Integrationer (demolägen) → Bränsle &
- * energi → mobilvy 390×844 → mörkt tema → utloggning och inloggning med retur.
+ * Inställningar (ersättning per mil slår igenom, Automatik, sekretess och OSM) → Integrationer
+ * (demolägen, starttid "≈" och "Ange starttid") → Bränsle & energi → månadskortet och
+ * nedladdningslänkarna → banderollen för Home Assistant → mobilvy 390×844 → mörkt tema →
+ * utloggning och inloggning med retur.
  *
  * Miljövariabler:
  *   BASE_URL     standard http://localhost:3000
@@ -168,6 +170,64 @@ function responseTo(page, method, re) {
   const p = page.waitForResponse((r) => r.request().method() === method && re.test(r.url().split("?")[0]), { timeout: 20000 });
   p.catch(() => {});
   return p;
+}
+
+/** HH:MM i Europe/Stockholm (samma tidszon som webbläsarkontexten och appens standard). */
+function stockholmTime(iso) {
+  return new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Stockholm", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(iso));
+}
+
+/**
+ * Starttiden på resans sida: "≈" med grund för en uträknad tid, och "Start okänd" med
+ * "Ange starttid" för en okänd (byggkontraktet D.3). Kräver live-resor (Volvo-demon).
+ */
+async function checkStartTimes(page, tag) {
+  const vehicles = await api(page, "GET", "/vehicles");
+  const demo = vehicles.find((v) => v.is_demo);
+  if (!demo) {
+    fail(tag, "inget demofordon för att pröva starttiden");
+    return;
+  }
+  const list = await api(page, "GET", `/trips?limit=100&vehicle_id=${demo.id}`);
+  const estimated = list.items.find((t) => t.start_time_source === "estimated" && t.started_at);
+  const unknown = list.items.find((t) => t.start_time_source === "unknown" && t.ended_at);
+  if (!estimated && !unknown) {
+    fail(tag, `ingen live-resa med uträknad eller okänd starttid bland ${list.items.length} demoresor`);
+    return;
+  }
+  if (estimated) {
+    await page.goto(`${BASE}/journal/${estimated.id}`);
+    const value = page.getByTestId("start-time-estimated");
+    await value.waitFor({ timeout: 15000 });
+    const text = await value.innerText();
+    if (!text.includes("≈")) fail(tag, `uträknad starttid saknar "≈": ${text}`);
+    if (estimated.start_estimate_basis?.margin_min != null && !/±\d+ min/.test(text)) fail(tag, `felmarginalen visas inte: ${text}`);
+    await value.getByRole("button", { expanded: false }).first().click();
+    const basis = page.getByTestId("start-time-basis");
+    await basis.waitFor({ timeout: 5000 }).catch(() => fail(tag, "grunden för den uträknade tiden visas inte"));
+    await shot(page, "trip-start-estimated-light");
+  } else step("  (ingen demoresa med uträknad starttid – bara okänd prövas)");
+  if (unknown) {
+    await page.goto(`${BASE}/journal/${unknown.id}`);
+    const box = page.getByTestId("start-time-unknown");
+    await box.waitFor({ timeout: 15000 });
+    if (!(await box.innerText()).includes("Start okänd")) fail(tag, "okänd starttid visas inte som \"Start okänd\"");
+    await box.getByRole("button", { name: "Ange starttid" }).click();
+    const input = page.getByTestId("start-time-input");
+    await input.waitFor({ timeout: 5000 });
+    const time = stockholmTime(new Date(new Date(unknown.ended_at).getTime() - 20 * 60_000).toISOString());
+    await input.fill(time);
+    const saved = responseTo(page, "PATCH", /\/api\/v1\/trips\/[^/]+$/);
+    await page.getByRole("button", { name: "Spara", exact: true }).click();
+    if ((await saved).status() !== 200) fail(tag, "den angivna starttiden sparades inte");
+    await page.getByTestId("start-time-user").waitFor({ timeout: 10000 });
+    await expectText(page, "angiven av dig", tag);
+    await shot(page, "trip-start-user-light");
+    const removed = responseTo(page, "PATCH", /\/api\/v1\/trips\/[^/]+$/);
+    await page.getByRole("button", { name: "Ta bort den angivna starttiden" }).click();
+    if ((await removed).status() !== 200) fail(tag, "den angivna starttiden togs inte bort");
+    await page.getByTestId("start-time-unknown").waitFor({ timeout: 10000 }).catch(() => fail(tag, "starttiden blev inte okänd igen"));
+  } else step("  (ingen demoresa med okänd starttid – \"Ange starttid\" prövas inte)");
 }
 
 // Chromium ger nedladdningar med icke-ASCII-filnamn (Körjournal_…) namnet "download" när
@@ -444,6 +504,37 @@ print(json.dumps({"sheets": wb.sheetnames, "rows": rows, "km": round(km, 2), "to
       step(`  ${best.m}: ${check.rows} rader, ${check.km} km i "${check.sheets[0]}" (${name})`);
     });
 
+    // ---------------------------------------------------------------- Månadens underlag
+    await section("månadskort", async () => {
+      step("Export: månadskortet, automatiskt skapat underlag, hämtningar och stängda länkar");
+      if (!exportMonth) throw new Error("ingen exportmånad att pröva");
+      await page.goto(`${BASE}/export?manad=${exportMonth}`);
+      const card = page.getByTestId("month-card");
+      await card.waitFor({ timeout: 15000 });
+      await expectText(page, "Månadens underlag", "månadskort");
+      if ((await card.getByTestId("month-row").count()) < 1) fail("månadskort", "månadskortet saknar månader");
+      // Månadsskiftet för exportmånaden (förfluten, så force behövs inte – men skadar inte).
+      const vehicleId = (await api(page, "GET", "/vehicles")).find((v) => !v.is_demo)?.id;
+      const status = await api(page, "POST", `/month-close/${exportMonth}/run?force=true${vehicleId ? `&vehicle_id=${vehicleId}` : ""}`);
+      if (status.state !== "exported") fail("månadskort", `månadsskiftet för ${exportMonth} gav läget ${status.state} (${status.blockers.map((b) => b.code).join(", ")})`);
+      const jobs = await api(page, "GET", "/exports");
+      const auto = jobs.find((j) => j.origin === "month_close");
+      for (const j of jobs) if (typeof j.link_downloads !== "number") fail("månadskort", `exporten ${j.id} saknar link_downloads`);
+      await page.reload();
+      await page.getByTestId("month-card").waitFor({ timeout: 15000 });
+      if (auto) {
+        await expectText(page, "Automatiskt skapad", "månadskort");
+        if (auto.link_downloads > 0) await expectText(page, "via länk", "månadskort");
+      } else fail("månadskort", "inget automatiskt skapat underlag efter månadsskiftet");
+      await shot(page, "export-month-card-light");
+
+      await page.getByTestId("revoke-links").click();
+      const revoked = responseTo(page, "POST", /\/api\/v1\/month-close\/links\/revoke$/);
+      await page.getByTestId("revoke-links-confirm").click();
+      if ((await revoked).status() !== 204) fail("månadskort", "länkarna stängdes inte");
+      await expectText(page, "Alla nedladdningslänkar är stängda", "månadskort");
+    });
+
     // ---------------------------------------------------------------- Platser
     await section("platser", async () => {
       step("Platser: förslag, byt namn, AI-minne");
@@ -538,6 +629,60 @@ print(json.dumps({"sheets": wb.sheetnames, "rows": rows, "km": round(km, 2), "to
       await shot(page, "settings-light");
     });
 
+    // ---------------------------------------------------------------- Automatik och sekretess
+    await section("automatik", async () => {
+      step("Inställningar → Automatik: ett val, kontorstid, veto och skälen i klartext");
+      await page.goto(`${BASE}/settings?sektion=automatik`);
+      const panel = page.getByTestId("settings-panel-automatik");
+      await panel.waitFor({ state: "visible", timeout: 15000 });
+      for (const t of [
+        "Automatik",
+        "Självgående",
+        "Jag godkänner allt själv",
+        "Kontorstid",
+        "Vetotid",
+        "Fråga mig först",
+        "1 dygn",
+        "3 dygn",
+        "Din regel för",
+        "Som de 3 senaste gångerna",
+        "Hemresa efter",
+        "Privat plats",
+        "Antaget kundbesök",
+        "Se och ändra dina egna regler",
+      ]) {
+        await expectText(page, t, "automatik");
+      }
+      const modes = panel.locator('input[name="automation-mode"]');
+      if ((await modes.count()) !== 2) fail("automatik", `läget har ${await modes.count()} val, inte ETT val med två alternativ`);
+      const before = (await api(page, "GET", "/settings")).settings.automation;
+      if (!before) throw new Error("GET /settings saknar sektionen automation");
+      await panel.locator("label").filter({ hasText: "3 dygn" }).click();
+      const sat = await panel.getByRole("button", { name: "lördag" }).getAttribute("aria-pressed");
+      await panel.getByRole("button", { name: "lördag" }).click();
+      const saved = responseTo(page, "PATCH", /\/api\/v1\/settings\/automation$/);
+      await panel.getByRole("button", { name: "Spara" }).click();
+      if (!(await saved).ok()) fail("automatik", "automatiken sparades inte");
+      await expectText(page, "Automatiken är sparad", "automatik");
+      const after = (await api(page, "GET", "/settings")).settings.automation;
+      if (after.assumption_veto_hours !== 72) fail("automatik", `vetotiden blev ${after.assumption_veto_hours}, inte 72`);
+      if (after.office_hours.days.includes(5) === (sat === "true")) fail("automatik", "lördagen ändrades inte i kontorstiden");
+      if (after.active_since !== before.active_since && before.active_since) fail("automatik", "active_since ändrades av att spara");
+      await shot(page, "settings-automation-light");
+      await api(page, "PATCH", "/settings/automation", { assumption_veto_hours: before.assumption_veto_hours, office_hours: before.office_hours });
+
+      step("Inställningar → Sekretess: OpenStreetMap och erkännandet");
+      await page.goto(`${BASE}/settings?sektion=sekretess`);
+      await page.getByTestId("settings-panel-sekretess").waitFor({ state: "visible", timeout: 15000 });
+      const geo = (await api(page, "GET", "/settings")).settings.privacy.geocoding_enabled;
+      await expectText(page, "OpenStreetMap ser serverns adress", "sekretess");
+      if (geo) {
+        await expectText(page, "OpenStreetMap-bidragsgivare", "sekretess");
+        await page.goto(`${BASE}/places`);
+        await page.getByTestId("osm-attribution").waitFor({ timeout: 15000 }).catch(() => fail("platser", "erkännandet till OpenStreetMap saknas"));
+      } else fail("sekretess", "geokodningen är inte på som standard");
+    });
+
     // ---------------------------------------------------------------- Integrationer
     await section("integrationer", async () => {
       step("Integrationer: status, demolägen, demotelefon");
@@ -592,6 +737,13 @@ print(json.dumps({"sheets": wb.sheetnames, "rows": rows, "km": round(km, 2), "to
       for (const id of ["volvo", "microsoft", "home_assistant", "ai"]) {
         if (await page.getByTestId(`card-${id}`).getByText("Ansluten", { exact: true }).count()) fail("integrationer", `kortet ${id} visas som Ansluten i demoläget`);
       }
+      if (await page.getByTestId("ha-banner").count()) fail("integrationer", "banderollen för Home Assistant visas i demoläget");
+      await section("starttid", async () => {
+        step("Starttid: \"≈\" med grund och \"Ange starttid\" på demoresor");
+        await checkStartTimes(page, "starttid");
+      });
+      await page.goto(`${BASE}/integrations`);
+      await page.getByTestId("card-volvo").waitFor({ timeout: 15000 });
       // Stäng av demolägena igen.
       for (const id of ["home_assistant", "volvo"]) {
         await page.getByTestId(`configure-${id}`).click();
@@ -644,6 +796,36 @@ print(json.dumps({"sheets": wb.sheetnames, "rows": rows, "km": round(km, 2), "to
       await page.keyboard.press("Enter");
       await page.waitForURL(/\/journal\?q=Storstad/);
       await page.getByTestId("trip-row").first().waitFor({ timeout: 15000 });
+    });
+
+    // ---------------------------------------------------------------- Banderoll: Home Assistant utan telefon
+    await section("banderoll", async () => {
+      step("Banderoll: Home Assistant i pull-läge utan vald telefon");
+      if (await page.getByTestId("ha-banner").count()) fail("banderoll", "banderollen visas innan Home Assistant är kopplat");
+      const mode = (await api(page, "GET", "/settings")).settings.notifications?.delivery_mode ?? "push";
+      await api(page, "PUT", "/integrations/home-assistant", { delivery_mode: "pull" });
+      // Integrationens livstecken med två telefoner och inget val: DriveLog kan inte välja själv.
+      const token = await api(page, "POST", "/auth/tokens", { name: "E2E Home Assistant", scopes: ["ha"] });
+      const hb = await page.request.fetch(`${BASE}/api/v1/ha/heartbeat`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token.token}`, "Content-Type": "application/json" },
+        data: JSON.stringify({ ha_version: "2026.11.0", integration_version: "1.1.0", notify_services: ["notify.mobile_app_telefon_a", "notify.mobile_app_telefon_b"] }),
+      });
+      if (!hb.ok()) fail("banderoll", `livstecknet gav ${hb.status()}`);
+      const status = await api(page, "GET", "/integrations/home-assistant");
+      if (status.phone_missing !== true) fail("banderoll", `phone_missing är ${status.phone_missing} utan vald telefon`);
+      await page.goto(`${BASE}/`);
+      const banner = page.getByTestId("ha-banner");
+      await banner.waitFor({ timeout: 15000 }).catch(() => fail("banderoll", "banderollen visas inte"));
+      await expectText(page, "Ingen telefon vald", "banderoll");
+      await shot(page, "banner-phone-missing-light");
+      const off = await api(page, "POST", "/integrations/home-assistant/disconnect");
+      if (off.phone_missing) fail("banderoll", "phone_missing är kvar efter frånkopplingen");
+      await api(page, "PATCH", "/settings/notifications", { delivery_mode: mode });
+      await api(page, "DELETE", `/auth/tokens/${token.id}`);
+      await page.reload();
+      await page.waitForLoadState("networkidle").catch(() => {});
+      if (await page.getByTestId("ha-banner").count()) fail("banderoll", "banderollen ligger kvar efter frånkopplingen");
     });
 
     storageState = await ctx.storageState();

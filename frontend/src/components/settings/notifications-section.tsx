@@ -208,7 +208,7 @@ export function NotificationsSection({ data }: { data: SettingsPayload }) {
             path="notifications.hide_locations_on_lock_screen"
             id="ntf-lock"
             label="Dölj platser på låsskärmen"
-            hint="Notisen visar bara tid och sträcka tills telefonen är upplåst – bra om andra kan se din skärm."
+            hint="Notisen visar bara dag och sträcka – bra om andra kan se din skärm. Avstängt visas platser du inte bekräftat ändå bara med namn eller gata utan husnummer, och hemmet som ”Hemmet”."
           />
         </div>
 

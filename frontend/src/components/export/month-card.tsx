@@ -89,12 +89,12 @@ function stateText(s: MonthStatus, job: ExportJob | undefined): React.ReactNode 
       return "Något har ändrats sedan underlaget skapades. En ny fil skapas vid nästa kontroll, och du får en notis.";
     case "empty":
       return "Inga tjänsteresor – ingen fil behövs.";
-    case "waiting":
-      return "Underlaget skapas av sig självt när det här är klart:";
-    default:
-      return s.blockers.some((b) => b.code === "month_not_over")
-        ? "Månaden pågår. Underlaget skapas av sig självt när den är slut."
-        : "Underlaget skapas av sig självt när det här är klart:";
+    default: {
+      if (s.blockers.some((b) => b.code === "month_not_over")) return "Månaden pågår. Underlaget skapas av sig självt när den är slut.";
+      const waitingFor = s.blockers.some((b) => b.code !== "month_not_over");
+      if (waitingFor) return "Underlaget skapas av sig självt när det här är klart:";
+      return s.state === "waiting" ? "Väntar på nästa kontroll." : "Månaden är inte kontrollerad än.";
+    }
   }
 }
 

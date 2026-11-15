@@ -47,7 +47,10 @@ from app.models.enums import (
     GeocodeStatus,
     LocationType,
     LogicalState,
+    MonthCloseState,
     PatternStatus,
+    PlaceAssumption,
+    PlaceKind,
     ReviewStatus,
     TripSource,
 )
@@ -68,6 +71,16 @@ LIVE_SOURCES = (TripSource.VOLVO_API, TripSource.DEMO)
 MULTI_TRIP_FLAGS = frozenset({"possible_missed_trips", "collection_gap", "detour_or_multiple_trips"})
 MULTI_TRIP_TEXT = "Kan vara flera körningar"
 COMMUTE_NOTE = "Resa mellan bostad och arbetsplats"
+# Platsantagandet (A.3).
+ASSUMED_REASON = "Antaget kundbesök"
+ASSUMED_PURPOSE_PREFIX = "Kundbesök"
+COMPANY_QUESTION = "Vilket företag var det?"
+# Företagsnamnet ryms med god marginal i ett ärende ("Kundbesök <namn>").
+COMPANY_MAX = 100
+# Platstyper som aldrig antas vara en kund (även om kartan säger arbetsplats).
+_NEVER_ASSUMED_TYPES = frozenset({
+    LocationType.HOME, LocationType.PRIVATE, LocationType.REGULAR_WORKPLACE, LocationType.OFFICE, LocationType.HOTEL,
+})
 
 # Kategorikälla på resan: ägarens egna regler räknas som "rule", det inlärda som "pattern".
 # Aldrig "user" eller "ha", så att avstämningen mot importen beter sig som förut.
@@ -448,11 +461,116 @@ def _return_rule(trip: LogicalTrip, ctx: Any, *, cfg: dict[str, Any], private_bl
     )
 
 
+def _poi_name(loc: KnownLocation | None) -> str | None:
+    """Platsens namn ur kartan (eller företaget), aldrig gatuadressen."""
+    from app.services.classify.engine import _name_is_address
+
+    if loc is None:
+        return None
+    company = sanitize_text(loc.company, limit=COMPANY_MAX)
+    if company:
+        return company
+    if loc.name and not _name_is_address(loc):
+        return sanitize_text(loc.name, limit=COMPANY_MAX)
+    return None
+
+
+def _assumable_place(loc: KnownLocation | None) -> bool:
+    """Kan platsen över huvud taget antas vara en kund? (obekräftad, ej återkallad, rätt art)"""
+    return (
+        loc is not None
+        and not loc.confirmed
+        and loc.assumption != PlaceAssumption.REVOKED
+        and loc.place_kind in (PlaceKind.WORK, PlaceKind.UNCLEAR)
+        and loc.type not in _NEVER_ASSUMED_TYPES
+    )
+
+
+def assumed_purpose_text(name: str) -> str:
+    return f"{ASSUMED_PURPOSE_PREFIX} {name}"
+
+
+def _ai_says_work(db: Session, trip: LogicalTrip) -> bool:
+    """AI-utlåtandet (A.3): den aktuella klassningen har ``ai_assessment`` med riktningen
+    Arbete och ingen ``ai_disagreement``."""
+    from app.models import TripEvidence
+    from app.services.classify.engine import _current_classification
+
+    cls = _current_classification(db, trip.id)
+    if cls is None or cls.source != DecisionSource.AI:
+        return False
+    rows = db.execute(
+        select(TripEvidence.kind, TripEvidence.direction).where(
+            TripEvidence.logical_trip_id == trip.id, TripEvidence.classification_id == cls.id
+        )
+    ).all()
+    kinds = {(k, d) for k, d in rows}
+    if any(k == "ai_disagreement" for k, _d in kinds):
+        return False
+    return ("ai_assessment", Category.WORK) in kinds
+
+
+def _ai_purpose(trip: LogicalTrip, ctx: Any, rules: Any) -> str | None:
+    """AI:ns ärende, men bara om det fortfarande klarar ``validate_generated``."""
+    from app.services.classify import purpose as purpose_mod
+
+    if trip.purpose_source != DecisionSource.AI or not trip.purpose:
+        return None
+    text = sanitize_text(trip.purpose)
+    if not text:
+        return None
+    ok, _missing = purpose_mod.validate_generated(text, ctx, rules=rules)
+    return text if ok else None
+
+
+def _in_office_hours(when: datetime | None, cfg: dict[str, Any]) -> bool:
+    """Ligger tidpunkten inom kontorstiden (``automation.office_hours``)?"""
+    if when is None:
+        return False
+    hours = (cfg.get("automation") or {}).get("office_hours") or settings_svc.DEFAULT_OFFICE_HOURS
+    local = when.astimezone(cfg["tz"])
+    if local.weekday() not in set(hours.get("days") or []):
+        return False
+    hhmm = local.strftime("%H:%M")
+    return str(hours.get("start", "07:00")) <= hhmm < str(hours.get("end", "18:00"))
+
+
 def _assumption_rule(
     db: Session, trip: LogicalTrip, ctx: Any, rules: Any, *, user_id: uuid.UUID, cfg: dict[str, Any]
 ) -> AutoDecision | None:
-    """A · "Antaget kundbesök" (A.3). Byggs av S1d; tills dess gäller den aldrig."""
-    return None
+    """A · "Antaget kundbesök" (A.3).
+
+    Anropas bara när spärr 1 och 2 är fria och varken P, R, H eller T har avgjort resan.
+    Målet ska vara en obekräftad plats som kartan kallar arbetsplats (``place_kind=work``)
+    med namn, eller ``unclear`` med namn där AI-leverantören bedömt resan som tjänst.
+    Utanför kontorstid, eller med vetotiden 0, blir antagandet bara en snabbknapp i en fråga.
+    """
+    dest = ctx.destination
+    if not _assumable_place(dest):
+        return None
+    name = _poi_name(dest)
+    if dest.place_kind == PlaceKind.WORK:
+        if not name:
+            return AutoDecision("ask_company", reason=COMPANY_QUESTION)
+        purpose = assumed_purpose_text(name)
+    else:
+        if not name or not _ai_says_work(db, trip):
+            return None
+        purpose = _ai_purpose(trip, ctx, rules) or assumed_purpose_text(name)
+
+    others = [c for c in purpose_candidates(db, trip, user_id=user_id) if c != purpose]
+    candidates = tuple([purpose, *others][:2])
+    if not _in_office_hours(trip.ended_at or trip.sort_time, cfg):
+        # Tidpunkten används aldrig som tecken på privat – bara som skäl att fråga.
+        return AutoDecision("ask", reason="Utanför kontorstid", candidates=candidates)
+    veto_hours = int((cfg.get("automation") or {}).get("assumption_veto_hours") or 0)
+    if veto_hours <= 0:
+        return AutoDecision("ask", reason="Fråga mig först", candidates=candidates)
+    veto_until = (cfg["now"] + timedelta(hours=veto_hours)).isoformat(timespec="seconds")
+    return AutoDecision(
+        "approve", category=Category.WORK, purpose=purpose, source=ApprovalSource.ASSUMED,
+        reason=ASSUMED_REASON, veto_until=veto_until,
+    )
 
 
 def decide(db: Session, trip: LogicalTrip, *, user_id: uuid.UUID, ctx: Any, rules: Any, cfg: Any) -> AutoDecision:
@@ -593,7 +711,10 @@ def apply(db: Session, trip: LogicalTrip, d: AutoDecision, *, actor: audit.Actor
     if trip.state != LogicalState.ACTIVE or trip.review_status in (ReviewStatus.APPROVED, ReviewStatus.IMPORTED):
         return False
     if d.outcome == "approve":
-        return _approve(db, trip, d, actor=actor)
+        approved = _approve(db, trip, d, actor=actor)
+        if approved and d.source == ApprovalSource.ASSUMED and d.related_trip_id is None:
+            _after_assumption(db, trip)
+        return approved
     if d.outcome in ("ask", "ask_company"):
         if trip.review_status == ReviewStatus.AUTO:
             trip.review_status = ReviewStatus.PROPOSED
@@ -676,6 +797,14 @@ def purpose_candidates(db: Session, trip: LogicalTrip, *, user_id: uuid.UUID, li
     route, dest = patterns_svc.get_patterns(db, user_id, trip.start_location_id, trip.end_location_id)
     out: list[str] = []
     seen: set[str] = set()
+    # Platsantagandet som snabbknapp (A.3): "Tjänst: Kundbesök <namn>" först, t.ex. utanför
+    # kontorstid eller med vetotiden 0.
+    place = db.get(KnownLocation, trip.end_location_id) if trip.end_location_id else None
+    name = _poi_name(place) if _assumable_place(place) else None
+    if name and (place.place_kind == PlaceKind.WORK or _ai_says_work(db, trip)):  # type: ignore[union-attr]
+        text = assumed_purpose_text(name)
+        seen.add(fold(text))
+        out.append(text)
     for pat in (route, dest):
         items = [p for p in patterns_svc.top_purposes(pat, limit=12) if p.get("category") == Category.WORK]
         items.sort(key=lambda p: (-p.get("user_count", 0), -p.get("count", 0)))
@@ -684,7 +813,7 @@ def purpose_candidates(db: Session, trip: LogicalTrip, *, user_id: uuid.UUID, li
             if not text or NEEDS_CONFIRMATION_SUFFIX in fold(text):
                 continue
             key = p.get("key") or fold(text)
-            if key in seen:
+            if key in seen or fold(text) in seen:
                 continue
             seen.add(key)
             out.append(text)
@@ -844,21 +973,213 @@ def on_owner_decision(db: Session, trip: LogicalTrip, *, before: dict[str, Any],
     return None
 
 
-def _on_assumed_correction(db: Session, trip: LogicalTrip, *, before: dict[str, Any], actor: audit.Actor) -> str | None:
-    """A.3 (b): "Fel" på en antagen resa. Byggs av S1d."""
+def _after_assumption(db: Session, trip: LogicalTrip) -> None:
+    """Första antagandet för en plats: platsen blir "antagen kund" och notisen köas
+    (``notices.queue_assumed`` skickar bara första gången per plats)."""
+    from app.services.ha import notices
+
+    dest = db.get(KnownLocation, trip.end_location_id) if trip.end_location_id else None
+    if dest is None:
+        return
+    if dest.assumption is None:
+        dest.assumption = PlaceAssumption.CUSTOMER
+    vehicle = db.get(Vehicle, trip.vehicle_id)
+    if vehicle is None:
+        return
+    db.flush()
+    try:
+        notices.queue_assumed(db, user_id=vehicle.owner_user_id, trip=trip, now=utcnow())
+    except Exception:  # notisen får aldrig stoppa beslutet
+        import logging
+
+        logging.getLogger(__name__).exception("Kunde inte köa notisen om antagandet")
+
+
+def _trip_month(db: Session, trip: LogicalTrip, user_id: uuid.UUID) -> str | None:
+    when = trip.ended_at or trip.sort_time
+    if when is None:
+        return None
+    local = when.astimezone(settings_svc.user_timezone(db, user_id))
+    return f"{local.year:04d}-{local.month:02d}"
+
+
+def _exported_month(db: Session, vehicle_id: uuid.UUID, month: str | None) -> Any:
+    """Månadsskiftets rad när månaden redan har ett automatiskt underlag, annars None."""
+    from app.models import MonthClose
+
+    if month is None:
+        return None
+    mc = db.execute(
+        select(MonthClose).where(MonthClose.vehicle_id == vehicle_id, MonthClose.month == month)
+    ).scalar_one_or_none()
+    if mc is not None and mc.state in (MonthCloseState.EXPORTED, MonthCloseState.STALE):
+        return mc
     return None
+
+
+def _on_assumed_correction(db: Session, trip: LogicalTrip, *, before: dict[str, Any], actor: audit.Actor) -> str | None:
+    """A.3 (b): "Fel" på en antagen resa.
+
+    Platsens antagande återkallas (``assumption="revoked"``). Övriga antagna resor dit, och
+    antagna hemresor efter dem, öppnas igen (``proposed``, ``approval_source`` NULL) och får
+    frågor. Resor i en månad som redan har ett automatiskt underlag öppnas inte; månaden
+    blir i stället ``stale``. Byter ägaren bara ärende ("Annat ärende") återkallas inget.
+    """
+    from app.services.trips import pipeline
+
+    if trip.category == before.get("category"):
+        return None
+    basis = before.get("approval_basis") or {}
+    dest_id = trip.end_location_id
+    if basis.get("related_trip_id"):
+        # En antagen hemresa (T) som rättas: antagandet gäller utresans mål.
+        try:
+            outbound = db.get(LogicalTrip, uuid.UUID(str(basis["related_trip_id"])))
+        except (TypeError, ValueError):
+            outbound = None
+        dest_id = outbound.end_location_id if outbound is not None else None
+    dest = db.get(KnownLocation, dest_id) if dest_id else None
+    vehicle = db.get(Vehicle, trip.vehicle_id)
+    if dest is None or vehicle is None:
+        return None
+    user_id = vehicle.owner_user_id
+    before_assumption = dest.assumption
+    dest.assumption = PlaceAssumption.REVOKED
+    audit.record(db, actor, "location.assumption_revoked", "known_location", dest.id,
+                 before={"assumption": before_assumption}, after={"assumption": PlaceAssumption.REVOKED},
+                 user_id=user_id)
+
+    assumed = list(
+        db.execute(
+            select(LogicalTrip)
+            .join(Vehicle, Vehicle.id == LogicalTrip.vehicle_id)
+            .where(
+                Vehicle.owner_user_id == user_id,
+                LogicalTrip.state == LogicalState.ACTIVE,
+                LogicalTrip.approval_source == ApprovalSource.ASSUMED,
+                LogicalTrip.id != trip.id,
+            )
+            .order_by(LogicalTrip.sort_time)
+        ).scalars()
+    )
+    affected = {t.id for t in assumed if t.end_location_id == dest.id}
+    wrong = affected | {trip.id}
+    # Antagna hemresor efter en felaktig utresa är lika fel.
+    for t in assumed:
+        related = (t.approval_basis or {}).get("related_trip_id")
+        if related and related in {str(i) for i in wrong}:
+            affected.add(t.id)
+
+    reopened = 0
+    for t in assumed:
+        if t.id not in affected:
+            continue
+        mc = _exported_month(db, t.vehicle_id, _trip_month(db, t, user_id))
+        if mc is not None:
+            if mc.state != MonthCloseState.STALE:
+                mc.state = MonthCloseState.STALE
+                audit.record(db, actor, "month_close.stale", "month_close", mc.id,
+                             after={"month": mc.month, "reason": "assumption_revoked"}, user_id=user_id)
+            continue
+        old = {"review_status": t.review_status, "approval_source": t.approval_source}
+        t.review_status = ReviewStatus.PROPOSED
+        t.approval_source = None
+        t.approval_basis = None
+        t.auto_approved_at = None
+        t.purpose_confirmed = False
+        t.updated_by = actor.label
+        audit.record(db, actor, "trip.assumption_reopened", "logical_trip", t.id, before=old,
+                     after={"review_status": ReviewStatus.PROPOSED, "approval_source": None}, user_id=user_id)
+        db.flush()
+        pipeline.sync_trip_review_items(db, t)
+        reopened += 1
+    db.flush()
+    text = f"{_label(dest)} räknas inte längre som kund."
+    if reopened == 1:
+        text += " 1 annan resa dit frågas om igen."
+    elif reopened > 1:
+        text += f" {reopened} andra resor dit frågas om igen."
+    return text
+
+
+def _make_customer(
+    db: Session, trip: LogicalTrip, name: str, *, actor: audit.Actor, action: str
+) -> tuple[KnownLocation, LocationPattern, uuid.UUID]:
+    """Regel (c): platsen blir bekräftad kund med en egen regel "Kundbesök <namn>"."""
+    from app.services.classify.engine import _name_is_address
+    from app.services.learning import patterns as patterns_svc
+
+    if trip.state != LogicalState.ACTIVE:
+        raise ValueError("Resan är inte aktiv.")
+    vehicle = db.get(Vehicle, trip.vehicle_id)
+    dest = db.get(KnownLocation, trip.end_location_id) if trip.end_location_id else None
+    if vehicle is None or dest is None:
+        raise ValueError("Resan har ingen plats att spara företaget på.")
+    if dest.type in _NEVER_ASSUMED_TYPES and dest.confirmed:
+        raise ValueError("Platsen kan inte bli en kund.")
+    user_id = vehicle.owner_user_id
+    before = {"type": dest.type, "confirmed": dest.confirmed, "company": dest.company, "assumption": dest.assumption}
+    dest.company = name
+    if _name_is_address(dest):
+        dest.name = name
+    dest.type = LocationType.CUSTOMER
+    dest.confirmed = True
+    dest.assumption = PlaceAssumption.CUSTOMER
+    purpose = assumed_purpose_text(name)
+    pat = patterns_svc.set_manual_rule(
+        db, user_id, origin_id=None, dest_id=dest.id, category=Category.WORK, purpose=purpose
+    )
+    audit.record(db, actor, action, "known_location", dest.id, before=before,
+                 after={"type": dest.type, "confirmed": True, "company": name, "rule_id": str(pat.id)},
+                 user_id=user_id)
+    db.flush()
+    return dest, pat, user_id
 
 
 def confirm_assumption(db: Session, trip: LogicalTrip, *, actor: audit.Actor) -> None:
-    """"Stämmer" på en antagen resa. (Stubbe: gör inget.)"""
-    return None
+    """"Stämmer" på en antagen resa (A.3 c).
+
+    Platsen blir bekräftad kund (``type=customer``, ``confirmed=True``, ``company``) med en
+    egen regel "Kundbesök <namn>", så att R gäller framöver. Resan blir ägarens beslut.
+    """
+    from app.services.learning import feedback
+
+    if trip.approval_source != ApprovalSource.ASSUMED or trip.category != Category.WORK:
+        raise ValueError("Resan är inte längre antagen.")
+    dest = db.get(KnownLocation, trip.end_location_id) if trip.end_location_id else None
+    basis = trip.approval_basis or {}
+    if basis.get("related_trip_id"):
+        raise ValueError("Svara på resan till kunden i stället.")
+    name = _poi_name(dest)
+    if dest is None or not name:
+        raise ValueError("Platsen saknar namn.")
+    _dest, _pat, user_id = _make_customer(db, trip, name, actor=actor, action="location.assumption_confirmed")
+    feedback.apply_decision(
+        db, trip, user_id=user_id, actor=actor, channel="ha" if actor.type == "ha" else "web",
+        category=Category.WORK, purpose=trip.purpose, approve=True,
+    )
 
 
 def set_company(db: Session, trip: LogicalTrip, text: str, *, actor: audit.Actor) -> None:
-    """Företagsnamnet för platsen. (Stubbe: gör inget.)"""
-    return None
+    """Företagsnamnet för platsen ("Vilket företag var det?", A.3).
+
+    Texten tvättas. Platsen blir bekräftad kund med regeln "Kundbesök <namn>" och resan
+    godkänns som tjänsteresa med det ärendet.
+    """
+    from app.services.learning import feedback
+
+    name = sanitize_text(text, limit=COMPANY_MAX)
+    if not name:
+        raise ValueError("Skriv företagets namn.")
+    _dest, _pat, user_id = _make_customer(db, trip, name, actor=actor, action="location.company_set")
+    feedback.apply_decision(
+        db, trip, user_id=user_id, actor=actor, channel="ha" if actor.type == "ha" else "web",
+        category=Category.WORK, purpose=assumed_purpose_text(name), approve=True,
+    )
 
 
 def classify_place(osm_category: str | None, osm_type: str | None) -> str:
-    """Platsens art ur kartans typ (tabellen i A.3). (Stubbe: alltid ``unclear``.)"""
-    return "unclear"
+    """Platsens art ur kartans typ (tabellen i A.3): ``work``, ``never`` eller ``unclear``."""
+    from app.services.places import geocode
+
+    return geocode.classify_place(osm_category, osm_type)

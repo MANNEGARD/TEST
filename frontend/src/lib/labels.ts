@@ -311,6 +311,13 @@ export const QUALITY_FLAG_LABELS: Record<string, string> = {
   start_time_uncertain: "Osäker starttid",
   stop_times_uncertain: "Osäkra stopptider",
   split_by_position_reports: "Uppdelad efter positionsrapporter",
+  end_time_uncertain: "Osäker sluttid",
+  start_lower_bound_unknown: "Tidigaste starttid okänd",
+  round_trip_unobserved: "Möjligen tur och retur utan observerat stopp",
+  collection_gap: "Avbrott i bilens rapporter",
+  detour_or_multiple_trips: "Möjligen omväg eller flera körningar",
+  no_position: "Position saknas",
+  source_includes_stops: "Källan räknar med stopp",
 };
 
 export const EVIDENCE_DIRECTION_LABELS: Record<string, string> = {

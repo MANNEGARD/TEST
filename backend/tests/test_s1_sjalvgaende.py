@@ -797,3 +797,17 @@ def test_automatic_trip_is_not_touched_again(db, user, vehicle, trips, auto, loc
     assert run(db, user, vehicle) == {}
     assert reload_trip(db, t.id).auto_approved_at == stamp
     assert t.state == LogicalState.ACTIVE
+
+
+def test_reconsider_decides_trips_when_address_is_ready(db, user, vehicle, trips, auto, locs):
+    loc = locs["school"]
+    loc.geocode_status = "pending"
+    loc.created_at = datetime.now(UTC)
+    db.flush()
+    patterns.set_manual_rule(db, user.id, origin_id=None, dest_id=loc.id, category=Category.PRIVATE, purpose=None)
+    t = live(trips, ACME, SCHOOL)
+    assert run(db, user, vehicle) == {"wait": 1}
+    loc.geocode_status = "ok"
+    db.flush()
+    autopilot.reconsider(db, user_id=user.id, trip_ids=[t.id], actor=audit.SYSTEM)
+    assert reload_trip(db, t.id).approval_source == ApprovalSource.RULE
