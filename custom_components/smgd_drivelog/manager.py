@@ -12,6 +12,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import __version__ as HA_VERSION
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
@@ -24,13 +25,18 @@ from .const import (
     STORAGE_VERSION,
 )
 from .core import (
+    ISSUE_NO_PHONE,
+    OUTAGE_TITLE,
+    OutageTracker,
     ResponseQueue,
     build_ack,
     build_callback_payload,
     build_heartbeat,
     feedback_message,
+    missing_phone_count,
     mobile_app_services,
     parse_outbox,
+    phone_issue_action,
     select_service,
 )
 
@@ -67,6 +73,8 @@ class DriveLogManager:
         self.last_error: str | None = None
         self.delivered_count = 0
         self.auth_failed = False
+        self.outage = OutageTracker()
+        self.phone_issue_open = False
 
     # ------------------------------------------------------------------ lagring
 
@@ -88,6 +96,48 @@ class DriveLogManager:
 
     def available_services(self) -> list[str]:
         return mobile_app_services(self.hass.services.async_services().get("notify", {}).keys())
+
+    def selected_service(self) -> str | None:
+        """DriveLogs val, annars integrationens, annars den enda telefonen i Home Assistant."""
+        return select_service(self.server_notify_service, self.configured_service, available=self.available_services())
+
+    @property
+    def _issue_id(self) -> str:
+        return f"{ISSUE_NO_PHONE}_{self.entry.entry_id}"
+
+    def _update_phone_issue(self, waiting: int) -> None:
+        """Reparationsärende i HA när DriveLog har notiser men ingen telefon är vald."""
+        action = phone_issue_action(
+            has_service=self.selected_service() is not None, waiting=waiting, issue_open=self.phone_issue_open
+        )
+        if action == "create":
+            ir.async_create_issue(
+                self.hass,
+                DOMAIN,
+                self._issue_id,
+                is_fixable=False,
+                is_persistent=False,
+                severity=ir.IssueSeverity.WARNING,
+                translation_key=ISSUE_NO_PHONE,
+            )
+            self.phone_issue_open = True
+        elif action == "delete":
+            ir.async_delete_issue(self.hass, DOMAIN, self._issue_id)
+            self.phone_issue_open = False
+
+    async def _async_outage(self, *, auth: bool = False) -> None:
+        """En lokal notis per avbrott: efter 30 minuter, eller direkt när token avvisas."""
+        if not self.outage.failure(time.time(), auth=auth):
+            return
+        service = self.selected_service()
+        if service is None:
+            return
+        try:
+            await self.hass.services.async_call(
+                "notify", service, {"title": OUTAGE_TITLE, "message": self.outage.message()}, blocking=True
+            )
+        except HomeAssistantError as err:
+            _LOGGER.debug("Kunde inte visa notisen om avbrottet: %s", err)
 
     def _auth_failed(self, err: DriveLogAuthError) -> None:
         self.last_error = str(err)
@@ -155,7 +205,7 @@ class DriveLogManager:
         message = feedback_message(result)
         if not message or not self.entry.options.get(CONF_SEND_FEEDBACK, True):
             return
-        service = select_service(self.server_notify_service, self.configured_service)
+        service = self.selected_service()
         if service is None:
             return
         try:
@@ -174,13 +224,19 @@ class DriveLogManager:
                 body = await self.client.outbox()
             except DriveLogAuthError as err:
                 self._auth_failed(err)
+                await self._async_outage(auth=True)
                 return 0
             except DriveLogError as err:
                 self.last_error = str(err)
+                await self._async_outage()
                 return 0
+            self.outage.success()
             self.last_outbox_at = dt_util.utcnow()
             self.delivery_mode = body.get("delivery_mode") if isinstance(body, dict) else None
-            deliveries, failed = parse_outbox(body, self.server_notify_service or self.configured_service)
+            deliveries, failed = parse_outbox(
+                body, self.server_notify_service or self.configured_service, available=self.available_services()
+            )
+            self._update_phone_issue(missing_phone_count(failed))
             delivered: list[str] = []
             for item in deliveries:
                 try:
@@ -247,5 +303,7 @@ class DriveLogManager:
             "last_error": self.last_error,
             "delivered_count": self.delivered_count,
             "auth_failed": self.auth_failed,
+            "outage_since": self.outage.since,
+            "phone_issue_open": self.phone_issue_open,
             "queue": self.queue.diagnostics(),
         }

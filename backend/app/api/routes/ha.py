@@ -179,6 +179,8 @@ def ha_heartbeat(body: HeartbeatIn, principal: HaPrincipal, db: DbDep) -> Heartb
             integrations.update_config(conn, {"notify_service": validate_notify_service(body.notify_service)})
         except ValueError:
             pass
+    if not disconnected:
+        connection.auto_select_phone(conn)  # exakt en telefon och inget val: välj den (C.5)
     state = connection.load(db, principal.user.id)
     # Har användaren kopplat bort Home Assistant i webben får ett livstecken inte återansluta;
     # det sker först när konfigurationen sparas i webben igen.

@@ -96,6 +96,38 @@ def devices_from_heartbeat(state: HAState) -> list[str]:
     return sorted(s for s in services if isinstance(s, str))
 
 
+def auto_select_phone(conn: IntegrationConnection) -> str | None:
+    """Väljer telefonen av sig själv när inget är valt och heartbeat listar exakt en.
+
+    Körs efter att heartbeat sparats. Ett val som ägaren (eller integrationen) redan
+    gjort ändras aldrig. Returnerar den sparade tjänsten, eller None om inget valdes.
+    """
+    cfg = conn.config or {}
+    if cfg.get("notify_service"):
+        return None
+    services = [s for s in ((cfg.get("heartbeat") or {}).get("notify_services") or []) if isinstance(s, str)]
+    phones = sorted({s for s in services if s.startswith("mobile_app_")})
+    if len(phones) != 1:
+        return None
+    integrations.update_config(conn, {"notify_service": phones[0]})
+    return phones[0]
+
+
+def phone_missing(state: HAState) -> bool:
+    """Sant när Home Assistant används men ingen telefon är vald och ingen kan väljas av sig själv.
+
+    Ingen tjänst vald varken i DriveLog eller i integrationen (integrationens val sparas
+    som ``notify_service`` vid heartbeat), och heartbeat listar inte exakt en telefon.
+    Demoläget och en integration som inte är konfigurerad saknar aldrig telefon.
+    """
+    if state.conn is None or state.is_demo or state.status == IntegrationStatus.NOT_CONFIGURED:
+        return False
+    if state.notify_service:
+        return False
+    phones = {s for s in devices_from_heartbeat(state) if s.startswith("mobile_app_")}
+    return len(phones) != 1
+
+
 def public_status(db: Session, user_id: uuid.UUID) -> dict[str, Any]:
     """Statusvy för webben. Innehåller aldrig åtkomsttoken."""
     state = load(db, user_id)
@@ -117,6 +149,7 @@ def public_status(db: Session, user_id: uuid.UUID) -> dict[str, Any]:
         "base_url": state.base_url,
         "has_token": bool(state.token),
         "notify_service": state.notify_service,
+        "phone_missing": phone_missing(state),
         "ha_version": (conn.capabilities or {}).get("version") if conn else None,
         "location_name": (conn.capabilities or {}).get("location_name") if conn else None,
         "last_success_at": conn.last_success_at if conn else None,

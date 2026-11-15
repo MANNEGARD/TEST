@@ -336,30 +336,54 @@ def disconnect(db: Session, user_id: uuid.UUID, *, delete_events: bool = True, f
     db.flush()
 
 
+ERROR_RETRY_INTERVAL = timedelta(hours=2)
+
+
 def sync_all_due(db: Session, *, now: datetime | None = None, min_interval_minutes: int = 30) -> dict[str, int]:
-    """Synkar alla anslutna kalendrar som inte synkats nyligen (anropas av bakgrundsjobb)."""
+    """Synkar alla anslutna kalendrar som inte synkats nyligen (anropas av bakgrundsjobb).
+
+    Anslutningar med status ERROR (t.ex. efter tre nätverksfel i rad) försöks igen, men
+    glesare, så att synken inte stannar tyst tills ägaren klickar "Synka nu" (fynd 21).
+    NEEDS_REAUTH försöks inte: där behövs en ny inloggning. Efter en lyckad synk
+    matchas resorna mot kalendern och klassas om, som efter "Synka nu" (fynd 20).
+    """
     from app.models import Vehicle
+    from app.services import audit
     from app.services.calendar import matching
+    from app.services.learning import feedback
 
     now = now or utcnow()
     done = failed = 0
     conns = db.execute(
         select(IntegrationConnection).where(
-            IntegrationConnection.provider == PROVIDER, IntegrationConnection.status == IntegrationStatus.CONNECTED
+            IntegrationConnection.provider == PROVIDER,
+            IntegrationConnection.status.in_((IntegrationStatus.CONNECTED, IntegrationStatus.ERROR)),
         )
     ).scalars().all()
     for conn in conns:
-        if conn.last_sync_at and now - conn.last_sync_at < timedelta(minutes=min_interval_minutes):
+        interval = timedelta(minutes=min_interval_minutes)
+        if conn.status == IntegrationStatus.ERROR:
+            interval = max(interval, ERROR_RETRY_INTERVAL)
+        if conn.last_sync_at and now - conn.last_sync_at < interval:
             continue
+        user_id = conn.user_id
         try:
-            sync_user(db, conn.user_id, now=now)
-            for vehicle in db.execute(
-                select(Vehicle).where(Vehicle.owner_user_id == conn.user_id, Vehicle.is_demo.is_(False))
-            ).scalars():
-                matching.match_vehicle(db, user_id=conn.user_id, vehicle=vehicle, since=now - timedelta(days=90))
-            done += 1
+            sync_user(db, user_id, now=now)
+            db.commit()  # händelserna och statusen sparas även om omklassningen skulle fallera
         except CalendarError as exc:
             logger.warning("Kalendersynk misslyckades: %s", exc.message)
             failed += 1
-        db.commit()
+            db.commit()
+            continue
+        done += 1
+        try:
+            for vehicle in db.execute(
+                select(Vehicle).where(Vehicle.owner_user_id == user_id, Vehicle.is_demo.is_(False))
+            ).scalars().all():
+                matching.match_vehicle(db, user_id=user_id, vehicle=vehicle, since=now - timedelta(days=90))
+                feedback.after_decisions(db, user_id=user_id, vehicle_id=vehicle.id, actor=audit.SYSTEM)
+            db.commit()
+        except Exception:
+            logger.exception("Omklassning efter kalendersynk misslyckades")
+            db.rollback()
     return {"synced": done, "failed": failed}

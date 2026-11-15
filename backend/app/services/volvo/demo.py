@@ -134,6 +134,7 @@ class DemoClient:
                     "averageFuelConsumption": {"value": 5.4, "unit": "l/100km", "timestamp": ts},
                     "averageSpeed": {"value": 62, "unit": "km/h", "timestamp": ts},
                     "tripMeterAutomatic": {"value": s.get("trip_meter", 0.0), "unit": "km", "timestamp": ts},
+                    "averageSpeedAutomatic": {"value": s.get("avg_speed", 0.0), "unit": "km/h", "timestamp": ts},
                     "distanceToEmptyTank": {"value": round(s["fuel"] * 16), "unit": "km", "timestamp": ts},
                     "distanceToEmptyBattery": {"value": round(s["battery"] * 0.45), "unit": "km", "timestamp": ts},
                 }
@@ -302,6 +303,8 @@ class _Sim:
         changes: dict[str, Any] = {
             "odometer": odo0 + km, "odo_ts": _iso(arrive), "engine": "STOPPED", "engine_ts": _iso(arrive),
             "fuel": fuel0 - km * 0.055, "battery": max(0.0, batt0 - km * 0.9), "trip_meter": float(km),
+            # Trippmätaren nollställs vid avfärd; snittfarten avser den senaste resan.
+            "avg_speed": round(km / minutes * 60, 1),
         }
         if report_position:
             changes.update({"place": dest, "lat": target["lat"], "lon": target["lon"], "pos_ts": _iso(arrive)})

@@ -118,13 +118,18 @@ def mobile_app_services(names: Any) -> list[str]:
     return sorted(out)
 
 
-def select_service(item_service: Any, *fallbacks: Any) -> str | None:
-    """Tjänsten en notis ska skickas med: DriveLogs val, annars integrationens."""
+def select_service(item_service: Any, *fallbacks: Any, available: Any = None) -> str | None:
+    """Tjänsten en notis ska skickas med: DriveLogs val, annars integrationens.
+
+    Är ingen vald men finns exakt en ``notify.mobile_app_*`` i Home Assistant används
+    den (``available`` är listan över tjänster). Med flera telefoner gissas aldrig.
+    """
     for candidate in (item_service, *fallbacks):
         name = notify_service_name(candidate)
         if name:
             return name
-    return None
+    only = mobile_app_services(available)
+    return only[0] if len(only) == 1 else None
 
 
 def token_has_scope(whoami: Any) -> bool:
@@ -164,11 +169,18 @@ class OutboxDelivery:
     data: dict[str, Any]
 
 
-def parse_outbox(body: Any, fallback_service: str | None) -> tuple[list[OutboxDelivery], list[dict[str, str]]]:
+NO_SERVICE_ERROR = "Ingen notify.mobile_app-tjänst är vald i DriveLog eller i integrationen."
+
+
+def parse_outbox(
+    body: Any, fallback_service: str | None, available: Any = None
+) -> tuple[list[OutboxDelivery], list[dict[str, str]]]:
     """Tolkar svaret från ``GET /ha/outbox``.
 
     Returnerar (leveranser, misslyckade) där misslyckade är poster som inte kan
     levereras (t.ex. ingen notify-tjänst vald) och ska rapporteras i kvittensen.
+    ``available`` är Home Assistants notify-tjänster: finns exakt en telefon används
+    den när inget annat är valt.
     """
     deliveries: list[OutboxDelivery] = []
     failed: list[dict[str, str]] = []
@@ -181,9 +193,9 @@ def parse_outbox(body: Any, fallback_service: str | None) -> tuple[list[OutboxDe
         if not isinstance(item_id, str) or not item_id or not isinstance(data, dict):
             continue
         kind = raw.get("type") if raw.get("type") in ("notify", "clear") else "notify"
-        service = select_service(raw.get("service"), fallback_service)
+        service = select_service(raw.get("service"), fallback_service, available=available)
         if service is None:
-            failed.append({"id": item_id, "error": "Ingen notify.mobile_app-tjänst är vald i DriveLog eller i integrationen."})
+            failed.append({"id": item_id, "error": NO_SERVICE_ERROR})
             continue
         if not isinstance(data.get("message"), str):
             failed.append({"id": item_id, "error": "Notisen saknar text."})
@@ -213,6 +225,78 @@ def feedback_message(result: Any) -> str | None:
         return None
     message = result.get("message")
     return message if isinstance(message, str) and message else None
+
+
+def missing_phone_count(failed: list[dict[str, str]]) -> int:
+    """Antalet notiser i utkorgen som inte kunde skickas för att ingen telefon är vald."""
+    return sum(1 for f in failed if f.get("error") == NO_SERVICE_ERROR)
+
+
+# ----------------------------------------------------------------------------- reparationsärende
+
+ISSUE_NO_PHONE = "no_phone"
+
+
+def phone_issue_action(*, has_service: bool, waiting: int, issue_open: bool) -> str | None:
+    """Vad som ska göras med reparationsärendet "ingen telefon vald".
+
+    ``create`` när DriveLog har notiser som väntar men ingen telefon kan väljas,
+    ``delete`` när en telefon finns igen, annars None (lämna som det är).
+    """
+    if has_service:
+        return "delete" if issue_open else None
+    if waiting > 0 and not issue_open:
+        return "create"
+    return None
+
+
+# ----------------------------------------------------------------------------- avbrott
+
+OUTAGE_NOTIFY_AFTER_SECONDS = 30 * 60
+OUTAGE_TITLE = "SMGD DriveLog nås inte"
+
+
+@dataclass
+class OutageTracker:
+    """Håller reda på avbrott mot ``GET /ha/outbox``: en lokal notis per avbrott.
+
+    Notisen skickas när hämtningen har misslyckats i mer än 30 minuter, eller direkt
+    när DriveLog svarar 401 (token avvisad). Den skickas en gång; nästa lyckade
+    hämtning avslutar avbrottet. Tiden är sekunder (``time.time()``).
+    """
+
+    since: float | None = None
+    auth: bool = False
+    notified: bool = False
+
+    def failure(self, now: float, *, auth: bool = False) -> bool:
+        """Registrerar ett misslyckande. Sant om den lokala notisen ska skickas nu."""
+        if self.since is None:
+            self.since = now
+        self.auth = self.auth or auth
+        if self.notified:
+            return False
+        if self.auth or now - self.since > OUTAGE_NOTIFY_AFTER_SECONDS:
+            self.notified = True
+            return True
+        return False
+
+    def success(self) -> bool:
+        """Hämtningen lyckades. Sant om ett avbrott just tog slut."""
+        ended = self.since is not None
+        self.since, self.auth, self.notified = None, False, False
+        return ended
+
+    def message(self) -> str:
+        if self.auth:
+            return (
+                "DriveLog avvisar Home Assistants API-token. Skapa en ny token i DriveLog och logga in igen "
+                "under Inställningar → Enheter och tjänster. Frågor från DriveLog kommer inte fram så länge."
+            )
+        return (
+            "Home Assistant har inte kunnat hämta frågor från DriveLog på över 30 minuter. "
+            "Dina svar sparas och skickas när DriveLog nås igen."
+        )
 
 
 # ----------------------------------------------------------------------------- svarskö

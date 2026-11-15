@@ -77,5 +77,11 @@
       "name": "Töm svarskön",
       "description": "Skickar köade svar till DriveLog direkt och hämtar nya notiser."
     }
+  },
+  "issues": {
+    "no_phone": {
+      "title": "DriveLog har frågor men ingen telefon är vald",
+      "description": "SMGD DriveLog har notiser som väntar, men ingen telefon (notify.mobile_app_…) är vald. Välj telefonen i DriveLog under Integrationer → Home Assistant, eller i integrationens alternativ. Inget går förlorat: frågorna väntar i DriveLog."
+    }
   }
 }

@@ -89,9 +89,11 @@ def refresh_logical(db: Session, trip: LogicalTrip) -> LogicalTrip:
         trip.segment_count = 0
         return trip
     first, last = raws[0], raws[-1]
-    trip.started_at = first.started_at
+    # Ägarens angivna starttid gäller före delresornas (byggkontraktet C.2).
+    override = trip.start_time_override
+    trip.started_at = override if override is not None else first.started_at
     trip.ended_at = last.ended_at
-    trip.start_time_quality = first.start_time_quality
+    trip.start_time_quality = TimeQuality.EXACT if override is not None else first.start_time_quality
     trip.end_time_quality = last.end_time_quality
     trip.sort_time = raw_sort_time(first)
     trip.odometer_start = first.odometer_start
@@ -155,7 +157,7 @@ def refresh_logical(db: Session, trip: LogicalTrip) -> LogicalTrip:
             flags.add("possible_missed_trips")
         # Resans start/slut är osäker bara om första/sista delresan är det;
         # osäkra tider vid mellanstopp flaggas separat.
-        if r.start_time_quality in uncertain:
+        if r.start_time_quality in uncertain and not (i == 0 and override is not None):
             flags.add("start_time_uncertain" if i == 0 else "stop_times_uncertain")
         if r.end_time_quality in uncertain:
             flags.add("end_time_uncertain" if i == len(raws) - 1 else "stop_times_uncertain")

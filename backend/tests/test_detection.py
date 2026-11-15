@@ -59,10 +59,13 @@ def test_simple_observed_trip(db, user, vehicle, car):
     assert (raw.start_lat, raw.end_lat) == (A[0], B[0])
     # Sluttid = bilens egen positionstidsstämpel.
     assert raw.ended_at == m(18) and raw.end_time_quality == TimeQuality.REPORTED
-    # Starttiden är okänd: bara gränser, inget påhittat klockslag.
-    assert raw.started_at is None and raw.start_time_quality == TimeQuality.BOUNDED
+    # Starttiden räknas fram ur mätarökningarna under färd (5 km på 07:09:30, 11 km på
+    # 07:14:30 → 72 km/h) och märks som uträknad. Gränserna och grunden sparas.
+    assert raw.start_time_quality == TimeQuality.ESTIMATED and raw.started_at == m(5)
     assert raw.start_earliest is not None and raw.start_latest is not None
-    assert raw.start_earliest <= m(7) <= raw.start_latest <= m(9.5)  # bilen for kring 07:07
+    assert raw.start_earliest <= raw.started_at <= raw.start_latest <= m(9.5)
+    assert raw.start_estimate_basis["method"] == "odometer_speed"
+    assert raw.start_estimate_basis["margin_min"] <= 5
     assert raw.fuel_liters is None and raw.fuel_quality == ValueQuality.UNKNOWN
     assert raw.energy_kwh is None and raw.energy_quality == ValueQuality.UNKNOWN
     assert raw.possible_missed_trips is False and raw.is_complete is True
@@ -70,7 +73,8 @@ def test_simple_observed_trip(db, user, vehicle, car):
     # Journalresa skapad som oavgjord och obligatoriskt granskad.
     seg = db.execute(select(M.TripSegment).where(M.TripSegment.raw_trip_id == raw.id)).scalar_one()
     trip = db.get(M.LogicalTrip, seg.logical_trip_id)
-    assert trip.state == LogicalState.ACTIVE and trip.started_at is None
+    assert trip.state == LogicalState.ACTIVE and trip.started_at == raw.started_at
+    assert trip.start_time_quality == TimeQuality.ESTIMATED and "start_time_uncertain" not in trip.quality_flags
     assert trip.category in (Category.UNDECIDED, Category.WORK, Category.PRIVATE)
     assert trip.review_status in (ReviewStatus.NEEDS_REVIEW, ReviewStatus.PROPOSED, ReviewStatus.AUTO)
     assert db.execute(select(M.AuditEvent).where(M.AuditEvent.action == "trip.detected")).scalar_one()
@@ -188,7 +192,9 @@ def test_short_stop_inside_one_movement_splits_into_legs(db, user, vehicle, car)
     assert first.ended_at == m(18) and second.ended_at == m(33)
     assert "split_by_position_reports" in first.quality_flags
     assert second.start_earliest >= first.ended_at - timedelta(minutes=2)
-    assert second.started_at is None
+    # Starten efter stoppet räknas fram ur farten och ligger inom gränserna (efter ankomsten till B).
+    assert second.start_time_quality == TimeQuality.ESTIMATED
+    assert second.start_earliest <= second.started_at <= second.start_latest <= m(24)
 
 
 def test_detection_is_idempotent(db, user, vehicle, car):

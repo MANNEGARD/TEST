@@ -77,5 +77,11 @@
       "name": "Flush response queue",
       "description": "Sends queued answers to DriveLog immediately and fetches new notifications."
     }
+  },
+  "issues": {
+    "no_phone": {
+      "title": "DriveLog has questions but no phone is selected",
+      "description": "SMGD DriveLog has notifications waiting, but no phone (notify.mobile_app_…) is selected. Choose the phone in DriveLog under Integrations → Home Assistant, or in this integration's options. Nothing is lost: the questions wait in DriveLog."
+    }
   }
 }

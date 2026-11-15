@@ -46,6 +46,7 @@ from app.services.places.normalize import parse_address
 from app.services.stats import common
 from app.services.stats.common import EnergyAcc, OdometerReading, Period
 from app.services.trips import segments as seg
+from app.services.trips import start_time
 
 SHEET_OVERVIEW = "Översikt"
 SHEET_JOURNAL = "Körjournal"
@@ -234,7 +235,14 @@ def _notes(ctx: ExportContext, trip: LogicalTrip, refuels: list[FuelRecord]) -> 
                 parts.append(f"Starttid okänd – mellan {lo:%Y-%m-%d %H:%M} och {hi:%Y-%m-%d %H:%M}")
             else:
                 parts.append("Starttid okänd")
-        elif trip.start_time_quality in (TimeQuality.ESTIMATED, TimeQuality.BOUNDED):
+        elif getattr(trip, "start_time_override", None) is not None:
+            parts.append("Starttiden är angiven av dig")
+        elif trip.start_time_quality == TimeQuality.ESTIMATED:
+            # Uträknad ur bilens egna avläsningar (byggkontraktet D.3), med felmarginalen.
+            basis = raws[0].start_estimate_basis if raws else None
+            margin = start_time.margin_text(basis if isinstance(basis, dict) else None)
+            parts.append("Starttiden är uträknad ur bilens egna uppgifter (ca" + (f", {margin})" if margin else ")"))
+        elif trip.start_time_quality == TimeQuality.BOUNDED:
             parts.append("Starttiden är uppskattad")
         if trip.ended_at is None:
             parts.append("Sluttid okänd")

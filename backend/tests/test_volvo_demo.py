@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy import func, select
 
 import app.models as M
-from app.models.enums import IntegrationStatus, TripSource
+from app.models.enums import IntegrationStatus, TimeQuality, TripSource
 from app.services import integrations
 from app.services.volvo import demo, oauth
 from app.services.volvo.client import VolvoError
@@ -38,13 +38,22 @@ def test_simulated_trips_go_through_the_pipeline_on_demo_vehicle_only(db, user, 
     assert result["new_trip_ids"], result
     raws = db.execute(select(M.RawTrip)).scalars().all()
     assert raws and all(r.vehicle_id == demo_car.id and r.source == TripSource.DEMO for r in raws)
-    assert all(r.started_at is None for r in raws)
+    # Starttiden är antingen okänd (bara gränser) eller uträknad och märkt, inom gränserna.
+    for r in raws:
+        if r.started_at is None:
+            assert r.start_time_quality == TimeQuality.BOUNDED
+        else:
+            assert r.start_time_quality == TimeQuality.ESTIMATED and r.start_estimate_basis["method"] != "trip_meter"
+            assert r.start_earliest <= r.started_at <= r.start_latest
+    if scenario == "commute":
+        assert all(r.start_time_quality == TimeQuality.ESTIMATED for r in raws)  # observerad under färd
     assert count(db, M.VehicleObservation, M.VehicleObservation.vehicle_id == vehicle.id) == 0
     assert count(db, M.LogicalTrip, M.LogicalTrip.vehicle_id == vehicle.id) == 0
     if scenario == "round_trip":
         assert any(r.possible_missed_trips for r in raws)
     if scenario == "silent":
         assert all(r.start_earliest is not None and r.start_latest is not None for r in raws)
+        assert all(r.started_at is None for r in raws)  # bara slutavläsning och K1 avstängd
 
 
 def test_demo_never_makes_real_connection_look_connected(db, user, vehicle):

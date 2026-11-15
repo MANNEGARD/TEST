@@ -30,7 +30,7 @@ import xlsxwriter
 from xlsxwriter.utility import xl_rowcol_to_cell
 
 from app.models import LogicalTrip, Vehicle
-from app.models.enums import TimeQuality
+from app.models.enums import TimeQuality, TripSource
 from app.services.export.workbook import safe_text
 from app.services.places.normalize import clean, fold
 from app.services.stats import common
@@ -40,6 +40,11 @@ TITLE = "Körjournal – tjänsteresor"
 DEMO_SUFFIX = "DEMODATA"
 FOOTNOTE = "Endast tjänsteresor redovisas. Övrig körning med bilen är privat och ingår inte i underlaget."
 FOOTNOTE_MIXED = " För delvis privata resor anges endast tjänstedelen under Km."
+# Tider som DriveLog räknat fram märks "ca" (hårt mellanslag, så att märkningen aldrig
+# hamnar ensam på en rad). Fotnoten står på en egen rad under tabellen.
+ESTIMATED_PREFIX = "ca\u00a0"
+FOOTNOTE_TIMES = "ca = uträknad ur bilens egna uppgifter, felmarginalen visas i DriveLog; –08:52 = starttid okänd"
+LIVE_SOURCES = (TripSource.VOLVO_API, TripSource.DEMO)
 EMPTY_TEXT = "Inga tjänsteresor att redovisa i perioden."
 
 # (nyckel, rubrik, kolumnbredd i Excels teckenenheter). Tabellen skrivs ut i 100 % skala
@@ -116,6 +121,7 @@ class SimpleRow:
     odometer_end: float | None
     km: float
     mixed: bool = False  # resan innehåller även privat körning (endast tjänstedelen redovisas)
+    time_note: bool = False  # tiden behöver fotnoten om "ca" och okänd starttid
 
     @property
     def to_text(self) -> str:
@@ -187,6 +193,11 @@ class SimpleJournal:
     def footnote(self) -> str:
         return FOOTNOTE + (FOOTNOTE_MIXED if any(r.mixed for r in self.rows) else "")
 
+    @property
+    def time_footnote(self) -> str:
+        """Fotnoten om uträknade och okända tider, eller tom text när ingen rad behöver den."""
+        return FOOTNOTE_TIMES if any(r.time_note for r in self.rows) else ""
+
     def totals(self) -> dict[str, Any]:
         """Summorna – samma tal som formlernas cachevärden och som dashboardens milersättning."""
         km = round(sum(r.km for r in self.rows), 1)
@@ -238,21 +249,36 @@ def time_text(trip: LogicalTrip, tz: ZoneInfo) -> str:
     """Klockslagen "08:31–09:04" i lokal tid; "(+1)" när resan slutar ett senare dygn.
 
     En okänd tid hittas aldrig på: "–09:04" när bara sluttiden är känd, "08:31–" när bara
-    starttiden är känd och tom text när ingen av dem är känd.
+    starttiden är känd och tom text när ingen av dem är känd. En tid som DriveLog räknat
+    fram ur bilens uppgifter (``estimated``) skrivs "ca 07:35", både start och slut.
     """
     start = trip.started_at if trip.start_time_quality not in UNKNOWN_TIME else None
     end = trip.ended_at if trip.end_time_quality not in UNKNOWN_TIME else None
     s = start.astimezone(tz) if start is not None else None
     e = end.astimezone(tz) if end is not None else None
+    s_text = _clock(s, trip.start_time_quality) if s is not None else ""
+    e_text = _clock(e, trip.end_time_quality) if e is not None else ""
     if s is not None and e is not None:
-        text = f"{s:%H:%M}–{e:%H:%M}"
+        text = f"{s_text}–{e_text}"
         days = (e.date() - s.date()).days
         return f"{text} (+{days})" if days > 0 else text
     if e is not None:
-        return f"–{e:%H:%M}"
+        return f"–{e_text}"
     if s is not None:
-        return f"{s:%H:%M}–"
+        return f"{s_text}–"
     return ""
+
+
+def _clock(value: datetime, quality: str | None) -> str:
+    text = f"{value:%H:%M}"
+    return f"{ESTIMATED_PREFIX}{text}" if quality == TimeQuality.ESTIMATED else text
+
+
+def needs_time_note(trip: LogicalTrip, text: str) -> bool:
+    """Behöver raden fotnoten? Vid "ca", och vid okänd starttid på en resa från bilen."""
+    if ESTIMATED_PREFIX in text:
+        return True
+    return text.startswith("–") and getattr(trip, "source", None) in LIVE_SOURCES
 
 
 def _via(trip: LogicalTrip) -> tuple[str, ...]:
@@ -282,10 +308,11 @@ def build_row(trip: LogicalTrip, tz: ZoneInfo) -> SimpleRow:
     when = _row_time(trip)
     km = common.reported_work_km(trip)
     per_category = common.segment_km(trip)
+    time = time_text(trip, tz)
     return SimpleRow(
         trip_id=trip.id,
         date=when.astimezone(tz).date() if when is not None else None,
-        time=time_text(trip, tz),
+        time=time,
         from_address=clean(trip.start_address),
         to_address=clean(trip.end_address),
         via=_via(trip),
@@ -294,6 +321,7 @@ def build_row(trip: LogicalTrip, tz: ZoneInfo) -> SimpleRow:
         odometer_end=trip.odometer_end,
         km=km,
         mixed=per_category["private"] + per_category["undecided"] > common.KM_EPS,
+        time_note=needs_time_note(trip, time),
     )
 
 
@@ -588,6 +616,8 @@ def write_workbook(path: Path, journal: SimpleJournal) -> dict[str, Any]:
     mil_row = total_row + 1
     amount_row = mil_row + 1 if journal.amount_shown else None
     note_row = (amount_row if amount_row is not None else mil_row) + 1
+    time_note_row = note_row + 1 if journal.time_footnote else None
+    last_note_row = time_note_row if time_note_row is not None else note_row
 
     # --- tabell -----------------------------------------------------------------------------
     sub_row = header_row + 1
@@ -658,6 +688,9 @@ def write_workbook(path: Path, journal: SimpleJournal) -> dict[str, Any]:
     # Högst en förklarande rad: varför mätarställningen hoppar mellan resorna.
     ws.set_row(note_row, NOTE_PT)
     ws.write_string(note_row, 0, journal.footnote, fmt_note)
+    if time_note_row is not None:
+        ws.set_row(time_note_row, NOTE_PT)
+        ws.write_string(time_note_row, 0, journal.time_footnote, fmt_note)
 
     # --- skärm och utskrift -------------------------------------------------------------------
     ws.freeze_panes(first, 0)
@@ -669,9 +702,9 @@ def write_workbook(path: Path, journal: SimpleJournal) -> dict[str, Any]:
     ws.set_margins(left=MARGIN_LR_IN, right=MARGIN_LR_IN, top=MARGIN_TOP_IN, bottom=MARGIN_BOTTOM_IN)
     ws.center_horizontally()
     ws.repeat_rows(header_row, header_row + HEADER_ROWS - 1)
-    ws.print_area(0, 0, note_row, last_col)
+    ws.print_area(0, 0, last_note_row, last_col)
     top_pt = TITLE_PT + INFO_ROW_PT * info_rows + SPACER_PT + HEADER_PT
-    tail_pt = TOTAL_PT + SUM_ROW_PT * (note_row - total_row - 1) + NOTE_PT
+    tail_pt = TOTAL_PT + SUM_ROW_PT * (note_row - total_row - 1) + NOTE_PT * (last_note_row - note_row + 1)
     breaks = page_breaks(top_pt, heights, tail_pt, first)
     if breaks:
         ws.set_h_pagebreaks(breaks)
@@ -690,6 +723,7 @@ def write_workbook(path: Path, journal: SimpleJournal) -> dict[str, Any]:
         "mil_row": mil_row,
         "amount_row": amount_row,
         "note_row": note_row,
+        "time_note_row": time_note_row,
         "value_col": value_col,
         "page_breaks": breaks,
     }

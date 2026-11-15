@@ -42,6 +42,7 @@ _HASH_FIELDS = (
     "fuel_liters", "fuel_reported_at", "battery_percent", "battery_reported_at", "electric_range_km",
     "fuel_range_km", "charging_status", "engine_running", "engine_reported_at", "avg_fuel_consumption",
     "avg_energy_consumption", "avg_speed", "trip_meter_auto_km", "trip_meter_manual_km",
+    "avg_speed_auto", "statistics_reported_at",
 )
 _REPORTED_FIELDS = (
     "odometer_reported_at", "position_reported_at", "fuel_reported_at", "battery_reported_at", "engine_reported_at",
@@ -183,8 +184,13 @@ def parse_results(results: dict[str, ApiResult]) -> dict[str, Any]:
         f["avg_fuel_consumption"] = vc.parse_number(vc.cv_field(r.data, "averageFuelConsumption")[0])
         f["avg_energy_consumption"] = vc.parse_number(vc.cv_field(r.data, "averageEnergyConsumption")[0])
         f["avg_speed"] = vc.parse_number(vc.cv_field(r.data, "averageSpeed")[0])
-        value, unit, _ = vc.cv_field(r.data, "tripMeterAutomatic")
+        value, unit, trip_ts = vc.cv_field(r.data, "tripMeterAutomatic")
         f["trip_meter_auto_km"] = vc.to_km(value, unit)
+        # Snittfarten sedan trippmätaren nollställdes, och när bilen rapporterade
+        # statistiken (för starttiden, byggkontraktet D.1).
+        value, unit, speed_ts = vc.cv_field(r.data, "averageSpeedAutomatic")
+        f["avg_speed_auto"] = _to_kmh(value, unit)
+        f["statistics_reported_at"] = trip_ts or speed_ts
         value, unit, _ = vc.cv_field(r.data, "tripMeterManual")
         f["trip_meter_manual_km"] = vc.to_km(value, unit)
         value, unit, _ = vc.cv_field(r.data, "distanceToEmptyTank")
@@ -214,6 +220,18 @@ def parse_results(results: dict[str, ApiResult]) -> dict[str, Any]:
         if isinstance(value, str):
             f["charging_status"] = value[:60]
     return f
+
+
+def _to_kmh(value: Any, unit: str | None) -> float | None:
+    num = vc.parse_number(value)
+    if num is None:
+        return None
+    u = (unit or "km/h").lower().replace(" ", "")
+    if u in ("mph", "mi/h", "miles/h"):
+        return round(num * C.MILES_TO_KM, 1)
+    if u in ("km/h", "kmh", "kph", "km/hr"):
+        return num
+    return None  # okänd enhet: hellre inget värde än ett fel
 
 
 def content_hash(fields: dict[str, Any]) -> str:

@@ -16,6 +16,7 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.storage import Store
@@ -33,7 +34,7 @@ from .const import (
     STORAGE_VERSION,
 )
 from .coordinator import DriveLogCoordinator
-from .core import is_drivelog_action
+from .core import ISSUE_NO_PHONE, is_drivelog_action
 from .manager import DriveLogManager
 
 _LOGGER = logging.getLogger(__name__)
@@ -126,5 +127,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: DriveLogConfigEntry) ->
 
 
 async def async_remove_entry(hass: HomeAssistant, entry: DriveLogConfigEntry) -> None:
-    """Tar bort den sparade svarskön när integrationen tas bort."""
+    """Tar bort den sparade svarskön och reparationsärendet när integrationen tas bort."""
+    ir.async_delete_issue(hass, DOMAIN, f"{ISSUE_NO_PHONE}_{entry.entry_id}")
     await Store(hass, STORAGE_VERSION, f"{DOMAIN}.{entry.entry_id}.responses").async_remove()

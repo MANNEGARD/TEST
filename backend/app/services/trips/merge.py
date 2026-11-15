@@ -84,7 +84,12 @@ def stop_gap(prev: RawTrip, nxt: RawTrip) -> StopGap:
         # Sluttiden är bara en gräns (t.ex. endast datum i en import): underlaget säger
         # ingenting om stilleståndet – varken automatisk sammanslagning eller fråga.
         return StopGap(None, None, False, odo_gap)
-    if nxt.started_at is not None and nxt.start_time_quality not in _UNCERTAIN_START:
+    # En uträknad starttid (live-resa) räknas inte som känd här: stilleståndet bedöms
+    # med samma gränser som när starttiden är okänd (byggkontraktet C.2).
+    estimated = nxt.start_time_quality == TimeQuality.ESTIMATED and (
+        nxt.start_earliest is not None or nxt.start_latest is not None
+    )
+    if nxt.started_at is not None and nxt.start_time_quality not in _UNCERTAIN_START and not estimated:
         minutes = (nxt.started_at - prev.ended_at).total_seconds() / 60
         exact = prev.end_time_quality in _EXACT and nxt.start_time_quality in _EXACT
         if minutes < -1:

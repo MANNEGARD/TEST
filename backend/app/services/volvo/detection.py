@@ -11,8 +11,9 @@ och mätarställningen är ett heltal i kilometer. Motorn gör därför så här
 * Varje ny positionsrapport inom rörelsen är ett ankomstbesked och delar upp den i
   delresor.
 
-Starttiden är aldrig känd: den lämnas tom och i stället anges ett intervall
-(``start_earliest``–``start_latest``). Om mätarsträckan inte förklaras av
+Starttiden rapporteras inte av bilen. Den räknas fram ur bilens egna avläsningar när de
+räcker (``trips.start_time.estimate``, märkt ``estimated``); annars lämnas den tom och i
+stället anges ett intervall (``start_earliest``–``start_latest``). Om mätarsträckan inte förklaras av
 positionerna (omväg, rundresa utan ny position, uppehåll i insamlingen) flaggas
 resan med ``possible_missed_trips`` – flera körningar kan ha skett.
 """
@@ -49,7 +50,7 @@ from app.services.audit import Actor
 from app.services.places import geocode
 from app.services.places import registry as places
 from app.services.places.normalize import haversine_m, valid_coordinates
-from app.services.trips import review
+from app.services.trips import review, start_time
 from app.services.trips import segments as seg
 
 logger = logging.getLogger(__name__)
@@ -336,7 +337,7 @@ def _raw_from_leg(
     if end_quality != TimeQuality.REPORTED:
         flags.append("end_time_uncertain")
 
-    # Starttid: okänd och hittas aldrig på. Endast gränser anges.
+    # Starttid: hittas aldrig på. Först gränserna:
     #  * Senaste möjliga start: första hämtningen (eller bilens egen tidsstämpel) som
     #    visade ändrat läge, och aldrig senare än att sträckan hinns med i
     #    ``MAX_AVG_SPEED_KMH``.
@@ -361,6 +362,17 @@ def _raw_from_leg(
     else:
         earliest = min(earliest, latest)
 
+    # Starttiden räknas fram ur bilens egna avläsningar när de räcker (märks "estimated"
+    # med grunden sparad); annars förblir den okänd och bara gränserna anges.
+    est = start_time.estimate(
+        earliest=earliest, latest=latest, start_odometer=odo_s, ended_at=ended_at, distance_km=distance,
+        steps=[start_time.obs_view(s.obs) for s in leg.steps], end=start_time.obs_view(leg.end_obs),
+    )
+    started_at, start_quality, start_basis = None, TimeQuality.BOUNDED, None
+    if est.at is not None:
+        started_at, start_quality, start_basis = est.at, TimeQuality.ESTIMATED, est.basis
+        earliest, latest = est.earliest, est.latest
+
     # Demoplatser matchas aldrig mot ett riktigt fordon (och tvärtom).
     demo = bool(vehicle.is_demo)
     # Okända stopp får en ny obekräftad plats som väntar på adress (inget nätverk här).
@@ -371,9 +383,10 @@ def _raw_from_leg(
         vehicle_id=vehicle.id,
         source=TripSource.DEMO if vehicle.is_demo else TripSource.VOLVO_API,
         source_key=key,
-        started_at=None,
+        started_at=started_at,
         ended_at=ended_at,
-        start_time_quality=TimeQuality.BOUNDED,
+        start_time_quality=start_quality,
+        start_estimate_basis=start_basis,
         end_time_quality=end_quality,
         start_earliest=earliest,
         start_latest=latest,
