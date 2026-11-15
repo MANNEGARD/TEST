@@ -5,6 +5,10 @@ name: CI
 
 on:
   push:
+    # Bara repots egna grenar – inte tillfälliga grenar från andra verktyg.
+    branches:
+      - main
+      - "claude/relaxed-galileo-k3i0cz"
   workflow_dispatch:
 
 # En körning i taget per gren. En pågående körning får gå klart (den provstartar hela

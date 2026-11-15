@@ -1,13 +1,17 @@
 # Home Assistant-tillägget (drivelog/): tester, bygge för amd64 och aarch64, provstart som
 # Supervisor skulle göra – och på standardgrenen publicering av avbilden till GHCR.
 #
-# Actions är fästa vid commit-SHA (versionen står som kommentar); Dependabot föreslår nya.
+# Actions är fästa vid commit-SHA (versionen står som kommentar).
 # Home Assistant visar en ny version så fort config.yaml ändras på standardgrenen – tryck alltså
 # på Uppdatera först när det här arbetsflödet är grönt (då finns avbilden på GHCR).
 name: Home Assistant-tillägg
 
 on:
   push:
+    # Bara repots egna grenar – inte tillfälliga grenar från andra verktyg.
+    branches:
+      - main
+      - "claude/relaxed-galileo-k3i0cz"
     paths:
       - "drivelog/**"
       - "repository.yaml"

@@ -14,13 +14,11 @@
 # binärer finns kvar. Node, Python-paketen och Caddy kommer däremot från avbilder för mål-
 # arkitekturen, så bara pip-installationen körs under emulering för arm64.
 
-# Bas-avbilderna är fästa vid digest (index för alla arkitekturer, uppslaget 2026-11-15): en flyttad
-# tagg uppströms hamnar aldrig oprövad i en publicerad avbild. Dependabot (.github/dependabot.yml)
-# föreslår nya digest som vanliga ändringar som går igenom CI. Samma avbild skrivs ut på varje
-# FROM-rad (inte via ARG) så att Dependabot hittar och uppdaterar alla.
+# Bas-avbilderna anges med versionstagg (inte digest): varje ny version av appen byggs då på de
+# senaste rättade avbilderna av Python, Node och Caddy, och allt provstartas i CI före publicering.
 
 # --- Webbappen (Next.js standalone), byggs en gång för alla arkitekturer --------------------------
-FROM --platform=$BUILDPLATFORM node:22-bookworm-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee AS webb
+FROM --platform=$BUILDPLATFORM node:22-bookworm-slim AS webb
 WORKDIR /src
 ENV NEXT_TELEMETRY_DISABLED=1 \
     API_INTERNAL_URL=http://127.0.0.1:8000
@@ -47,7 +45,7 @@ RUN set -eu; \
     cp -a public /ut/public
 
 # --- Backendens Python-paket, för målarkitekturen ----------------------------------------------
-FROM python:3.13-slim-bookworm@sha256:a5a7017efc5969e00ae2b91c8eb0631049a569652aa4ffc4501769049ae45c72 AS api
+FROM python:3.13-slim-bookworm AS api
 ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 RUN python -m venv /opt/venv
 COPY backend/pyproject.toml /src/backend/pyproject.toml
@@ -55,11 +53,11 @@ COPY backend/pyproject.toml /src/backend/pyproject.toml
 RUN /opt/venv/bin/pip install /src/backend
 
 # --- Officiella binärer för målarkitekturen (kopieras, körs inte här) --------------------------
-FROM node:22-bookworm-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee AS node
-FROM caddy:2.10-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d AS caddy
+FROM node:22-bookworm-slim AS node
+FROM caddy:2.10-alpine AS caddy
 
 # --- Slutlig avbild ------------------------------------------------------------------------------
-FROM python:3.13-slim-bookworm@sha256:a5a7017efc5969e00ae2b91c8eb0631049a569652aa4ffc4501769049ae45c72 AS bas
+FROM python:3.13-slim-bookworm AS bas
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH=/opt/venv/bin:$PATH

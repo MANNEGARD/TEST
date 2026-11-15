@@ -174,8 +174,8 @@ Mer om webbappen: [anvandning.md](anvandning.md). Om säkerhet: [sakerhet.md](sa
 - Appens filer finns i [`drivelog/`](../drivelog/): `config.yaml` (inställningar, portar,
   watchdog, säkerhetskopiering), `Dockerfile` och startprogrammet under `rootfs/`. Avbilden
   byggs och provstartas av [`.github/workflows/addon.yml`](../.github/workflows/addon.yml) för
-  amd64 och aarch64; bas-avbilder och Actions är fästa vid digest/SHA och uppdateras via
-  Dependabot.
+  amd64 och aarch64. Varje ny version byggs på de senaste rättade bas-avbilderna (Python,
+  Node, Caddy); Actions i arbetsflödet är fästa vid commit-SHA.
 - **Miljön till backend** (enprocessläge): `DRIVELOG_ENVIRONMENT=production`,
   `DRIVELOG_DATABASE_URL=sqlite:////data/app/drivelog.sqlite3`, `DRIVELOG_DATA_DIR=/data/app`,
   `DRIVELOG_JOBS_EAGER=true`, tom `DRIVELOG_REDIS_URL`, `DRIVELOG_BASE_URL=https://<domän>`,
