@@ -47,6 +47,7 @@ import {
 import { useOpenReviewCount } from "@/lib/queries/review";
 import type { DashboardSummary, TimeseriesPoint } from "@/lib/types";
 import { readStorage, writeStorage } from "@/lib/utils";
+import { WeeklyCard } from "./weekly-card";
 
 const PERIOD_KEY = "drivelog.dashboard.period";
 
@@ -266,6 +267,7 @@ export function DashboardView() {
             </div>
           )}
 
+          {s ? <WeeklyCard /> : null}
           {s && hasTrips ? <MoreStats period={period} /> : null}
         </>
       )}

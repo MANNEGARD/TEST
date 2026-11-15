@@ -231,7 +231,7 @@ export function WorkplaceSection({ data }: { data: SettingsPayload }) {
             hint="Skatteverkets regel för resor mellan bostad och arbete. Du kan alltid ändra en enskild resa."
           />
           {form.has("tax.car_benefit") || form.has("tax.require_approval_when_uncertain") ? (
-            <Advanced summary="förmånsbil och osäkra fall">
+            <Advanced summary="skatteregler">
               <BoolRow
                 form={form}
                 path="tax.car_benefit"

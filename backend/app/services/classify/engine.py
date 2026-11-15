@@ -341,6 +341,8 @@ def build_llm_document(
 def _should_call_llm(rules: RuleResult, proposal: PurposeProposal | None, ctx: TripContext) -> bool:
     if rules.tax_note:
         return False  # skattemässig bedömning avgörs av användaren, inte av AI
+    if any(s.kind == sig.ASK_ALWAYS_KIND for s in rules.signals):
+        return False  # manuell regel "fråga mig alltid": AI får inte heller föreslå kategori
     has_material = any(s.direction != "neutral" for s in rules.signals) or bool(ctx.calendar_matches)
     if not has_material:
         return False  # inget underlag – en LLM kan bara gissa

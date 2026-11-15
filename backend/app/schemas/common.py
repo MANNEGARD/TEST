@@ -66,6 +66,9 @@ class TripOut(ORM):
     sort_time: datetime | None
     start_time_quality: str
     end_time_quality: str
+    # Möjligt startintervall (från första delresan) när starttiden är okänd eller bara en gräns.
+    start_earliest: datetime | None = None
+    start_latest: datetime | None = None
     odometer_start: float | None
     odometer_end: float | None
     distance_km: float

@@ -24,7 +24,8 @@ router = APIRouter(tags=["Learning feedback"])
 
 class PatternUpdate(BaseModel):
     status: str | None = Field(default=None, pattern="^(suggested|approved|rejected)$")
-    manual_category: str | None = Field(default=None, pattern="^(work|private)$")
+    # "undecided" = "fråga mig alltid": resor som träffar regeln kräver alltid användarens beslut.
+    manual_category: str | None = Field(default=None, pattern="^(work|private|undecided)$")
     manual_purpose: str | None = Field(default=None, max_length=500)
     clear_manual_rule: bool = False
 
@@ -32,7 +33,8 @@ class PatternUpdate(BaseModel):
 class RuleIn(BaseModel):
     origin_location_id: uuid.UUID | None = None
     destination_location_id: uuid.UUID
-    category: str | None = Field(default=None, pattern="^(work|private)$")
+    # "undecided" = "fråga mig alltid": resor som träffar regeln kräver alltid användarens beslut.
+    category: str | None = Field(default=None, pattern="^(work|private|undecided)$")
     purpose: str | None = Field(default=None, max_length=500)
 
 

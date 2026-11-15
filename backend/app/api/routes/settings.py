@@ -73,7 +73,7 @@ def _workplace_out(db, wp: WorkplacePeriod) -> dict[str, Any]:
 
 @router.get("/settings", summary="Alla inställningar (med standardvärden)")
 def get_settings(principal: PrincipalDep, db: DbDep) -> dict[str, Any]:
-    return {"settings": settings_svc.get_all(db, principal.user.id), "defaults": settings_svc.DEFAULTS}
+    return {"settings": settings_svc.get_all(db, principal.user.id), "defaults": settings_svc.defaults()}
 
 
 @router.patch("/settings/{section}", summary="Ändra en sektion av inställningarna")

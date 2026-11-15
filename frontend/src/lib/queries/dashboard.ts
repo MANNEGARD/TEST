@@ -74,3 +74,28 @@ export function useDashboardMonthly(year?: number) {
     placeholderData: keepPreviousData,
   });
 }
+
+/** GET /reports/weekly (backend/app/services/stats/reports.py → weekly_report). Endast de fält som visas. */
+export interface WeeklyReport {
+  journal_scope: "business_only" | "complete" | string;
+  week: { year: number; week: number; start: string; end: string };
+  distance: { total: { km: number }; work: { km: number }; private: { km: number }; undecided: { km: number } };
+  trips: { total: number; by_category: Record<string, number> };
+  top_destinations: { label: string; trips: number; total_km: number }[];
+  unreviewed_trips: number;
+  missing_purpose_trips: number;
+  trips_to_review: number;
+  data_gaps: { count: number; km: number };
+}
+
+/** Veckorapporten för veckan som börjar `weekStart` (måndag, yyyy-MM-dd); utelämnad = innevarande vecka. */
+export function useWeeklyReport(weekStart?: string) {
+  const { vehicleId } = useVehicle();
+  const query = { week_start: weekStart, vehicle_id: vehicleId };
+  return useQuery({
+    queryKey: qk.dashboard.part("weekly", vehicleId, query),
+    queryFn: ({ signal }) => api.get<WeeklyReport>("/reports/weekly", { query, signal }),
+    enabled: !!vehicleId,
+    placeholderData: keepPreviousData,
+  });
+}

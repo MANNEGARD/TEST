@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from celery import Celery
+from celery import Celery, signals
 from celery.schedules import crontab
 
 from app.config import get_config
+from app.logging_setup import setup_celery_logging
 
 cfg = get_config()
 
@@ -29,3 +30,7 @@ celery.conf.update(
         "nightly-maintenance": {"task": "drivelog.maintenance", "schedule": crontab(hour=2, minute=17)},
     },
 )
+
+# Loggmaskering även i worker och beat (tokens, nycklar, lösenord, VIN).
+signals.after_setup_logger.connect(setup_celery_logging, weak=False)
+signals.after_setup_task_logger.connect(setup_celery_logging, weak=False)

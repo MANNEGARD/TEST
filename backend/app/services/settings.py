@@ -8,6 +8,7 @@ avvisas. Standardvärdena följer specifikationen (15/60 minuter osv.) men allt 
 from __future__ import annotations
 
 import copy
+import logging
 import uuid
 from typing import Any
 from urllib.parse import urlsplit
@@ -17,6 +18,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import Setting
+
+logger = logging.getLogger(__name__)
 
 # Journalens omfång.
 #   business_only – egen bil med milersättning: endast tjänsteresor redovisas. Körning
@@ -263,10 +266,33 @@ def _validate(section: str, values: dict[str, Any]) -> None:
         raise SettingsError("import.default_coverage måste vara selection, complete eller unknown.")
 
 
+def default_timezone() -> str:
+    """Standardtidszon när användaren inte valt någon: DRIVELOG_TIMEZONE, annars Europe/Stockholm."""
+    from app.config import get_config
+
+    name = (get_config().timezone or "").strip()
+    if name:
+        try:
+            ZoneInfo(name)
+            return name
+        except (ZoneInfoNotFoundError, ValueError):
+            logger.warning("Ogiltig DRIVELOG_TIMEZONE %r – använder %s.", name, DEFAULTS["general"]["timezone"])
+    return DEFAULTS["general"]["timezone"]
+
+
+def defaults() -> dict[str, dict[str, Any]]:
+    """Standardvärden för alla sektioner (med tidszonen från miljön)."""
+    out = copy.deepcopy(DEFAULTS)
+    out["general"]["timezone"] = default_timezone()
+    return out
+
+
 def get_section(db: Session, user_id: uuid.UUID, section: str) -> dict[str, Any]:
     if section not in DEFAULTS:
         raise SettingsError(f"Okänd sektion: {section}")
     merged = copy.deepcopy(DEFAULTS[section])
+    if section == "general":
+        merged["timezone"] = default_timezone()
     row = db.execute(select(Setting).where(Setting.user_id == user_id, Setting.key == section)).scalar_one_or_none()
     if row and isinstance(row.value, dict):
         for k, v in row.value.items():

@@ -11,7 +11,16 @@ import type { components } from "./api-types";
 type S = components["schemas"];
 
 export type QuestionAction = S["ActionOut"];
-export type QuestionTrip = S["TripSummary"];
+/**
+ * Resans sammanfattning i frågan. Platsetiketter (aldrig gatuadresser) och tidernas kvalitet
+ * finns i nyare backend (TripSummary i notifications.py) – valfria så att äldre instanser fungerar.
+ */
+export type QuestionTrip = S["TripSummary"] & {
+  start_label?: string | null;
+  end_label?: string | null;
+  start_time_quality?: string | null;
+  end_time_quality?: string | null;
+};
 
 /** classify | purpose | merge | digest | weekly | daily | test */
 export type QuestionKind = "classify" | "purpose" | "merge" | "digest" | "weekly" | "daily" | "test";

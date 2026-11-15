@@ -244,7 +244,7 @@ function PatternRow({
         {p.is_manual_rule ? (
           <Badge tone="accent">Har regel</Badge>
         ) : rejected ? (
-          <Button size="xs" variant="ghost" onClick={() => onStatus("approved")} disabled={busy} aria-label={`Använd mönstret för ${patternName(p)} igen`}>
+          <Button size="xs" variant="ghost" onClick={() => onStatus("approved")} disabled={busy} aria-label={`Använd igen: mönstret för ${patternName(p)}`}>
             <RotateCcw aria-hidden /> Använd igen
           </Button>
         ) : (

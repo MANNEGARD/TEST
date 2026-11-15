@@ -9,8 +9,8 @@ from collections.abc import Sequence
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import CalendarMatch, KnownLocation, LogicalTrip, ReviewItem, Vehicle
-from app.models.enums import ReviewState
+from app.models import CalendarMatch, KnownLocation, LogicalTrip, RawTrip, ReviewItem, TripSegment, Vehicle
+from app.models.enums import ReviewState, TimeQuality
 from app.schemas.common import LocationBrief, LocationOut, TripOut, VehicleOut
 from app.services import vehicles as vehicles_svc
 
@@ -47,6 +47,21 @@ def trips_out(db: Session, trips: Sequence[LogicalTrip]) -> list[TripOut]:
             )
         ).all()
     }
+    # Möjligt startintervall från första delresan när starttiden är okänd/begränsad.
+    uncertain = [
+        t.id for t in trips
+        if t.started_at is None or t.start_time_quality in (TimeQuality.BOUNDED, TimeQuality.UNKNOWN)
+    ]
+    bounds: dict[uuid.UUID, tuple] = {}
+    if uncertain:
+        rows = db.execute(
+            select(TripSegment.logical_trip_id, RawTrip.start_earliest, RawTrip.start_latest)
+            .join(RawTrip, RawTrip.id == TripSegment.raw_trip_id)
+            .where(TripSegment.logical_trip_id.in_(uncertain))
+            .order_by(TripSegment.logical_trip_id, TripSegment.seq, TripSegment.part)
+        ).all()
+        for tid, lo, hi in rows:
+            bounds.setdefault(tid, (lo, hi))
     out: list[TripOut] = []
     for t in trips:
         item = TripOut.model_validate(t)
@@ -55,6 +70,7 @@ def trips_out(db: Session, trips: Sequence[LogicalTrip]) -> list[TripOut]:
         item.end_location = LocationBrief.model_validate(e) if e else None
         item.open_review_kinds = sorted(kinds.get(t.id, []))
         item.has_calendar_match = t.id in matched
+        item.start_earliest, item.start_latest = bounds.get(t.id, (None, None))
         out.append(item)
     return out
 

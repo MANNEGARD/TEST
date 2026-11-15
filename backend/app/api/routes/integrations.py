@@ -14,6 +14,7 @@ from app.models.enums import IntegrationProvider, IntegrationStatus
 from app.services import audit, integrations
 from app.services import settings as settings_svc
 from app.services.classify import llm
+from app.services.ha import connection as ha_connection
 
 router = APIRouter(prefix="/integrations", tags=["Integration health"])
 
@@ -72,6 +73,10 @@ def overview(principal: PrincipalDep, db: DbDep) -> dict[str, Any]:
         else:
             view = integrations.public_view(integrations.get(db, principal.user.id, provider), provider)
             # Konfigurationen kan innehålla adresser/konton men aldrig hemligheter.
+            if provider == IntegrationProvider.HOME_ASSISTANT:
+                # Samma statusregel som GET /integrations/home-assistant (livstecken i pull-läget).
+                ha = ha_connection.public_status(db, principal.user.id)
+                view["status"], view["last_error"] = ha["status"], ha["last_error"]
         view["status_label"] = STATUS_LABELS.get(IntegrationStatus(view["status"]), view["status"])
         view["is_connected"] = view["status"] == IntegrationStatus.CONNECTED
         view["is_demo"] = view["status"] == IntegrationStatus.DEMO

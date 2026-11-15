@@ -263,6 +263,16 @@ export function HaPanel({ status }: { status: HaStatus }) {
   const hb = status.heartbeat;
   const connected = status.status === "connected";
   const hasRealConnection = connected || status.status === "error" || status.status === "needs_reauth";
+  // Pull-läget: "Inte konfigurerad" tills integrationen hört av sig första gången. Kommer livstecken
+  // ändå (färska) är Home Assistant bortkopplat i webben – det gäller tills inställningarna sparas igen.
+  const pullWaiting = !isDemo && mode === "pull" && status.status === "not_configured";
+  const pullDisconnected = pullWaiting && hb.fresh;
+
+  const reconnect = () =>
+    configure.mutate(
+      {},
+      { onSuccess: () => toast.success("Home Assistant är anslutet igen."), onError: notifyError },
+    );
   const origin = typeof window === "undefined" ? "" : window.location.origin;
 
   const setMode = (next: DeliveryMode) => {
@@ -335,10 +345,20 @@ export function HaPanel({ status }: { status: HaStatus }) {
           {mode === "pull" ? (
             <Section
               step={2}
-              done={hb.fresh}
+              done={hb.fresh && !pullDisconnected}
               title="Lägg till integrationen i Home Assistant"
               description="Installera SMGD DriveLog (via HACS eller manuellt) under Inställningar → Enheter och tjänster, och ange adressen nedan tillsammans med din token. Status blir Ansluten vid första livstecknet."
             >
+              {pullDisconnected ? (
+                <Note icon={<Unplug aria-hidden />} title="Bortkopplat i DriveLog" role="status">
+                  <p>Integrationen i Home Assistant hör fortfarande av sig, men inga frågor skickas förrän du ansluter igen.</p>
+                  <div>
+                    <Button size="sm" onClick={reconnect} loading={configure.isPending} data-testid="ha-reconnect">
+                      <PlugZap aria-hidden /> Anslut igen
+                    </Button>
+                  </div>
+                </Note>
+              ) : null}
               {origin ? <CopyField label="Adress till DriveLog" value={origin} /> : null}
               <div className="rounded-lg border border-border bg-surface-2/50 p-3">
                 <Facts>
@@ -351,7 +371,7 @@ export function HaPanel({ status }: { status: HaStatus }) {
                         </Badge>
                       </span>
                     ) : (
-                      <span className="text-fg-muted">Inget ännu – integrationen har inte hört av sig.</span>
+                      <span className="text-fg-muted">Inget ännu – väntar på första livstecknet från Home Assistant.</span>
                     )}
                   </Fact>
                   {hb.received_at ? (
@@ -392,7 +412,13 @@ export function HaPanel({ status }: { status: HaStatus }) {
               </Button>
             </div>
             {status.status === "not_configured" ? (
-              <p className="text-xs text-fg-muted">{mode === "pull" ? "Testet fungerar när integrationen har hört av sig första gången." : "Spara adress och token först."}</p>
+              <p className="text-xs text-fg-muted">
+                {pullDisconnected
+                  ? "Anslut igen i steg 2 för att kunna testa."
+                  : mode === "pull"
+                    ? "Väntar på första livstecknet från Home Assistant – testet fungerar när integrationen har hört av sig."
+                    : "Spara adress och token först."}
+              </p>
             ) : !status.channel ? (
               <p className="text-xs text-fg-muted">Välj en mobil enhet för att kunna skicka en testnotis.</p>
             ) : null}

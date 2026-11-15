@@ -259,6 +259,10 @@ def _is_home(loc: KnownLocation | None) -> bool:
     return loc is not None and loc.confirmed and loc.type == LocationType.HOME
 
 
+# Signal för manuell regel med kategorin "undecided" ("fråga mig alltid").
+ASK_ALWAYS_KIND = "manual_review_rule"
+
+
 def _typed(loc: KnownLocation | None, *types: str) -> bool:
     return loc is not None and loc.confirmed and loc.type in types
 
@@ -269,6 +273,19 @@ def _pattern_signals(ctx: TripContext) -> list[Signal]:
 
     # Manuell regel (rutt går före destination).
     for pat, scope in ((route, "rutten"), (dest, "destinationen")):
+        if pat is not None and pat.is_manual_rule and pat.manual_category == Category.UNDECIDED:
+            # "Fråga mig alltid": resan klassas aldrig automatiskt – varken av regler, mönster eller AI.
+            out.append(
+                Signal(
+                    ASK_ALWAYS_KIND,
+                    f"Manuell regel för {scope}: kräver alltid ditt beslut",
+                    "neutral",
+                    0.0,
+                    "location_pattern",
+                    str(pat.id),
+                )
+            )
+            return out
         if pat is not None and pat.is_manual_rule and pat.manual_category in (Category.WORK, Category.PRIVATE):
             out.append(
                 Signal(
@@ -643,6 +660,10 @@ def evaluate(ctx: TripContext) -> RuleResult:
         confidence = min(confidence, 0.6)
     if ctx.trip.has_mixed_categories:
         requires_review = True
+    if any(s.kind == ASK_ALWAYS_KIND for s in signals):
+        # Manuell regel "fråga mig alltid": användaren avgör alltid själv.
+        category, confidence, requires_review = Category.UNDECIDED, min(confidence, 0.3), True
+        caps.append("Manuell regel: kräver alltid ditt beslut")
 
     return RuleResult(
         signals=signals,

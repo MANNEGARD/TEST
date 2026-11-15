@@ -197,6 +197,11 @@ export function IntegrationsView() {
       ) : (
         <>
           <span className={s.status === "not_configured" ? "text-fg-muted" : undefined}>Notiser med svarsknappar · {DELIVERY_LABELS[s.delivery_mode]}</span>
+          {s.status === "not_configured" && s.delivery_mode === "pull" ? (
+            <span className="block text-xs text-fg-muted">
+              {s.heartbeat.fresh ? "Bortkopplad – ansluts igen när du sparar inställningarna." : "Väntar på första livstecknet från Home Assistant."}
+            </span>
+          ) : null}
           {s.notify_service ? <span className="block truncate font-mono text-xs text-fg-muted">notify.{s.notify_service}</span> : null}
         </>
       ),

@@ -168,7 +168,11 @@ export function ExportView() {
     <>
       <PageHeader
         title="Export"
-        description="Underlag för milersättning med månadens godkända tjänsteresor – klart att skicka till arbetsgivaren."
+        description={
+          selectionMode
+            ? "Underlag för milersättning med de valda resorna som är godkända tjänsteresor."
+            : "Underlag för milersättning med månadens godkända tjänsteresor – klart att skicka till arbetsgivaren."
+        }
         actions={p?.is_demo ? <Badge tone="warn">Demodata</Badge> : undefined}
       />
 

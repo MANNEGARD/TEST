@@ -283,9 +283,12 @@ function LoadingView() {
 export function QuickQuestionView({ publicId }: { publicId: string }) {
   const query = useQuestion(publicId);
   const q = query.data;
-  const detail = useQuestionTrip(q?.trip?.state === "active" ? q.trip_id : null);
   const respond = useRespond(publicId);
   const [result, setResult] = React.useState<RespondResult | null>(null);
+  // Resans detaljer behövs bara som reserv (äldre backend utan platsetiketter/tidskvalitet i frågan)
+  // och för syftesförslagen i följdfrågan efter ett svar.
+  const needsDetail = q?.trip?.state === "active" && (q.trip.start_label === undefined || q.trip.start_time_quality === undefined || result !== null);
+  const detail = useQuestionTrip(needsDetail ? q.trip_id : null);
   const keys = React.useRef(new Map<string, string>());
 
   const answer = (action: string, replyText?: string) => {

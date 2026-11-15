@@ -84,7 +84,8 @@ def propose(db: Session, ctx: TripContext, rules: RuleResult) -> PurposeProposal
                 text=pat.manual_purpose,
                 source="pattern",
                 rationale="Manuell regel för platsen.",
-                needs_confirmation=False,
+                # "Fråga mig alltid" (kategori undecided): även syftet bekräftas av användaren.
+                needs_confirmation=pat.manual_category == Category.UNDECIDED,
                 based_on={"pattern_id": str(pat.id), "manual_rule": True},
             )
 

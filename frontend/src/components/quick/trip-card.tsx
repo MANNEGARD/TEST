@@ -7,8 +7,13 @@ import type { QuestionTrip } from "@/lib/notifications-types";
 import type { Trip } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-/** Platsens namn om den är bekräftad, annars adressen (samma regel som i granskningen). */
+/**
+ * Frågans platsetikett (nyare backend, aldrig en gatuadress). Reserv: platsens namn om den
+ * är bekräftad, annars adressen (samma regel som i granskningen).
+ */
 function place(trip: QuestionTrip, full: Trip | undefined, end: "start" | "end"): string {
+  const label = trip[`${end}_label`];
+  if (label) return label;
   const loc = full?.[`${end}_location`];
   if (loc?.confirmed && loc.name) return loc.name;
   const address = end === "start" ? trip.start_address : trip.end_address;
@@ -17,8 +22,8 @@ function place(trip: QuestionTrip, full: Trip | undefined, end: "start" | "end")
 
 /**
  * Resan som frågan gäller: datum, från → till och sträcka i mil – stort och lätt att
- * läsa på telefonen. `full` (resans detaljer) ger platsnamn och tidernas kvalitet när
- * den hunnit laddas; frågans egen sammanfattning räcker annars.
+ * läsa på telefonen. Frågans sammanfattning har platsetiketter och tidernas kvalitet; `full`
+ * (resans detaljer) är reserv för äldre backend som saknar dem.
  */
 export function QuickTripCard({
   trip,
@@ -52,8 +57,8 @@ export function QuickTripCard({
             ·
           </span>
           <span className="num">
-            <TripTime at={trip.started_at} quality={full?.start_time_quality ?? (trip.started_at ? "actual" : "unknown")} />–
-            <TripTime at={trip.ended_at} quality={full?.end_time_quality ?? (trip.ended_at ? "actual" : "unknown")} />
+            <TripTime at={trip.started_at} quality={trip.start_time_quality ?? full?.start_time_quality ?? (trip.started_at ? "actual" : "unknown")} />–
+            <TripTime at={trip.ended_at} quality={trip.end_time_quality ?? full?.end_time_quality ?? (trip.ended_at ? "actual" : "unknown")} />
           </span>
         </p>
         <p className="shrink-0 text-right">

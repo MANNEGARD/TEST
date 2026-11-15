@@ -462,16 +462,14 @@ function PollInterval() {
 
   if (!settings.data) return null;
 
-  const store = (next: number, undo?: number) =>
+  // Kvitto utan Ångra: panelen är modal, så en knapp i toasten går inte att nå. Fältet visar det sparade värdet.
+  const store = (next: number) =>
     save.mutate(
       { volvo: { poll_interval_seconds: next * 60 } },
       {
         onSuccess: () => {
           setDraft(null);
-          if (undo == null) return void toast.success("Ändringen är ångrad.");
-          toast.success(`DriveLog hämtar data från bilen var ${plural(next, "minut", "minuter")}.`, {
-            action: { label: "Ångra", onClick: () => store(undo) },
-          });
+          toast.success(`DriveLog hämtar data från bilen var ${plural(next, "minut", "minuter")}.`);
         },
         onError: notifyError,
       },
@@ -482,7 +480,7 @@ function PollInterval() {
       className="flex flex-wrap items-end gap-x-3 gap-y-2 border-t border-border pt-3"
       onSubmit={(e) => {
         e.preventDefault();
-        if (dirty) store(minutes, current);
+        if (dirty) store(minutes);
       }}
     >
       <div className="space-y-1.5">

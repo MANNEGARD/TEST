@@ -16,39 +16,9 @@ from app.api import errors
 from app.api.router import api_router
 from app.config import get_config
 from app.db import Base, get_engine, session_scope
+from app.logging_setup import configure_logging
 
 logger = logging.getLogger("drivelog")
-
-
-class RedactingFilter(logging.Filter):
-    """Tar bort uppenbara hemligheter ur loggrader (tokens, nycklar, lösenord)."""
-
-    import re as _re
-
-    _patterns = (
-        _re.compile(r"(?i)(authorization|vcc-api-key|x-api-key|api[_-]?key|password|client_secret|refresh_token|access_token)(\"?\s*[:=]\s*\"?)([^\s\",&]+)"),
-        _re.compile(r"(?i)(bearer\s+)([A-Za-z0-9._\-]{12,})"),
-    )
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        try:
-            msg = record.getMessage()
-        except Exception:
-            return True
-        redacted = self._patterns[0].sub(r"\1\2[DOLD]", msg)
-        redacted = self._patterns[1].sub(r"\1[DOLD]", redacted)
-        if redacted != msg:
-            record.msg, record.args = redacted, ()
-        return True
-
-
-def configure_logging() -> None:
-    cfg = get_config()
-    logging.basicConfig(level=cfg.log_level, format="%(asctime)s %(levelname)s %(name)s %(message)s")
-    for handler in logging.getLogger().handlers:
-        if not any(isinstance(f, RedactingFilter) for f in handler.filters):
-            handler.addFilter(RedactingFilter())
-    logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 def init_schema() -> None:

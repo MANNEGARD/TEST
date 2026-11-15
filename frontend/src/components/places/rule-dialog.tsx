@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { FieldError, FieldHint, Input, Label } from "@/components/ui/input";
 import { SegmentedControl } from "@/components/ui/segmented-control";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { errorMessage } from "@/lib/api";
+import { ApiError, errorMessage } from "@/lib/api";
 import type { Place } from "@/lib/places-types";
 import { useCreateRule } from "@/lib/queries/places";
 
@@ -79,7 +79,13 @@ function RuleForm({ places, preset, onDone }: { places: Place[]; preset?: RulePr
           toast.success("Regeln är sparad.");
           onDone();
         },
-        (err) => setError(errorMessage(err)),
+        (err) =>
+          setError(
+            // Äldre backend känner inte till "Fråga mig alltid" (category "undecided") och svarar 422.
+            category === "undecided" && err instanceof ApiError && err.status === 422
+              ? "Servern kan inte spara ”Fråga mig alltid” ännu – uppdatera DriveLog och försök igen."
+              : errorMessage(err),
+          ),
       );
   };
 

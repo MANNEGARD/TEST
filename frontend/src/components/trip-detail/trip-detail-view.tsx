@@ -382,16 +382,14 @@ function RawTrips({ d, onAllocate }: { d: TripDetail; onAllocate: (raw: RawTrip)
                             toast.success("Resan är delad i två.", {
                               action: {
                                 label: "Ångra",
+                                // mutateAsync: vyn har hunnit byta till den nya resan (komponenten är ommonterad).
                                 onClick: () =>
-                                  undoSplit.mutate(
-                                    res.map((x) => x.id),
-                                    {
-                                      onSuccess: (back) => {
-                                        toast.success("Uppdelningen är ångrad.");
-                                        if (back[0]) router.replace(`/journal/${back[0].id}`);
-                                      },
-                                      onError: (e) => toast.error(errorMessage(e)),
+                                  void undoSplit.mutateAsync(res.map((x) => x.id)).then(
+                                    (back) => {
+                                      toast.success("Uppdelningen är ångrad.");
+                                      if (back[0]) router.replace(`/journal/${back[0].id}`);
                                     },
+                                    (e: unknown) => toast.error(errorMessage(e)),
                                   ),
                               },
                             });
@@ -527,13 +525,13 @@ function MergeSection({ d }: { d: TripDetail }) {
                     disabled={undoOp.isPending}
                     aria-label={`Ångra ${label(MERGE_OPERATION_LABELS, op.operation).toLowerCase()} ${formatDateTime(op.created_at)}`}
                     onClick={() =>
-                      undoOp.mutate(op.id, {
-                        onSuccess: (res) => {
+                      void undoOp.mutateAsync(op.id).then(
+                        (res) => {
                           toast.success("Åtgärden är ångrad.");
                           if (res[0] && !res.some((x) => x.id === t.id)) router.replace(`/journal/${res[0].id}`);
                         },
-                        onError: (e) => toast.error(errorMessage(e)),
-                      })
+                        (e: unknown) => toast.error(errorMessage(e)),
+                      )
                     }
                   >
                     <Undo2 aria-hidden /> Ångra
