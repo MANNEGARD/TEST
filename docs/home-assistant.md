@@ -32,6 +32,9 @@ inloggad på telefonen, och att DriveLog kan nås från Home Assistant.
 3. Ange adressen till DriveLog-repot och välj typen **Integration**.
 4. Sök efter **SMGD DriveLog** i HACS, välj **Ladda ner** och starta om Home Assistant.
 
+Hittar HACS inte repot – till exempel för att det är privat – använder du den manuella vägen
+nedan. Den ger exakt samma resultat.
+
 ### Manuellt
 
 1. Kopiera katalogen `custom_components/smgd_drivelog/` från repot till

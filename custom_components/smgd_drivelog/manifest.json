@@ -9,7 +9,7 @@
     "@SMGD-MP"
   ],
   "config_flow": true,
-  "documentation": "https://github.com/SMGD-MP/TEST/blob/main/docs/home-assistant.md",
+  "documentation": "https://github.com/SMGD-MP/TEST/blob/HEAD/docs/home-assistant.md",
   "integration_type": "service",
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/SMGD-MP/TEST/issues",

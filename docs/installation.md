@@ -7,12 +7,45 @@ sköter HTTPS.
 ## Krav
 
 - En server med Docker Engine 24+ och Docker Compose v2 (cirka 2 GB RAM räcker).
-- Ett domännamn som pekar på servern, till exempel `journal.smgd.se`, och port 80/443
+- Ett domännamn som pekar på servern, till exempel `drivelog.smgd.se`, och port 80/443
   öppna – Caddy hämtar då certifikat automatiskt från Let's Encrypt. För ett rent lokalt
   nät fungerar `localhost` (lokalt certifikat) eller en egen proxy framför.
 - För integrationerna: egna konton hos Volvo Cars Developer Portal, Microsoft Entra
   (appregistrering) och eventuellt en AI-leverantör. Home Assistant behöver Companion-appen
   på telefonen. Se respektive guide.
+
+## Snabbaste vägen
+
+På en server med Docker, när domänen (här `drivelog.smgd.se`) pekar på serverns adress:
+
+```bash
+git clone https://github.com/SMGD-MP/TEST.git drivelog
+```
+
+```bash
+cd drivelog
+```
+
+```bash
+deploy/install.sh drivelog.smgd.se
+```
+
+Skriptet skapar `.env` med slumpade hemligheter (befintliga värden skrivs aldrig över),
+kontrollerar att domänen pekar på servern och att port 80/443 är lediga, bygger och startar
+alla tjänster och väntar tills systemet svarar. Öppna sedan `https://drivelog.smgd.se` och
+skapa det första kontot. Kör samma kommando igen efter `git pull` när du uppgraderar.
+
+- **DNS:** lägg in en **A-post** för `drivelog` som pekar på serverns publika IPv4-adress hos
+  den som sköter domänens DNS (ta bort en eventuell parkeringssida för underdomänen). Caddy
+  hämtar certifikatet från Let's Encrypt så snart posten pekar rätt.
+- **Privat repo:** `git clone` frågar efter inloggning. Använd ditt GitHub-användarnamn och en
+  personlig åtkomsttoken med läsrätt till repot, eller ladda ned koden som zip från GitHub och
+  packa upp den på servern.
+- **Kontrollera installationen:** `deploy/smoke-test.sh https://drivelog.smgd.se` prövar att
+  API:t och webbappen svarar över HTTPS, att säkerhetshuvudena finns och att inget går att
+  läsa utan inloggning.
+
+Resten av den här sidan beskriver samma steg för hand och vad som händer bakom.
 
 ## 1. Hämta koden och skapa `.env`
 
@@ -32,9 +65,9 @@ Fyll i `.env`:
 
 | Variabel | Beskrivning |
 | --- | --- |
-| `DRIVELOG_DOMAIN` | Domänen Caddy ska servera, t.ex. `journal.smgd.se` |
-| `DRIVELOG_BASE_URL` | Publik adress, t.ex. `https://journal.smgd.se`. Används i OAuth-redirects och notislänkar – måste stämma exakt med det du registrerar hos Volvo och Microsoft |
-| `POSTGRES_PASSWORD` | Databaslösenord: `openssl rand -base64 32` |
+| `DRIVELOG_DOMAIN` | Domänen Caddy ska servera, t.ex. `drivelog.smgd.se` |
+| `DRIVELOG_BASE_URL` | Publik adress, t.ex. `https://drivelog.smgd.se`. Används i OAuth-redirects och notislänkar – måste stämma exakt med det du registrerar hos Volvo och Microsoft |
+| `POSTGRES_PASSWORD` | Databaslösenord: `openssl rand -hex 24` (endast bokstäver och siffror – lösenordet ingår i databasadressen och får inte innehålla `/`, `+` eller `@`) |
 | `DRIVELOG_SECRET_KEY` | Applikationshemlighet, minst 32 tecken: `openssl rand -hex 32` |
 | `DRIVELOG_ENCRYPTION_KEYS` | Krypteringsnyckel för lagrade tokens och API-nycklar, se nedan |
 | `DRIVELOG_TIMEZONE` | Standardtidszon tills du väljer en egen under Inställningar (`Europe/Stockholm`) |
@@ -69,7 +102,7 @@ docker compose ps
 ```
 
 ```bash
-curl -fsS https://journal.smgd.se/api/v1/health/ready
+curl -fsS https://drivelog.smgd.se/api/v1/health/ready
 ```
 
 ## 3. Första kontot

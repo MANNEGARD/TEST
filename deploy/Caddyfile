@@ -1,5 +1,5 @@
 # Omvänd proxy med automatisk HTTPS (Let's Encrypt) för den domän som anges i
-# DRIVELOG_DOMAIN, t.ex. journal.smgd.se. Med "localhost" används ett lokalt certifikat.
+# DRIVELOG_DOMAIN, t.ex. drivelog.smgd.se. Med "localhost" används ett lokalt certifikat.
 {$DRIVELOG_DOMAIN} {
 	encode zstd gzip
 
