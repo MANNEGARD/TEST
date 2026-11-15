@@ -46,6 +46,7 @@ from app.models.enums import (
 from app.services import audit
 from app.services import settings as settings_svc
 from app.services.audit import Actor
+from app.services.places import geocode
 from app.services.places import registry as places
 from app.services.places.normalize import haversine_m, valid_coordinates
 from app.services.trips import review
@@ -362,8 +363,9 @@ def _raw_from_leg(
 
     # Demoplatser matchas aldrig mot ett riktigt fordon (och tvärtom).
     demo = bool(vehicle.is_demo)
-    start_loc, _ = places.resolve_position(db, user_id, leg.start.lat, leg.start.lon, demo=demo)
-    end_loc, _ = places.resolve_position(db, user_id, leg.end.lat, leg.end.lon, demo=demo)
+    # Okända stopp får en ny obekräftad plats som väntar på adress (inget nätverk här).
+    start_loc = geocode.place_for_position(db, user_id=user_id, lat=leg.start.lat, lon=leg.start.lon, demo=demo)
+    end_loc = geocode.place_for_position(db, user_id=user_id, lat=leg.end.lat, lon=leg.end.lon, demo=demo)
     obs_ids = [str(leg.start_obs.id)] + [str(s.obs.id) for s in leg.steps]
     raw = RawTrip(
         vehicle_id=vehicle.id,
@@ -381,8 +383,8 @@ def _raw_from_leg(
         distance_km=distance,
         distance_quality=dq,
         duration_seconds=None,
-        start_address=(start_loc.address or start_loc.name) if start_loc else None,
-        end_address=(end_loc.address or end_loc.name) if end_loc else None,
+        start_address=geocode.address_for(start_loc),
+        end_address=geocode.address_for(end_loc),
         start_lat=leg.start.lat,
         start_lon=leg.start.lon,
         end_lat=leg.end.lat,

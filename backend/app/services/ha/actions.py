@@ -27,7 +27,20 @@ PURPOSE_TEXT = "PURPOSETEXT"
 PURPOSE_PICK = "PURPOSE"  # följs av index: PURPOSE0, PURPOSE1, PURPOSE2
 TEST_OK = "TESTOK"
 
-NAVIGATION_ACTIONS = {REVIEW, OPEN}
+# Självgående läge (byggkontraktet C.4): kategori och ärende i samma tryck.
+WORK_PICK = "WORKP"  # följs av index: WORKP0 = "Tjänst: {förslag}"
+WORK_ALWAYS = "WORKA"  # WORKA0 = "Alltid: {förslag}" (sparar en egen regel)
+WORK_TEXT = "WORKTEXT"  # "Tjänst – skriv ärende" (text)
+PRIVATE_ALWAYS = "PRIVALWAYS"  # "Alltid privat här"
+PURPOSE_ALWAYS = "PURPOSEA"  # PURPOSEA0 = "Alltid: {förslag}"
+COMPANY_TEXT = "COMPANYTEXT"  # "Vilket företag var det?" (text)
+OK = "OK"  # "Stämmer" på ett antagande
+OPEN_SECOND = "OPEN1"  # andra länkknappen, t.ex. "Se antagna"
+
+MAX_ACTIONS = 6
+EXPORT_LINK_PREFIX = "export-link:"  # översätts till en signerad länk när notisen läses
+
+NAVIGATION_ACTIONS = {REVIEW, OPEN, OPEN_SECOND}
 
 _KEY_RE = re.compile(r"^[A-Z]+[0-9]?$")
 _ID_RE = re.compile(r"^[a-z0-9]{6,24}$")

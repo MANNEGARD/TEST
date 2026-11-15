@@ -31,20 +31,25 @@ import logging
 import secrets
 import uuid
 from collections import Counter
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
 from app.config import get_config
 from app.db import utcnow
 from app.models import (
+    ExportJob,
     IntegrationConnection,
+    KnownLocation,
     LogicalTrip,
     NotificationRequest,
+    RawTrip,
     ReviewItem,
+    TripSegment,
+    User,
     Vehicle,
 )
 from app.models.enums import (
@@ -57,6 +62,7 @@ from app.models.enums import (
     ReviewKind,
     ReviewState,
     ReviewStatus,
+    TripSource,
 )
 from app.services import integrations
 from app.services import settings as settings_svc
@@ -67,7 +73,16 @@ from app.services.ha.connection import CHANNEL_DEMO, CHANNEL_DIGEST, CHANNEL_PUL
 
 logger = logging.getLogger(__name__)
 
-QUESTION_KINDS = (NotificationKind.CLASSIFY, NotificationKind.PURPOSE, NotificationKind.MERGE)
+QUESTION_KINDS = (NotificationKind.CLASSIFY, NotificationKind.PURPOSE, NotificationKind.MERGE, NotificationKind.COMPANY)
+# Frågor i självgående läge: högst en skickad och obesvarad åt gången (C.4).
+SD_QUESTION_KINDS = (NotificationKind.CLASSIFY, NotificationKind.PURPOSE, NotificationKind.COMPANY)
+TRIP_KINDS = (NotificationKind.CLASSIFY, NotificationKind.PURPOSE, NotificationKind.COMPANY, NotificationKind.ASSUMED)
+LIVE_SOURCES = (TripSource.VOLVO_API, TripSource.DEMO)
+OPEN_QUESTION_WINDOW = timedelta(days=35)
+WAIT_FOR_ADDRESS = timedelta(minutes=30)
+MONTH_SUFFIX = ":m"
+# Felet som HA-integrationen ger när ingen telefon är vald (custom_components/.../core.py).
+NO_SERVICE_MARKERS = ("ingen notify", "ingen tjänst")
 SUMMARY_KINDS = (NotificationKind.WEEKLY, NotificationKind.DAILY)
 OPEN_STATUSES = (NotificationStatus.PENDING, NotificationStatus.SENT)
 RECENT_WINDOW = timedelta(hours=48)
@@ -109,14 +124,52 @@ def open_path(req: NotificationRequest) -> str:
     return f"/m/q/{req.public_id}"
 
 
-def service_data(req: NotificationRequest, *, reminder: bool = False) -> dict[str, Any]:
+def export_link_url(db: Session | None, req: NotificationRequest, uri: str) -> str:
+    """``export-link:<id>`` → signerad nedladdningslänk, annars exportsidan.
+
+    ``exp`` sparades i notisens ``context`` när notisen skapades, så samma token byggs
+    varje gång utkorgen läses. Själva länken sparas aldrig.
+    """
+    fallback = "/export"
+    if db is None:
+        return fallback
+    try:
+        job_id = uuid.UUID(uri[len(A.EXPORT_LINK_PREFIX):])
+        exp = datetime.fromtimestamp(int((req.context or {})["link_exp"]), UTC)
+    except (KeyError, ValueError, TypeError, OverflowError):
+        return fallback
+    from app.services.export import links
+
+    job, user = db.get(ExportJob, job_id), db.get(User, req.user_id)
+    if job is None or user is None or job.user_id != req.user_id:
+        return fallback
+    try:
+        url = links.make_url(job, user, exp)
+    except Exception:  # länken är en bekvämlighet – notisen ska ändå gå fram
+        logger.exception("Kunde inte bygga nedladdningslänken")
+        return fallback
+    return url or fallback
+
+
+def resolved_actions(db: Session | None, req: NotificationRequest, *, web: bool = False) -> list[dict[str, Any]]:
+    """Notisens knappar med ``export-link:`` översatt (i webben alltid till exportsidan)."""
+    out: list[dict[str, Any]] = []
+    for a in req.actions or []:
+        uri = a.get("uri")
+        if isinstance(uri, str) and uri.startswith(A.EXPORT_LINK_PREFIX):
+            a = {**a, "uri": "/export" if web else export_link_url(db, req, uri)}
+        out.append(a)
+    return out
+
+
+def service_data(req: NotificationRequest, *, reminder: bool = False, db: Session | None = None) -> dict[str, Any]:
     """Färdig tjänstedata för notify.mobile_app_<enhet>."""
     return A.build_notify_data(
         public_id=req.public_id,
         kind=req.kind,
         title=req.title,
         message=req.message,
-        actions=list(req.actions or []),
+        actions=resolved_actions(db or object_session(req), req),
         base_url=get_config().base_url,
         open_path=open_path(req),
         reminder=reminder,
@@ -212,15 +265,56 @@ def previous_purposes(db: Session, user_id: uuid.UUID, trip: LogicalTrip, limit:
 # ----------------------------------------------------------------------------- skapa frågor
 
 
+def _suggestions(db: Session, user_id: uuid.UUID, trip: LogicalTrip, limit: int = 2) -> list[str]:
+    """Ärendeknappar: autopilotens förslag, annars tidigare bekräftade ärenden."""
+    from app.services.classify import autopilot
+    from app.services.text_safety import sanitize_text
+
+    try:
+        cands = list(autopilot.purpose_candidates(db, trip, user_id=user_id, limit=limit))
+    except Exception:  # knapparna är en bekvämlighet – får aldrig stoppa frågan
+        logger.exception("Kunde inte ta fram ärendeförslag")
+        cands = []
+    if not cands:
+        cands = previous_purposes(db, user_id, trip, limit=limit)
+    out: list[str] = []
+    for c in cands:
+        text = sanitize_text(c)
+        if text and text not in out:
+            out.append(text)
+    return out[:limit]
+
+
+def _can_remember(db: Session, trip: LogicalTrip, text: str | None) -> bool:
+    from app.services.classify import autopilot
+
+    try:
+        return bool(autopilot.can_remember(db, trip, text))
+    except Exception:
+        logger.exception("Kunde inte pröva om en regel kan sparas")
+        return False
+
+
 def create_classify_question(
     db: Session, *, user_id: uuid.UUID, trip: LogicalTrip, cfg: dict[str, Any], now: datetime,
     send_after: datetime | None = None, extra_context: dict[str, Any] | None = None,
+    self_driving: bool = False, dedupe_suffix: str = "",
 ) -> NotificationRequest | None:
-    key = f"classify:{trip.id}"
+    key = f"classify:{trip.id}{dedupe_suffix}"
     if _exists(db, user_id, key):
         return None
     pid = new_public_id()
-    built = messages.classify(db, trip, pid, hide_locations=bool(cfg["hide_locations_on_lock_screen"]))
+    hide = bool(cfg["hide_locations_on_lock_screen"])
+    if self_driving:
+        cands = _suggestions(db, user_id, trip, limit=1)
+        suggestion = cands[0] if cands else None
+        built = messages.classify_v2(
+            db, trip, tz=settings_svc.user_timezone(db, user_id), hide_locations=hide, suggestion=suggestion,
+            remember_work=bool(suggestion) and _can_remember(db, trip, suggestion),
+            remember_private=_can_remember(db, trip, None),
+        )
+    else:
+        built = messages.classify(db, trip, pid, hide_locations=hide)
     return _create(
         db, user_id=user_id, kind=NotificationKind.CLASSIFY, built=built, public_id=pid, now=now, cfg=cfg,
         vehicle_id=trip.vehicle_id, trip_id=trip.id, dedupe_key=key, send_after=send_after, extra_context=extra_context,
@@ -230,18 +324,41 @@ def create_classify_question(
 def create_purpose_question(
     db: Session, *, user_id: uuid.UUID, trip: LogicalTrip, cfg: dict[str, Any], now: datetime,
     send_after: datetime | None = None, extra_context: dict[str, Any] | None = None,
+    self_driving: bool = False, dedupe_suffix: str = "",
 ) -> NotificationRequest | None:
-    key = f"purpose:{trip.id}"
+    key = f"purpose:{trip.id}{dedupe_suffix}"
     if _exists(db, user_id, key):
         return None
     pid = new_public_id()
-    built = messages.purpose(
-        db, trip, pid, hide_locations=bool(cfg["hide_locations_on_lock_screen"]),
-        previous=previous_purposes(db, user_id, trip),
-    )
+    hide = bool(cfg["hide_locations_on_lock_screen"])
+    if self_driving:
+        cands = _suggestions(db, user_id, trip, limit=2)
+        built = messages.purpose_v2(
+            db, trip, tz=settings_svc.user_timezone(db, user_id), hide_locations=hide, candidates=cands,
+            remember=bool(cands) and _can_remember(db, trip, cands[0]),
+        )
+    else:
+        built = messages.purpose(db, trip, pid, hide_locations=hide, previous=previous_purposes(db, user_id, trip))
     return _create(
         db, user_id=user_id, kind=NotificationKind.PURPOSE, built=built, public_id=pid, now=now, cfg=cfg,
         vehicle_id=trip.vehicle_id, trip_id=trip.id, dedupe_key=key, send_after=send_after, extra_context=extra_context,
+    )
+
+
+def create_company_question(
+    db: Session, *, user_id: uuid.UUID, trip: LogicalTrip, cfg: dict[str, Any], now: datetime,
+    send_after: datetime | None = None, dedupe_suffix: str = "",
+) -> NotificationRequest | None:
+    key = f"company:{trip.id}{dedupe_suffix}"
+    if _exists(db, user_id, key):
+        return None
+    pid = new_public_id()
+    built = messages.company(
+        db, trip, tz=settings_svc.user_timezone(db, user_id), hide_locations=bool(cfg["hide_locations_on_lock_screen"])
+    )
+    return _create(
+        db, user_id=user_id, kind=NotificationKind.COMPANY, built=built, public_id=pid, now=now, cfg=cfg,
+        vehicle_id=trip.vehicle_id, trip_id=trip.id, dedupe_key=key, send_after=send_after,
     )
 
 
@@ -296,6 +413,9 @@ def enqueue_for_changes(
     demo = channel == CHANNEL_DEMO
     send_after = now if demo else now + timedelta(minutes=float(cfg["batch_window_minutes"]))
     created: list[NotificationRequest] = []
+    # I självgående läge ställer ensure_open_questions frågorna om live-resor efter
+    # active_since (en åt gången); här skapas inga dubbletter av dem.
+    since = _self_driving_since(db, user_id)
 
     if kinds.get("merge", True):
         for item in merge_items:
@@ -310,6 +430,8 @@ def enqueue_for_changes(
 
     for trip, new_kinds in trip_items:
         if trip.state != LogicalState.ACTIVE or not _recent(trip, now):
+            continue
+        if since is not None and is_live_since(db, trip, since):
             continue
         asked = False
         if kinds.get("classify", True) and (ReviewKind.CATEGORY in new_kinds or ReviewKind.TAX_UNCERTAIN in new_kinds):
@@ -386,8 +508,11 @@ def refresh_digest(db: Session, digest_id: uuid.UUID) -> None:
 def _trip_question_moot(trip: LogicalTrip | None, kind: str) -> bool:
     if trip is None or trip.state != LogicalState.ACTIVE:
         return True
-    if kind == NotificationKind.CLASSIFY:
+    if kind in (NotificationKind.CLASSIFY, NotificationKind.COMPANY):
         return trip.review_status in (ReviewStatus.APPROVED, ReviewStatus.IMPORTED, ReviewStatus.AUTO)
+    if kind == NotificationKind.ASSUMED:
+        # Antagandet är inaktuellt när ägaren (eller en regel) redan har avgjort resan.
+        return trip.approval_source != "assumed"
     if kind == NotificationKind.PURPOSE:
         return trip.work_km <= 0 or bool(trip.purpose and trip.purpose.strip() and trip.purpose_confirmed)
     return False
@@ -395,7 +520,7 @@ def _trip_question_moot(trip: LogicalTrip | None, kind: str) -> bool:
 
 def still_relevant(db: Session, req: NotificationRequest) -> bool:
     """Är frågan fortfarande obesvarad i körjournalen?"""
-    if req.kind in (NotificationKind.CLASSIFY, NotificationKind.PURPOSE):
+    if req.kind in TRIP_KINDS:
         trip = db.get(LogicalTrip, req.logical_trip_id) if req.logical_trip_id else None
         return not _trip_question_moot(trip, req.kind)
     if req.kind == NotificationKind.MERGE:
@@ -419,7 +544,7 @@ def cancel_for_trip(
         select(NotificationRequest).where(
             NotificationRequest.logical_trip_id == trip_id,
             NotificationRequest.status.in_(OPEN_STATUSES),
-            NotificationRequest.kind.in_((NotificationKind.CLASSIFY, NotificationKind.PURPOSE)),
+            NotificationRequest.kind.in_(TRIP_KINDS),
         )
     ).scalars().all()
     count = 0
@@ -479,6 +604,8 @@ class _Delivery:
         self._client: HAClient | None = None
         self.offline = False
         self.stats: Counter[str] = Counter()
+        # Självgående läge: frågans 48 timmar räknas från leveransen, inte från skapandet.
+        self.restart_expiry: timedelta | None = None
 
     def client(self) -> HAClient:
         if self._client is None:
@@ -505,6 +632,7 @@ class _Delivery:
             else:
                 req.channel = PULL_OUT
                 req.sent_at = now
+                self._restart(req)
             return True
         elif self.channel == CHANNEL_PUSH:
             conn = self.state.conn
@@ -514,7 +642,7 @@ class _Delivery:
                     req.send_after = now + policy.retry_delay(max(1, req.delivery_attempts or 0))
                 return False
             try:
-                self._push(service_data(req, reminder=reminder))
+                self._push(service_data(req, reminder=reminder, db=self.db))
             except HAError as exc:
                 self.offline = True
                 self.stats["failed"] += 1
@@ -536,7 +664,12 @@ class _Delivery:
         else:
             req.status = NotificationStatus.SENT
             req.sent_at = now
+            self._restart(req)
         return True
+
+    def _restart(self, req: NotificationRequest) -> None:
+        if self.restart_expiry is not None and req.kind in SD_QUESTION_KINDS:
+            req.expires_at = self.now + self.restart_expiry
 
     def clear(self, req: NotificationRequest) -> None:
         """Tar bort en levererad notis från telefonen (endast push; pull går via utkorgen)."""
@@ -592,6 +725,9 @@ def deliver_user(db: Session, user_id: uuid.UUID, now: datetime | None = None) -
     state = connection.load(db, user_id)
     delivery = _Delivery(db, state, now)
     stats = delivery.stats
+    self_driving = _self_driving_since(db, user_id) is not None
+    if self_driving:
+        delivery.restart_expiry = timedelta(hours=float(cfg["expire_after_hours"]))
     try:
         reqs = list(
             db.execute(
@@ -603,6 +739,8 @@ def deliver_user(db: Session, user_id: uuid.UUID, now: datetime | None = None) -
 
         # 1. Expirering – frågan kan därefter bara besvaras i webbappen.
         for r in reqs:
+            if self_driving and r.kind in SD_QUESTION_KINDS and r.status == NotificationStatus.PENDING:
+                continue  # en fråga som aldrig nått telefonen läggs inte undan (tappas aldrig)
             if r.expires_at is not None and r.expires_at <= now:
                 r.status = NotificationStatus.EXPIRED
                 mark_clear(r)
@@ -686,7 +824,18 @@ def deliver_user(db: Session, user_id: uuid.UUID, now: datetime | None = None) -
                 questions = [r for r in regular if r.kind in QUESTION_KINDS]
                 others = [r for r in regular if r.kind not in QUESTION_KINDS]
                 threshold = int(cfg["digest_threshold"])
-                if questions and (len(questions) > threshold or (remaining is not None and len(questions) > remaining)):
+                if self_driving:
+                    # Högst EN skickad, obesvarad fråga åt gången och ingen samlingsnotis.
+                    outstanding = any(
+                        r.kind in QUESTION_KINDS
+                        and r.digest_id is None
+                        and (r.status == NotificationStatus.SENT or r.channel == PULL_OUT)
+                        for r in reqs
+                    )
+                    if questions and not outstanding and delivery.send(questions[0]):
+                        stats["sent"] += 1
+                        used()
+                elif questions and (len(questions) > threshold or (remaining is not None and len(questions) > remaining)):
                     # Sammanläggning: en samlingsnotis i stället för många enskilda.
                     built = messages.digest(len(questions))
                     digest = NotificationRequest(
@@ -831,7 +980,7 @@ def outbox(db: Session, user_id: uuid.UUID, now: datetime | None = None) -> list
                     "id": r.public_id,
                     "type": "notify",
                     "service": state.notify_service,
-                    "data": service_data(r, reminder=r.channel == PULL_REMIND),
+                    "data": service_data(r, reminder=r.channel == PULL_REMIND, db=db),
                 }
             )
         else:
@@ -851,6 +1000,8 @@ def outbox_ack(
     """Kvittens från HA-integrationen på levererade (eller misslyckade) notiser."""
     now = now or utcnow()
     ok = bad = 0
+    self_driving = _self_driving_since(db, user_id) is not None
+    expire_after = timedelta(hours=float(settings_svc.get_section(db, user_id, "notifications")["expire_after_hours"]))
 
     def find(pid: str) -> NotificationRequest | None:
         return db.execute(
@@ -867,6 +1018,8 @@ def outbox_ack(
             if r.status == NotificationStatus.PENDING:
                 r.status = NotificationStatus.SENT
             r.sent_at = now
+            if self_driving and r.kind in SD_QUESTION_KINDS:
+                r.expires_at = now + expire_after  # 48 timmar från leveransen
         elif r.channel == PULL_REMIND:
             r.reminder_count = (r.reminder_count or 0) + 1
             r.last_reminder_at = now
@@ -877,13 +1030,18 @@ def outbox_ack(
         r = find(entry.get("id", ""))
         if r is None or r.channel not in _OUTBOX_CHANNELS:
             continue
+        error = (entry.get("error") or "Leveransen misslyckades i Home Assistant.")[:300]
+        r.last_error = error
+        bad += 1
+        if self_driving and _no_service_error(error):
+            # Ingen telefon vald: notisen ligger kvar i utkorgen och tappas aldrig.
+            set_context(r, no_phone=True)
+            continue
         r.delivery_attempts = (r.delivery_attempts or 0) + 1
-        r.last_error = (entry.get("error") or "Leveransen misslyckades i Home Assistant.")[:300]
         if r.delivery_attempts >= MAX_PULL_FAILURES:
             if r.status in OPEN_STATUSES and r.channel == PULL_OUT:
                 r.status = NotificationStatus.FAILED
             r.channel = CHANNEL_PULL
-        bad += 1
     conn = connection.load(db, user_id).conn
     if conn is not None and ok:
         integrations.mark_success(conn, now)
@@ -966,9 +1124,158 @@ def run_scheduled(db: Session, now: datetime | None = None) -> dict[str, int]:
     return stats
 
 
+def _self_driving_since(db: Session, user_id: uuid.UUID) -> datetime | None:
+    """``active_since`` när självgående läge gäller för användaren, annars None."""
+    if settings_svc.automation_mode(db, user_id) != settings_svc.MODE_SELF_DRIVING:
+        return None
+    return settings_svc.active_since(db, user_id)
+
+
+def _no_service_error(error: str) -> bool:
+    folded = error.lower()
+    return any(marker in folded for marker in NO_SERVICE_MARKERS)
+
+
+def is_live_since(db: Session, trip: LogicalTrip, since: datetime) -> bool:
+    """Live-resa vars tidigaste ``RawTrip.created_at`` ligger efter ``active_since``.
+
+    Importerade och manuellt inlagda resor, och resor från före uppgraderingen, omfattas aldrig.
+    """
+    if trip.source not in LIVE_SOURCES:
+        return False
+    rows = db.execute(
+        select(RawTrip.created_at, RawTrip.source)
+        .join(TripSegment, TripSegment.raw_trip_id == RawTrip.id)
+        .where(TripSegment.logical_trip_id == trip.id)
+    ).all()
+    if not rows or any(src not in LIVE_SOURCES for _, src in rows):
+        return False
+    earliest = min(created for created, _ in rows if created is not None) if any(c for c, _ in rows) else None
+    return earliest is not None and earliest >= since
+
+
+def _waiting_for_address(db: Session, trip: LogicalTrip, now: datetime) -> bool:
+    """Läget ``wait``: målets adress slås fortfarande upp (högst 30 minuter)."""
+    dest = db.get(KnownLocation, trip.end_location_id) if trip.end_location_id else None
+    if dest is None or dest.geocode_status != "pending":
+        return False
+    return dest.created_at is not None and now - dest.created_at < WAIT_FOR_ADDRESS
+
+
+def _wants_company(db: Session, trip: LogicalTrip) -> bool:
+    """A.3: målet är en arbetsplats enligt kartan men kartan har inget namn för den."""
+    if messages.is_multi(trip):
+        return False
+    dest = db.get(KnownLocation, trip.end_location_id) if trip.end_location_id else None
+    return (
+        dest is not None
+        and dest.place_kind == "work"
+        and not dest.confirmed
+        and not (dest.company or "").strip()
+        and dest.assumption != "revoked"
+        and dest.type not in ("home", "private", "regular_workplace", "office", "hotel")
+    )
+
+
+def _local_month(when: datetime, tz: ZoneInfo) -> tuple[int, int]:
+    local = when.astimezone(tz)
+    return local.year, local.month
+
+
 def ensure_open_questions(db: Session, now: datetime | None = None) -> dict[str, int]:
     """Skapar frågor för öppna ärenden på live-resor i självgående läge (byggkontraktet C.4).
 
-    STUBBE (G0): gör inget förrän S2a fyller funktionen.
+    Gäller CATEGORY-, TAX_UNCERTAIN- och PURPOSE-ärenden på live-resor efter
+    ``active_since`` som slutade inom 35 dagar och har passerat ``batch_window_minutes``.
+    Resor i läget ``wait`` (adressen slås upp) väntar. Varje resa får en fråga (samma
+    dedupe-nyckel som förut). Vid månadsskiftet ställs månadens utgångna frågor om en gång,
+    med dedupe-suffixet ``:m``. Leveransen (en fråga åt gången) sköts av ``deliver_user``.
     """
-    return {}
+    now = now or utcnow()
+    stats: Counter[str] = Counter()
+    for user_id in db.execute(select(User.id).where(User.is_active.is_(True))).scalars().all():
+        since = _self_driving_since(db, user_id)
+        if since is None:
+            continue
+        cfg = settings_svc.get_section(db, user_id, "notifications")
+        if not cfg["enabled"]:
+            continue
+        state = connection.load(db, user_id)
+        if state.channel is None:
+            continue  # frågorna skapas när en kanal finns; ärendena ligger kvar till dess
+        kinds = cfg["kinds"]
+        tz = settings_svc.user_timezone(db, user_id)
+        vq = select(Vehicle.id).where(Vehicle.owner_user_id == user_id, Vehicle.is_active.is_(True))
+        if state.channel != CHANNEL_DEMO:
+            vq = vq.where(Vehicle.is_demo.is_(False))
+        vehicle_ids = list(db.execute(vq).scalars())
+        if not vehicle_ids:
+            continue
+        settled = now - timedelta(minutes=float(cfg["batch_window_minutes"]))
+        rows = db.execute(
+            select(ReviewItem.kind, LogicalTrip)
+            .join(LogicalTrip, LogicalTrip.id == ReviewItem.logical_trip_id)
+            .where(
+                ReviewItem.vehicle_id.in_(vehicle_ids),
+                ReviewItem.status == ReviewState.OPEN,
+                ReviewItem.kind.in_((ReviewKind.CATEGORY, ReviewKind.TAX_UNCERTAIN, ReviewKind.PURPOSE)),
+                LogicalTrip.state == LogicalState.ACTIVE,
+                LogicalTrip.source.in_(LIVE_SOURCES),
+                LogicalTrip.ended_at >= now - OPEN_QUESTION_WINDOW,
+                LogicalTrip.ended_at <= settled,
+            )
+            .order_by(LogicalTrip.ended_at.asc())
+        ).all()
+        by_trip: dict[uuid.UUID, tuple[LogicalTrip, set[str]]] = {}
+        for kind, trip in rows:
+            by_trip.setdefault(trip.id, (trip, set()))[1].add(kind)
+        this_month = _local_month(now, tz)
+        for trip, item_kinds in by_trip.values():
+            if not is_live_since(db, trip, since):
+                stats["skipped_not_live"] += 1
+                continue
+            if _waiting_for_address(db, trip, now):
+                stats["waiting"] += 1
+                continue
+            if item_kinds & {ReviewKind.CATEGORY, ReviewKind.TAX_UNCERTAIN}:
+                if not kinds.get("classify", True):
+                    continue
+                kind = NotificationKind.COMPANY if _wants_company(db, trip) else NotificationKind.CLASSIFY
+            elif trip.category == Category.WORK and kinds.get("purpose", True):
+                kind = NotificationKind.PURPOSE
+            else:
+                continue
+            suffix = ""
+            base = db.execute(
+                select(NotificationRequest)
+                .where(
+                    NotificationRequest.user_id == user_id,
+                    NotificationRequest.logical_trip_id == trip.id,
+                    NotificationRequest.kind == kind,
+                )
+                .order_by(NotificationRequest.created_at.asc())
+            ).scalars().all()
+            if base:
+                # Frågan finns redan. Vid månadsskiftet ställs en utgången fråga om en gång.
+                if any((r.dedupe_key or "").endswith(MONTH_SUFFIX) for r in base):
+                    continue
+                if any(r.status in OPEN_STATUSES for r in base):
+                    continue
+                if not any(r.status == NotificationStatus.EXPIRED for r in base):
+                    continue
+                ended = trip.ended_at or trip.sort_time
+                if ended is None or _local_month(ended, tz) >= this_month:
+                    continue
+                suffix = MONTH_SUFFIX
+            common: dict[str, Any] = {"user_id": user_id, "trip": trip, "cfg": cfg, "now": now, "send_after": now,
+                                      "dedupe_suffix": suffix}
+            if kind == NotificationKind.COMPANY:
+                req = create_company_question(db, **common)
+            elif kind == NotificationKind.CLASSIFY:
+                req = create_classify_question(db, self_driving=True, **common)
+            else:
+                req = create_purpose_question(db, self_driving=True, **common)
+            if req is not None:
+                stats["month_reasked" if suffix else "created"] += 1
+    db.flush()
+    return dict(stats)

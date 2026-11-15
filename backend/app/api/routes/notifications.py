@@ -4,18 +4,25 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from app.api.deps import DbDep, WebPrincipalDep
-from app.api.errors import not_found
+from app.api.errors import bad_request, not_found
 from app.config import get_config
 from app.db import utcnow
-from app.models import LogicalTrip, NotificationRequest, RawTrip
-from app.models.enums import NotificationKind, NotificationStatus
+from app.models import LogicalTrip, NotificationRequest, RawTrip, Vehicle
+from app.models.enums import (
+    AUTO_APPROVAL_SOURCES,
+    ApprovalSource,
+    Category,
+    LogicalState,
+    NotificationKind,
+    NotificationStatus,
+)
 from app.services.ha import actions as A
 from app.services.ha import demo, messages, notifier, responses
 from app.services.ha.connection import CHANNEL_DEMO
@@ -112,6 +119,7 @@ class DemoPhoneNotification(BaseModel):
 
 def _actions(req: NotificationRequest) -> list[ActionOut]:
     base = get_config().base_url
+    # I webben leder "Öppna underlaget" till exportsidan (inloggad), aldrig till en signerad länk.
     return [
         ActionOut(
             key=a["key"],
@@ -119,7 +127,7 @@ def _actions(req: NotificationRequest) -> list[ActionOut]:
             text_input=bool(a.get("text_input")),
             uri=A.absolute_url(base, a["uri"]) if a.get("uri") else None,
         )
-        for a in (req.actions or [])
+        for a in notifier.resolved_actions(None, req, web=True)
     ]
 
 
@@ -210,7 +218,7 @@ def demo_inbox(principal: WebPrincipalDep, db: DbDep) -> list[DemoPhoneNotificat
             message=r.message,
             sent_at=r.sent_at,
             actions=_actions(r),
-            ha_payload=notifier.service_data(r),
+            ha_payload=notifier.service_data(r, db=db),
         )
         for r in demo.inbox(db, principal.user.id)
     ]
@@ -266,6 +274,7 @@ def respond(public_id: str, body: RespondIn, principal: WebPrincipalDep, db: DbD
         reply_text=body.reply_text,
         idempotency_key=body.idempotency_key or uuid.uuid4().hex,
         source=source,
+        always=body.always,
     )
     db.commit()
     return result
@@ -285,3 +294,54 @@ def snooze(public_id: str, body: SnoozeIn, principal: WebPrincipalDep, db: DbDep
     )
     db.commit()
     return result
+
+
+class ReviewVerdictIn(BaseModel):
+    verdict: Literal["ok", "wrong"]
+
+
+@router.post("/review-rows/{trip_id}", summary="Stämmer eller Fel på en automatiskt godkänd eller antagen rad")
+def review_row(trip_id: uuid.UUID, body: ReviewVerdictIn, principal: WebPrincipalDep, db: DbDep) -> dict[str, Any]:
+    """Månadens genomgång (/m/month): ägarens besked om en rad som automatiken avgjorde.
+
+    * "Stämmer" på en antagen rad gör platsen till bekräftad kund och skapar en regel (A.3 c).
+      På övriga rader blir raden ägarens eget beslut.
+    * "Fel" på en tjänsteresa gör den privat (på en antagen rad återkallas antagandet, A.3 b).
+      En privat rad öppnas igen och får en fråga.
+    """
+    from app.services import audit
+    from app.services.classify import autopilot
+    from app.services.learning import feedback
+    from app.services.trips import segments as seg
+    from app.services.trips.segments import TripError
+
+    trip = seg.load_trip(db, trip_id)
+    vehicle = db.get(Vehicle, trip.vehicle_id) if trip is not None else None
+    if trip is None or vehicle is None or vehicle.owner_user_id != principal.user.id:
+        raise not_found("Resan")
+    if trip.state != LogicalState.ACTIVE or trip.approval_source not in AUTO_APPROVAL_SOURCES:
+        raise bad_request("Raden är redan avgjord av dig.", "not_automatic")
+    actor = audit.user_actor(principal.user.id)
+    try:
+        if body.verdict == "ok":
+            if trip.approval_source == ApprovalSource.ASSUMED:
+                autopilot.confirm_assumption(db, trip, actor=actor)
+                message = "Platsen räknas som kund."
+            else:
+                feedback.apply_decision(db, trip, user_id=principal.user.id, actor=actor, channel="web", approve=True)
+                message = "Raden är bekräftad."
+        elif trip.category == Category.WORK:
+            feedback.apply_decision(
+                db, trip, user_id=principal.user.id, actor=actor, channel="web", category=Category.PRIVATE
+            )
+            message = "Raden är ändrad till privat."
+        else:
+            feedback.apply_decision(
+                db, trip, user_id=principal.user.id, actor=actor, channel="web", category=Category.UNDECIDED
+            )
+            message = "Raden är öppnad igen och får en fråga."
+    except TripError as exc:
+        raise bad_request(exc.message, exc.code) from exc
+    notifier.cancel_for_trip(db, trip.id)
+    db.commit()
+    return {"trip_id": str(trip.id), "verdict": body.verdict, "message": message}

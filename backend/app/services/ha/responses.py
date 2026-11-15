@@ -27,7 +27,7 @@ from sqlalchemy.orm import Session
 from app.db import utcnow
 from app.models import LogicalTrip, NotificationRequest, NotificationResponse, Vehicle
 from app.models.enums import Category, LogicalState, NotificationKind, NotificationStatus
-from app.services import audit, integrations
+from app.services import audit, integrations, text_safety
 from app.services import settings as settings_svc
 from app.services.audit import Actor
 from app.services.ha import actions as A
@@ -48,6 +48,11 @@ OUTCOME_OPENED = "opened"
 OUTCOME_SNOOZED = "snoozed"
 
 _PHONE_SOURCES = ("ha", "demo")
+MAX_REPLY_TEXT = 200  # E.4: textsvar 1–200 tecken efter tvätt
+
+# Svar som gäller resans kategori och ärende i självgående läge (C.4).
+_WORK_KEYS = (f"{A.WORK_PICK}0", f"{A.WORK_ALWAYS}0", A.WORK_TEXT)
+_TRIP_KINDS = (NotificationKind.CLASSIFY, NotificationKind.PURPOSE, NotificationKind.COMPANY, NotificationKind.ASSUMED)
 
 
 def _hash_key(source: str, user_id: uuid.UUID, key: str) -> str:
@@ -99,6 +104,109 @@ def _snooze(db: Session, req: NotificationRequest, user_id: uuid.UUID, now: date
     return until
 
 
+def clean_reply(reply_text: str | None) -> str:
+    """Textsvaret tvättat (sanitize_text). Tomt eller över 200 tecken ger TripError."""
+    text = text_safety.sanitize_text(reply_text, limit=10_000)
+    if not text:
+        raise TripError("Ingen text angavs.", "empty_text")
+    if len(text) > MAX_REPLY_TEXT:
+        raise TripError(f"Texten får vara högst {MAX_REPLY_TEXT} tecken.", "text_too_long")
+    return text
+
+
+def _action_purpose(action: dict[str, Any]) -> str:
+    text = text_safety.sanitize_text(action.get("purpose"))
+    if not text:
+        raise TripError("Det valda ärendet finns inte längre.", "empty_purpose")
+    return text
+
+
+def _owner_notice(trip: LogicalTrip) -> str | None:
+    """Text från autopilot.on_owner_decision (t.ex. "Regeln för X frågar dig nu i stället")."""
+    notice = getattr(trip, "_autopilot_notice", None)
+    return notice if isinstance(notice, str) and notice else None
+
+
+def _remember(
+    db: Session, trip: LogicalTrip, *, user_id: uuid.UUID, category: str, purpose: str | None, actor: Actor
+) -> str | None:
+    """Sparar ägarens egen regel ("Alltid …"). Returnerar en text om det inte gick."""
+    from app.services.classify import autopilot
+
+    trip = seg.load_trip(db, trip.id) or trip
+    if not autopilot.can_remember(db, trip, purpose if category == Category.WORK else None):
+        return "Ingen regel sparades för den här platsen."
+    try:
+        autopilot.remember_always(db, user_id=user_id, trip=trip, category=category, purpose=purpose, actor=actor)
+    except ValueError:
+        return "Ingen regel sparades för den här platsen."
+    return None
+
+
+def _decide_trip(
+    db: Session, req: NotificationRequest, *, user_id: uuid.UUID, actor: Actor, channel: str, category: str,
+    purpose: str | None, always: bool,
+) -> dict[str, Any]:
+    trip = _load_active_trip(db, req)
+    if category == Category.WORK and purpose is not None and trip.category == Category.WORK and trip.has_mixed_categories:
+        # Blandad resa: bara ärendet, delsträckornas fördelning rörs inte.
+        trip = feedback.apply_decision(db, trip, user_id=user_id, actor=actor, channel=channel, purpose=purpose)
+    else:
+        trip = feedback.apply_decision(
+            db, trip, user_id=user_id, actor=actor, channel=channel, category=category, purpose=purpose
+        )
+    label = "Tjänst" if category == Category.WORK else "Privat"
+    message = f"Resan sparades som {label}" + (f": {purpose}." if purpose else ".")
+    if always:
+        failed = _remember(db, trip, user_id=user_id, category=category, purpose=purpose, actor=actor)
+        message += f" {failed}" if failed else " Regeln sparades och gäller nästa gång."
+    notice = _owner_notice(trip)
+    if notice:
+        message += f" {notice}"
+    result = _result(req, OUTCOME_APPLIED, message, category=category)
+    if purpose:
+        result["purpose"] = purpose
+    return result
+
+
+def _apply_self_driving(
+    db: Session, req: NotificationRequest, key: str, action: dict[str, Any], reply_text: str | None, *,
+    user_id: uuid.UUID, actor: Actor, channel: str, always: bool,
+) -> dict[str, Any] | None:
+    """Svaren på frågorna i självgående läge (C.4). None när nyckeln inte hör hit."""
+    from app.services.classify import autopilot
+
+    kind = req.kind
+    if kind == NotificationKind.CLASSIFY and key in _WORK_KEYS:
+        purpose = clean_reply(reply_text) if key == A.WORK_TEXT else _action_purpose(action)
+        return _decide_trip(db, req, user_id=user_id, actor=actor, channel=channel, category=Category.WORK,
+                            purpose=purpose, always=always or key.startswith(A.WORK_ALWAYS))
+    if kind == NotificationKind.CLASSIFY and key == A.PRIVATE_ALWAYS:
+        return _decide_trip(db, req, user_id=user_id, actor=actor, channel=channel, category=Category.PRIVATE,
+                            purpose=None, always=True)
+    if kind == NotificationKind.PURPOSE and key == f"{A.PURPOSE_ALWAYS}0":
+        return _decide_trip(db, req, user_id=user_id, actor=actor, channel=channel, category=Category.WORK,
+                            purpose=_action_purpose(action), always=True)
+    if kind in (NotificationKind.PURPOSE, NotificationKind.COMPANY, NotificationKind.ASSUMED) and key == A.PRIVATE:
+        # På ett antagande är det en rättelse (A.3 b), som autopilot.on_owner_decision tar hand om.
+        return _decide_trip(db, req, user_id=user_id, actor=actor, channel=channel, category=Category.PRIVATE,
+                            purpose=None, always=always)
+    if kind == NotificationKind.ASSUMED and key == A.WORK_TEXT:
+        return _decide_trip(db, req, user_id=user_id, actor=actor, channel=channel, category=Category.WORK,
+                            purpose=clean_reply(reply_text), always=always)
+    if kind == NotificationKind.ASSUMED and key == A.OK:
+        trip = _load_active_trip(db, req)
+        autopilot.confirm_assumption(db, trip, actor=actor)
+        return _result(req, OUTCOME_APPLIED, "Tack. Platsen räknas som kund, och nästa besök godkänns som tjänst.",
+                       category=Category.WORK)
+    if kind == NotificationKind.COMPANY and key == A.COMPANY_TEXT:
+        text = clean_reply(reply_text)
+        trip = _load_active_trip(db, req)
+        autopilot.set_company(db, trip, text, actor=actor)
+        return _result(req, OUTCOME_APPLIED, f"Sparat: Kundbesök {text}.", category=Category.WORK, company=text)
+    return None
+
+
 def _apply(
     db: Session,
     req: NotificationRequest,
@@ -109,10 +217,29 @@ def _apply(
     user_id: uuid.UUID,
     source: str,
     now: datetime,
+    always: bool = False,
 ) -> dict[str, Any]:
     """Utför åtgärden. Kastar TripError om den inte kan genomföras."""
     actor = _actor(user_id, source)
     channel = "ha" if source in _PHONE_SOURCES else "web"
+    # "Gör alltid så här" finns bara i webben (RespondIn.always) och prövas med can_remember.
+    always = always and source == "web"
+
+    handled = _apply_self_driving(
+        db, req, key, action, reply_text, user_id=user_id, actor=actor, channel=channel, always=always
+    )
+    if handled is not None:
+        return handled
+
+    if always and req.kind in (NotificationKind.CLASSIFY, NotificationKind.PURPOSE) and (
+        key == A.PRIVATE or key == A.PURPOSE_TEXT or key.startswith(A.PURPOSE_PICK)
+    ):
+        if key == A.PRIVATE:
+            return _decide_trip(db, req, user_id=user_id, actor=actor, channel=channel, category=Category.PRIVATE,
+                                purpose=None, always=True)
+        purpose = clean_reply(reply_text) if key == A.PURPOSE_TEXT else _action_purpose(action)
+        return _decide_trip(db, req, user_id=user_id, actor=actor, channel=channel, category=Category.WORK,
+                            purpose=purpose, always=True)
 
     if key in (A.WORK, A.PRIVATE) and req.kind == NotificationKind.CLASSIFY:
         trip = _load_active_trip(db, req)
@@ -129,9 +256,9 @@ def _apply(
 
     if req.kind == NotificationKind.PURPOSE and (key == A.PURPOSE_TEXT or key.startswith(A.PURPOSE_PICK)):
         if key == A.PURPOSE_TEXT:
-            text = (reply_text or "").strip()
-            if not text:
+            if not text_safety.sanitize_text(reply_text):
                 raise TripError("Inget syfte angavs.", "empty_purpose")
+            text = clean_reply(reply_text)  # E.4: tvättad text, 1–200 tecken
         else:
             text = (action.get("purpose") or "").strip()
             if not text:
@@ -218,6 +345,7 @@ def handle(
     source: str = "ha",
     now: datetime | None = None,
     snooze_minutes: float | None = None,
+    always: bool = False,
 ) -> dict[str, Any]:
     """Tar emot ett svar. Returnerar ett resultat med ``outcome``:
     applied | duplicate | expired | invalid | opened | snoozed."""
@@ -315,7 +443,7 @@ def handle(
         )
 
     try:
-        result = _apply(db, req, key, action_def, reply_text, user_id=user_id, source=source, now=now)
+        result = _apply(db, req, key, action_def, reply_text, user_id=user_id, source=source, now=now, always=always)
     except TripError as exc:
         return finish(_result(req, OUTCOME_INVALID, exc.message, code=exc.code))
 
