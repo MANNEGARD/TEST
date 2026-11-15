@@ -348,7 +348,11 @@ def _validate(section: str, values: dict[str, Any]) -> None:
         if isinstance(values.get("map_tiles_url"), str):
             _validate_url(values["map_tiles_url"], "privacy.map_tiles_url")
         if "geocoder_url" in values:
-            validate_geocoder_url(values["geocoder_url"])
+            url = values["geocoder_url"]
+            if not isinstance(url, str):
+                raise SettingsError("privacy.geocoder_url måste vara text.")
+            if url.strip():  # tom adress = ingen geokodning
+                validate_geocoder_url(url)
     if section == "automation":
         if "office_hours" in values:
             _validate_office_hours(values["office_hours"])

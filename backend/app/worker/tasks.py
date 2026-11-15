@@ -37,23 +37,40 @@ def _safe(name: str, fn, *args: Any, **kwargs: Any) -> Any:
 
 @jobs.register("tick")
 def tick() -> dict[str, Any]:
-    """Körs varje minut: fordonsinsamling, notisleverans, schemalagda rapporter."""
-    from app.services.ha import notifier
+    """Körs varje minut: fordonsinsamling, adresser, frågor, notisleverans, larm och månadsskiftet.
+
+    Ordningen är fast (byggkontraktet C.8). Varje steg har en egen session och ett fel i
+    ett steg stoppar aldrig de övriga. Adressuppslaget sköter sina sessioner själv, så att
+    inget nätverksanrop görs med en öppen transaktion.
+    """
+    from app.services.classify import autopilot
+    from app.services.export import month_close
+    from app.services.ha import alerts, notifier
+    from app.services.places import geocode
     from app.services.trips import review
     from app.services.volvo import collector
     from app.services.volvo import demo as volvo_demo
 
     out: dict[str, Any] = {}
     with session_scope() as db:
+        out["active_since"] = _safe("autopilot.ensure_active_since", autopilot.ensure_active_since, db)
+    with session_scope() as db:
         out["volvo"] = _safe("volvo.poll_due", collector.poll_due, db)
     with session_scope() as db:
         out["volvo_demo"] = _safe("volvo.demo.tick", volvo_demo.tick, db)
     with session_scope() as db:
         out["snoozed_woken"] = _safe("review.wake_snoozed", review.wake_snoozed, db)
+    out["geocode"] = _safe("places.geocode.run_pending", geocode.run_pending)
+    with session_scope() as db:
+        out["questions"] = _safe("ha.notifier.ensure_open_questions", notifier.ensure_open_questions, db)
     with session_scope() as db:
         out["notifications"] = _safe("ha.deliver_due", notifier.deliver_due, db)
     with session_scope() as db:
         out["scheduled"] = _safe("ha.run_scheduled", notifier.run_scheduled, db)
+    with session_scope() as db:
+        out["alerts"] = _safe("ha.alerts.run", alerts.run, db)
+    with session_scope() as db:
+        out["month_close"] = _safe("export.month_close.run_due", month_close.run_due, db)
     return out
 
 

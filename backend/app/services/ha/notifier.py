@@ -964,3 +964,11 @@ def run_scheduled(db: Session, now: datetime | None = None) -> dict[str, int]:
             deliver_user(db, user_id, now)
     db.flush()
     return stats
+
+
+def ensure_open_questions(db: Session, now: datetime | None = None) -> dict[str, int]:
+    """Skapar frågor för öppna ärenden på live-resor i självgående läge (byggkontraktet C.4).
+
+    STUBBE (G0): gör inget förrän S2a fyller funktionen.
+    """
+    return {}
