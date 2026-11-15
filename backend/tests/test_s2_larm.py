@@ -94,7 +94,7 @@ def test_failing_calendar_for_days_gives_one_push_and_none_on_recovery(db, user,
     last = NOW - timedelta(days=2)
     conn = calendar(db, user, status=IntegrationStatus.ERROR, last_success=last)
     now = NOW
-    for _ in range(4 * 24):  # fyra dygn, var 15:e minut... glesare räcker: var timme
+    for _ in range(4 * 24):  # fyra dygn, en kontroll i timmen
         tick(db, user, now)
         conn.last_error_at = now  # felet upprepas – episoden får inte följa felets tid
         now += timedelta(hours=1)
@@ -183,6 +183,7 @@ def test_volvo_reauth_soon_at_14_and_3_days(db, user, phone):
     t14 = due - timedelta(days=13)
     volvo(db, user, last_success=t14, grant_started=grant)
     tick(db, user, t14)
+    volvo(db, user, last_success=t14 + timedelta(days=1), grant_started=grant)  # hämtningen fungerar
     tick(db, user, t14 + timedelta(days=1))
     rows = alert_rows(db, alerts.VOLVO_REAUTH_SOON)
     assert len(rows) == 1 and rows[0].dedupe_key.endswith(":14")
@@ -209,11 +210,13 @@ def test_vehicle_silent_says_it_is_normal_and_has_no_vin(db, user, vehicle, phon
     observe(db, vehicle, NOW - timedelta(days=3))
     tick(db, user, NOW)
     assert alert_rows(db) == []
+    volvo(db, user, last_success=NOW + timedelta(days=2))  # hämtningen lyckas, men bilen är tyst
     tick(db, user, NOW + timedelta(days=2))
     rows = alert_rows(db, alerts.VEHICLE_SILENT)
     assert len(rows) == 1
     assert "normalt när bilen står" in rows[0].message
     assert vehicle.vin not in rows[0].message and "ABC123" not in rows[0].message
+    volvo(db, user, last_success=NOW + timedelta(days=3))
     tick(db, user, NOW + timedelta(days=3))
     assert len(alert_rows(db, alerts.VEHICLE_SILENT)) == 1
     # Bilen hör av sig: larmet rensas.
@@ -265,9 +268,10 @@ def test_at_most_two_alerts_per_day(db, user, vehicle, phone):
 
 
 def test_run_is_throttled_to_every_15_minutes(db, user, phone):
-    assert "skipped" not in alerts.run(db, now=NOW)
-    assert alerts.run(db, now=NOW + timedelta(minutes=10)) == {"skipped": 1}
-    assert "skipped" not in alerts.run(db, now=NOW + timedelta(minutes=15))
+    calendar(db, user)
+    assert alerts.run(db, now=NOW)["users"] == 1
+    assert alerts.run(db, now=NOW + timedelta(minutes=10)) == {}
+    assert alerts.run(db, now=NOW + timedelta(minutes=15))["users"] == 1
 
 
 def test_quiet_hours_delay_the_push(db, user, phone):

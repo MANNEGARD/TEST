@@ -254,11 +254,14 @@ def run_user(db: Session, user_id: uuid.UUID, now: datetime) -> dict[str, int]:
 
 
 def run(db: Session, now: datetime | None = None, *, force: bool = False) -> dict[str, Any]:
-    """Prövar larmvillkoren för alla användare med Volvo eller kalender (högst var 15:e minut)."""
+    """Prövar larmvillkoren för alla användare med Volvo eller kalender (högst var 15:e minut).
+
+    Returnerar statistik, eller ``{}`` när inget prövades (för tidigt eller inga användare).
+    """
     global _last_run_at
     now = now or utcnow()
     if not force and _last_run_at is not None and timedelta(0) <= now - _last_run_at < RUN_INTERVAL:
-        return {"skipped": 1}
+        return {}
     _last_run_at = now
     user_ids = sorted(
         {
@@ -282,6 +285,8 @@ def run(db: Session, now: datetime | None = None, *, force: bool = False) -> dic
         },
         key=str,
     )
+    if not user_ids:
+        return {}
     total = {"users": 0, "queued": 0, "resolved": 0, "deferred_cap": 0, "failed": 0}
     for user_id in user_ids:
         try:

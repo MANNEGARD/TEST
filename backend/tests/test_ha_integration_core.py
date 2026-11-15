@@ -112,6 +112,10 @@ def test_notify_services():
     assert core.select_service(None, "notify.mobile_app_a") == "mobile_app_a"
     assert core.select_service("mobile_app_x", "mobile_app_a") == "mobile_app_x"
     assert core.select_service(None, None) is None
+    # 1.1.0: inget valt men exakt en telefon i HA – den används. Med flera gissas aldrig.
+    assert core.select_service(None, None, available=["notify.mobile_app_a", "persistent_notification"]) == "mobile_app_a"
+    assert core.select_service(None, None, available=["mobile_app_a", "mobile_app_b"]) is None
+    assert core.select_service(None, "mobile_app_b", available=["mobile_app_a"]) == "mobile_app_b"
 
 
 def test_token_scope():
@@ -240,6 +244,36 @@ def test_classify_status():
     assert core.classify_status(422) == core.classify_status(404) == "reject"
 
 
+def test_parse_outbox_uses_the_only_phone_and_counts_missing():
+    body = {"items": [{"id": "n1", "type": "notify", "service": None, "data": {"message": "Ny resa"}}]}
+    deliveries, failed = core.parse_outbox(body, None, available=["mobile_app_enda"])
+    assert [d.service for d in deliveries] == ["mobile_app_enda"] and failed == []
+    deliveries, failed = core.parse_outbox(body, None, available=["mobile_app_a", "mobile_app_b"])
+    assert deliveries == [] and core.missing_phone_count(failed) == 1
+    assert core.missing_phone_count([{"id": "x", "error": "Notisen saknar text."}]) == 0
+
+
+def test_phone_issue_action():
+    assert core.phone_issue_action(has_service=False, waiting=1, issue_open=False) == "create"
+    assert core.phone_issue_action(has_service=False, waiting=1, issue_open=True) is None
+    assert core.phone_issue_action(has_service=False, waiting=0, issue_open=False) is None
+    assert core.phone_issue_action(has_service=True, waiting=0, issue_open=True) == "delete"
+    assert core.phone_issue_action(has_service=True, waiting=3, issue_open=False) is None
+
+
+def test_outage_tracker_notifies_once_per_outage():
+    t = core.OutageTracker()
+    assert t.failure(0.0) is False
+    assert t.failure(30 * 60) is False  # exakt 30 minuter: inte än
+    assert t.failure(30 * 60 + 1) is True
+    assert t.failure(40 * 60) is False  # en gång per avbrott
+    assert "30 minuter" in t.message()
+    assert t.success() is True and t.success() is False
+    assert t.failure(100_000.0, auth=True) is True  # 401: direkt
+    assert "API-token" in t.message()
+    assert t.failure(100_060.0) is False
+
+
 # ----------------------------------------------------------------------------- filer
 
 
@@ -251,7 +285,7 @@ def test_core_has_no_homeassistant_imports():
 def test_manifest_translations_and_hacs():
     manifest = json.loads((COMPONENT / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["domain"] == const.DOMAIN == "smgd_drivelog"
-    assert manifest["name"] == "SMGD DriveLog" and manifest["version"] == const.INTEGRATION_VERSION == "1.0.0"
+    assert manifest["name"] == "SMGD DriveLog" and manifest["version"] == const.INTEGRATION_VERSION == "1.1.0"
     assert manifest["config_flow"] is True and manifest["integration_type"] == "service"
     assert manifest["iot_class"] in ("local_polling", "cloud_polling")
     for key in ("codeowners", "documentation", "issue_tracker"):
@@ -272,4 +306,5 @@ def test_manifest_translations_and_hacs():
         assert keys(tr) == keys(strings), lang
     sv = json.loads((COMPONENT / "translations" / "sv.json").read_text(encoding="utf-8"))
     assert sv["entity"]["sensor"]["review_count"]["name"] == "Resor att granska"
+    assert sv["issues"]["no_phone"]["title"] == "DriveLog har frågor men ingen telefon är vald"
     assert "flush_queue" in (COMPONENT / "services.yaml").read_text(encoding="utf-8")

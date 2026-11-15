@@ -72,6 +72,24 @@ def candidate_purposes(ctx: TripContext, limit: int = 5) -> list[dict[str, Any]]
     return out[:limit]
 
 
+def return_purpose(prior_purpose: str | None, abbreviations: dict[str, str] | None = None) -> str | None:
+    """"Hemresa efter <utresans ärende>", eller None när utresans ärende inte duger som grund.
+
+    Utresans ärende får inte självt vara en hemresa, hotellresa eller transport, inte vara
+    för långt och inte vara platshållaren "syfte behöver bekräftas".
+    """
+    prior_norm = textnorm.normalize_purpose(prior_purpose, abbreviations)
+    if (
+        prior_norm is None
+        or prior_norm.purpose_type in ("return_home", "hotel_transfer", "transit")
+        or len(prior_norm.display) > 70
+        or NEEDS_CONFIRMATION_SUFFIX in fold(prior_norm.display)
+    ):
+        return None
+    base = textnorm.lower_first(textnorm.strip_trailing_period(prior_norm.display))
+    return textnorm.sentence(f"Hemresa efter {base}")
+
+
 def propose(db: Session, ctx: TripContext, rules: RuleResult) -> PurposeProposal | None:
     """Regelbaserat syftesförslag. Returnerar None när inget kan sägas."""
     if rules.category == Category.PRIVATE:
@@ -115,19 +133,12 @@ def propose(db: Session, ctx: TripContext, rules: RuleResult) -> PurposeProposal
     ret = next((s for s in rules.signals if s.kind == "return_trip" and s.direction == Category.WORK), None)
     if ret is not None and ctx.arrival_at_origin is not None:
         prior = ctx.arrival_at_origin
-        prior_norm = textnorm.normalize_purpose(prior.purpose, ctx.abbreviations)
         trusted = prior.review_status in (ReviewStatus.APPROVED, ReviewStatus.IMPORTED) and prior.purpose_confirmed
         city = _origin_city(ctx)
-        if (
-            trusted
-            and prior_norm is not None
-            and prior_norm.purpose_type not in ("return_home", "hotel_transfer", "transit")
-            and len(prior_norm.display) <= 70
-            and NEEDS_CONFIRMATION_SUFFIX not in fold(prior_norm.display)
-        ):
-            base = textnorm.lower_first(textnorm.strip_trailing_period(prior_norm.display))
+        return_text = return_purpose(prior.purpose, ctx.abbreviations) if trusted else None
+        if return_text is not None:
             return PurposeProposal(
-                text=textnorm.sentence(f"Hemresa efter {base}"),
+                text=return_text,
                 source="rule",
                 rationale="Återresa efter den bekräftade tjänsteresan dit.",
                 needs_confirmation=True,
