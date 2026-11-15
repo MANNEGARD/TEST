@@ -106,6 +106,9 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 def create_app() -> FastAPI:
     cfg = get_config()
+    # I produktion ligger API:t öppet mot internet: beskrivningen av alla slutpunkter visas
+    # då bara om ägaren har valt det (DRIVELOG_PUBLIC_DOCS=true).
+    docs_enabled = cfg.public_docs or not cfg.is_production
     app = FastAPI(
         title="SMGD DriveLog API",
         version=__version__,
@@ -113,8 +116,8 @@ def create_app() -> FastAPI:
             "REST-API för SMGD DriveLog – intelligent körjournal. Webbappen autentiserar med "
             "sessionskaka + X-CSRF-Token; Home Assistant-integrationen med Bearer-token."
         ),
-        openapi_url=f"{cfg.api_prefix}/openapi.json",
-        docs_url=f"{cfg.api_prefix}/docs",
+        openapi_url=f"{cfg.api_prefix}/openapi.json" if docs_enabled else None,
+        docs_url=f"{cfg.api_prefix}/docs" if docs_enabled else None,
         redoc_url=None,
         lifespan=lifespan,
     )

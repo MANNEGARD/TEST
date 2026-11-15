@@ -46,6 +46,9 @@ class AppConfig(BaseSettings):
     login_rate_limit_window_seconds: int = 300
 
     # Valfri bootstrap av första administratören (annars sker det i webbgränssnittet).
+    # API-dokumentationen (/api/v1/docs och openapi.json) visas inte för omvärlden i produktion
+    # om den inte uttryckligen slås på.
+    public_docs: bool = False
     first_admin_email: str | None = None
     first_admin_password: str | None = None
 

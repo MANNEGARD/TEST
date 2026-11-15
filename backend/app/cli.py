@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import getpass
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -18,7 +19,9 @@ def cmd_create_admin(args: argparse.Namespace) -> int:
     from app.security import passwords
     from app.services import vehicles
 
-    password = args.password or getpass.getpass("Lösenord: ")
+    # Lösenordet kan ges via miljövariabel (automatiserad installation) så att det inte syns
+    # i processlistan; annars frågar kommandot efter det.
+    password = args.password or os.environ.get("DRIVELOG_ADMIN_PASSWORD") or getpass.getpass("Lösenord: ")
     problem = passwords.validate_password_strength(password)
     if problem:
         print(problem, file=sys.stderr)

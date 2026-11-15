@@ -71,7 +71,8 @@ Testerna körs mot SQLite i minnet. Sätt `DRIVELOG_TEST_DATABASE_URL` för att 
 mot PostgreSQL. `scripts/dev.sh` startar backend och webbapp lokalt, och `scripts/e2e.sh` kör
 webbappens helhetstest (Playwright) mot en ny databas.
 
-API:t är dokumenterat med OpenAPI på `/api/v1/docs`.
+API:t är dokumenterat med OpenAPI på `/api/v1/docs` (i utvecklingsläge; i produktion är sidan
+stängd om inte `DRIVELOG_PUBLIC_DOCS=true`).
 
 ## Status för integrationerna
 

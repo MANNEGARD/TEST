@@ -57,3 +57,39 @@ def test_undo_split_keeps_decisions_on_every_part(db, user, vehicle, actor, trip
     c_cat = {seg.segment_category(src, s) for s in src.segments if s.raw_trip_id == raw_c}
     # Privat sträcka får aldrig bli tjänst för att en uppdelning ångras – oavsett vilken del.
     assert c_cat == {Category.PRIVATE}, c_cat
+
+
+def _docs_urls(monkeypatch, **env: str) -> tuple[str | None, str | None]:
+    """(docs_url, openapi_url) för en app skapad med de givna miljövariablerna."""
+    from app.config import reset_config_cache
+    from app.main import create_app
+
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    reset_config_cache()
+    try:
+        app = create_app()
+        return app.docs_url, app.openapi_url
+    finally:
+        for key in env:
+            monkeypatch.delenv(key, raising=False)
+        reset_config_cache()
+
+
+PRODUCTION = {
+    "DRIVELOG_ENVIRONMENT": "production",
+    "DRIVELOG_SECRET_KEY": "x" * 48,
+    "DRIVELOG_ENCRYPTION_KEYS": "A" * 43 + "=",
+    "DRIVELOG_BASE_URL": "https://drivelog.example.se",
+}
+
+
+def test_api_docs_are_hidden_in_production(monkeypatch) -> None:
+    # På internet ska beskrivningen av alla slutpunkter inte gå att läsa utan inloggning.
+    assert _docs_urls(monkeypatch, **PRODUCTION) == (None, None)
+
+
+def test_api_docs_can_be_enabled_and_exist_outside_production(monkeypatch) -> None:
+    expected = ("/api/v1/docs", "/api/v1/openapi.json")
+    assert _docs_urls(monkeypatch, **PRODUCTION, DRIVELOG_PUBLIC_DOCS="true") == expected
+    assert _docs_urls(monkeypatch) == expected

@@ -83,16 +83,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Skapa .env med installationsskriptet (slumpade hemligheter)
-        run: deploy/install.sh --env-only localhost
+      - name: Slumpa ett lösenord för testkontot
+        run: |
+          pw="$(openssl rand -hex 16)"
+          echo "::add-mask::$pw"
+          echo "CI_ADMIN_PASSWORD=$pw" >> "$GITHUB_ENV"
 
-      - name: Bygg avbilderna
-        run: docker compose build
+      - name: Installera med skriptet, precis som på en server
+        env:
+          DRIVELOG_ADMIN_EMAIL: ci@example.com
+          DRIVELOG_ADMIN_PASSWORD: ${{ env.CI_ADMIN_PASSWORD }}
+        run: deploy/install.sh localhost
 
-      - name: Starta och vänta tills alla tjänster är friska
-        run: docker compose up -d --wait --wait-timeout 300
+      - name: Att köra skriptet igen ändrar ingenting (uppgradering)
+        run: |
+          cp .env .env.before
+          deploy/install.sh --no-build localhost
+          diff .env .env.before
 
       - name: Röktest genom proxyn (HTTPS)
+        env:
+          SMOKE_EMAIL: ci@example.com
+          SMOKE_PASSWORD: ${{ env.CI_ADMIN_PASSWORD }}
         run: deploy/smoke-test.sh https://localhost
 
       - name: Säkerhetskopiering fungerar mot den körande stacken

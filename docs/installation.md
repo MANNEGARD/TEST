@@ -6,7 +6,8 @@ sköter HTTPS.
 
 ## Krav
 
-- En server med Docker Engine 24+ och Docker Compose v2 (cirka 2 GB RAM räcker).
+- En server med Docker Engine 24+ och Docker Compose v2. Driften klarar sig på 2 GB RAM, men
+  första bygget behöver cirka 3 GB – lägg till 2 GB växlingsutrymme eller välj 4 GB.
 - Ett domännamn som pekar på servern, till exempel `drivelog.smgd.se`, och port 80/443
   öppna – Caddy hämtar då certifikat automatiskt från Let's Encrypt. För ett rent lokalt
   nät fungerar `localhost` (lokalt certifikat) eller en egen proxy framför.
@@ -31,13 +32,18 @@ deploy/install.sh drivelog.smgd.se
 ```
 
 Skriptet skapar `.env` med slumpade hemligheter (befintliga värden skrivs aldrig över),
-kontrollerar att domänen pekar på servern och att port 80/443 är lediga, bygger och startar
-alla tjänster och väntar tills systemet svarar. Öppna sedan `https://drivelog.smgd.se` och
-skapa det första kontot. Kör samma kommando igen efter `git pull` när du uppgraderar.
+kontrollerar minne, DNS och att port 80/443 är lediga, bygger avbilderna, **skapar ditt
+administratörskonto innan något öppnas mot internet**, startar allt och kontrollerar till sist
+att HTTPS verkligen svarar med ett giltigt certifikat. Öppna sedan `https://drivelog.smgd.se`
+och logga in. Kör samma kommando igen efter `git pull` när du uppgraderar.
 
-- **DNS:** lägg in en **A-post** för `drivelog` som pekar på serverns publika IPv4-adress hos
-  den som sköter domänens DNS (ta bort en eventuell parkeringssida för underdomänen). Caddy
-  hämtar certifikatet från Let's Encrypt så snart posten pekar rätt.
+- **DNS:** hos den som sköter domänens DNS (för `smgd.se`: STRATO) ska underdomänen
+  `drivelog` ha en **A-post** som pekar på serverns publika IPv4-adress. Har underdomänen
+  även en **AAAA-post** (IPv6) – STRATO lägger in en för sin parkeringssida – måste den tas
+  bort eller pekas på serverns IPv6-adress. Annars kontrollerar Let's Encrypt fel server och
+  certifikatet utfärdas aldrig. Skriptet varnar för båda fallen.
+- **Minne:** första bygget av webbappen behöver cirka 3 GB. Har servern 2 GB lägger du till
+  växlingsutrymme först (skriptet visar kommandot).
 - **Privat repo:** `git clone` frågar efter inloggning. Använd ditt GitHub-användarnamn och en
   personlig åtkomsttoken med läsrätt till repot, eller ladda ned koden som zip från GitHub och
   packa upp den på servern.
@@ -107,9 +113,24 @@ curl -fsS https://drivelog.smgd.se/api/v1/health/ready
 
 ## 3. Första kontot
 
-Öppna webbadressen. Första gången visas *Skapa konto*; det kontot blir administratör.
-Därefter går det inte att skapa konton utan inloggning. (Alternativt kan
-`DRIVELOG_FIRST_ADMIN_EMAIL` och `DRIVELOG_FIRST_ADMIN_PASSWORD` anges i `.env`.)
+`deploy/install.sh` skapar kontot åt dig innan proxyn startas. Startar du för hand gäller
+detta: så länge inget konto finns kan **vem som helst** som når adressen skapa det första
+kontot, och det blir administratör. Skapa därför kontot innan systemet öppnas mot internet:
+
+```bash
+docker compose up -d db redis api
+```
+
+```bash
+docker compose exec api python -m app.cli create-admin din@adress.se
+```
+
+```bash
+docker compose up -d
+```
+
+(Alternativt kan `DRIVELOG_FIRST_ADMIN_EMAIL` och `DRIVELOG_FIRST_ADMIN_PASSWORD` anges i
+`.env` före första starten.) När ett konto finns går det inte att skapa fler utan inloggning.
 
 Glömt lösenordet? Återställ från servern:
 
@@ -167,7 +188,9 @@ docker compose logs -f api worker
 
 - **Integrationer:** sidan *Integrationer* visar status, senaste lyckade synk och senaste
   felmeddelande per integration.
-- **API-dokumentation:** `https://<domän>/api/v1/docs`.
+- **API-dokumentation:** stängd i produktion. Sätt `DRIVELOG_PUBLIC_DOCS=true` i `.env` om du
+  vill ha `https://<domän>/api/v1/docs`, eller ta fram beskrivningen med
+  `docker compose exec api python -m app.cli openapi`.
 - **Hälsa:** `/api/v1/health` (lever) och `/api/v1/health/ready` (databas och kö).
 - Loggarna maskerar tokens, nycklar, lösenord och VIN.
 

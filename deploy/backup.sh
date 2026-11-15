@@ -11,7 +11,13 @@ mkdir -p "$DEST"
 umask 077
 
 docker compose exec -T db pg_dump -U drivelog -d drivelog --format=custom --no-owner > "$DEST/drivelog-db-$STAMP.dump"
-docker compose exec -T api tar -C /data -czf - imports exports 2>/dev/null > "$DEST/drivelog-files-$STAMP.tar.gz" || true
+# Uppladdade originalfiler och skapade exporter. Katalogerna finns först när något har
+# importerats eller exporterats, därför skapas de vid behov innan de packas.
+if ! docker compose exec -T api sh -c 'mkdir -p /data/imports /data/exports && tar -C /data -czf - imports exports' \
+    > "$DEST/drivelog-files-$STAMP.tar.gz"; then
+  echo "VARNING: kopian av filerna misslyckades (databaskopian påverkas inte)." >&2
+  rm -f "$DEST/drivelog-files-$STAMP.tar.gz"
+fi
 
 # Kontrollera att databaskopian går att läsa innan gamla kopior gallras.
 docker compose exec -T db pg_restore --list < "$DEST/drivelog-db-$STAMP.dump" > /dev/null

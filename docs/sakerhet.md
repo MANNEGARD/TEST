@@ -103,6 +103,9 @@ dess hemligheter.
 - I produktionsläge startar inte API:t med svag hemlighet, utan krypteringsnyckel eller utan
   https i bas-adressen.
 - Containrarna körs som icke-root. Endast proxyn exponerar portar.
+- API-dokumentationen (`/api/v1/docs`) är stängd i produktion.
+- Installationsskriptet skapar administratörskontot innan proxyn startas, så att ingen
+  utomstående kan hinna skapa det första kontot.
 
 ## Kända begränsningar
 
