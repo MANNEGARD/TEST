@@ -1,14 +1,14 @@
 # SMGD DriveLog – webbgränssnitt (Next.js, standalone-output)
 # Bygg: docker build -t smgd-drivelog-web ./frontend
 
-FROM node:22-alpine AS deps
+FROM node:26-alpine AS deps
 WORKDIR /app
 RUN apk add --no-cache libc6-compat
 COPY package.json package-lock.json ./
 COPY scripts ./scripts
 RUN npm ci --no-audit --no-fund
 
-FROM node:22-alpine AS builder
+FROM node:26-alpine AS builder
 WORKDIR /app
 # Rewrites (/api/v1 → backend) bakas in vid byggtillfället i standalone-läge.
 # Standard matchar docker-compose (tjänsten "api"). Ändra med --build-arg vid behov.
@@ -19,7 +19,7 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN node scripts/copy-maplibre-worker.mjs && npm run build
 
-FROM node:22-alpine AS runner
+FROM node:26-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
