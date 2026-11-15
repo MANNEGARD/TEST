@@ -23,6 +23,8 @@ class User(Base):
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     last_login_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    # Ingår i nedladdningslänkarnas signatur; räknas upp för att stänga alla länkar.
+    link_epoch: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
 
 class AuthSession(Base):
@@ -220,3 +222,31 @@ class ExportJob(Base):
     summary: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     deleted_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    # manual (NULL räknas som manual) | month_close (skapad av månadsskiftet)
+    origin: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    superseded_by_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    rows_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    link_downloads: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+
+
+class MonthClose(Base):
+    """Månadsskiftet per fordon och månad: läget, det som väntar och den skapade filen."""
+
+    __tablename__ = "month_closes"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=new_id)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    vehicle_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("vehicles.id", ondelete="CASCADE"))
+    month: Mapped[str] = mapped_column(String(7))  # "2026-10"
+    state: Mapped[str] = mapped_column(String(20), default="open")  # open | waiting | exported | stale | empty
+    blockers: Mapped[list[dict[str, Any]]] = mapped_column(JSONType, default=list)
+    notes: Mapped[list[dict[str, Any]]] = mapped_column(JSONType, default=list)
+    export_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    rows_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    last_checked_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    notified_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    notice_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
+
+    __table_args__ = (UniqueConstraint("vehicle_id", "month", name="uq_month_close_vehicle_month"),)

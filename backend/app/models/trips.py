@@ -72,6 +72,10 @@ class VehicleObservation(Base):
     avg_speed: Mapped[float | None] = mapped_column(Float, nullable=True)
     trip_meter_auto_km: Mapped[float | None] = mapped_column(Float, nullable=True)
     trip_meter_manual_km: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Bilens snittfart sedan trippmätaren nollställdes (averageSpeedAutomatic) och när
+    # statistiken hämtades (bilen ger ingen egen tidsstämpel för den).
+    avg_speed_auto: Mapped[float | None] = mapped_column(Float, nullable=True)
+    statistics_reported_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
 
     content_hash: Mapped[str] = mapped_column(String(64), index=True)
     raw: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict)
@@ -121,6 +125,8 @@ class RawTrip(Base):
     # Gränser när faktisk starttid saknas (hittas aldrig på).
     start_earliest: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     start_latest: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    # Grunden för en uträknad starttid (start_time.estimate): metod, gränser och marginal.
+    start_estimate_basis: Mapped[dict[str, Any] | None] = mapped_column(JSONType, nullable=True)
     # Sorteringsnyckel: faktisk start, annars bästa kända gräns.
     sort_time: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True, index=True)
 
@@ -229,6 +235,13 @@ class LogicalTrip(Base):
     contacts: Mapped[str | None] = mapped_column(Text, nullable=True)  # besökta företag/kontaktpersoner
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)  # övriga anteckningar
     is_favorite: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Starttid som ägaren angett själv; vinner över bilens och den uträknade.
+    start_time_override: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    # Vem eller vad som godkände resan (enums.ApprovalSource); NULL = ägaren (före 1.1.0).
+    approval_source: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # {"pattern_id", "related_trip_id", "reason", "veto_until"} för automatiska godkännanden.
+    approval_basis: Mapped[dict[str, Any] | None] = mapped_column(JSONType, nullable=True)
+    auto_approved_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
 
     # --- Cache (räknas om av trips.segments.refresh_logical) ---
     started_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)

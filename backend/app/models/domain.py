@@ -49,6 +49,12 @@ class KnownLocation(Base):
     last_visited_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     created_from: Mapped[str] = mapped_column(String(20), default="import")
     merged_into_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    # Adressuppslag (enums.GeocodeStatus): pending | ok | not_found | failed | off.
+    geocode_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    geocoded_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    osm_class: Mapped[str | None] = mapped_column(String(60), nullable=True)  # t.ex. "building=warehouse"
+    place_kind: Mapped[str | None] = mapped_column(String(10), nullable=True)  # work | never | unclear
+    assumption: Mapped[str | None] = mapped_column(String(20), nullable=True)  # customer | revoked
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
 
@@ -136,6 +142,30 @@ class LearningFeedback(Base):
     model_assessment: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     undone_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
+
+class GeocodeCache(Base):
+    """Svar från geokodaren per kartcell (lat/lon avrundat till 4 decimaler).
+
+    Samma cell slås aldrig upp två gånger, inte heller när svaret var ``not_found``.
+    """
+
+    __tablename__ = "geocode_cache"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=new_id)
+    owner_user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    provider_host: Mapped[str] = mapped_column(String(200))
+    lat_key: Mapped[int] = mapped_column(Integer)  # round(lat * 1e4)
+    lon_key: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(20), default="pending")  # ok | not_found | failed
+    result: Mapped[dict[str, Any] | None] = mapped_column(JSONType, nullable=True)
+    fetched_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("owner_user_id", "provider_host", "lat_key", "lon_key", name="uq_geocode_cell"),
+    )
 
 
 # --------------------------------------------------------------------------- kalender

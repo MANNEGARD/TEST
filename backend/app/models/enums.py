@@ -213,6 +213,64 @@ class NotificationKind(StrEnum):
     WEEKLY = "weekly"
     DAILY = "daily"
     TEST = "test"
+    ASSUMED = "assumed"  # antagen tjänsteresa (platsantagande), vetotid
+    COMPANY = "company"  # "Vilket företag var det?"
+    ALERT = "alert"  # larm om kopplingarna (Volvo, kalender, bilen tyst)
+    MONTHLY = "monthly"  # månadsskiftet: klart eller väntar
+
+
+class ApprovalSource(StrEnum):
+    """Vem eller vad som godkände en resa (``LogicalTrip.approval_source``).
+
+    NULL betyder ägarens eget beslut från före 1.1.0 och räknas som ``user``.
+    """
+
+    USER = "user"  # ägarens beslut
+    BULK = "bulk"  # ägarens massgodkännande
+    RULE = "rule"  # ägarens egen regel (R)
+    HISTORY = "history"  # som de 3 senaste gångerna (H)
+    RETURN_TRIP = "return_trip"  # hemresa efter tjänsteresa (T)
+    COMMUTE = "commute"  # resa mellan bostad och arbetsplats (P)
+    PRIVATE_PLACE = "private_place"  # mellan privata platser (P)
+    ASSUMED = "assumed"  # antaget kundbesök (A), med vetotid
+
+
+# Automatiska godkännanden: räknas aldrig som ägarbekräftad historik.
+AUTO_APPROVAL_SOURCES: frozenset[str] = frozenset(
+    s.value for s in ApprovalSource if s not in (ApprovalSource.USER, ApprovalSource.BULK)
+)
+
+
+class GeocodeStatus(StrEnum):
+    PENDING = "pending"
+    OK = "ok"
+    NOT_FOUND = "not_found"
+    FAILED = "failed"
+    OFF = "off"
+
+
+class PlaceKind(StrEnum):
+    WORK = "work"
+    NEVER = "never"
+    UNCLEAR = "unclear"
+
+
+class PlaceAssumption(StrEnum):
+    CUSTOMER = "customer"
+    REVOKED = "revoked"
+
+
+class ExportOrigin(StrEnum):
+    MANUAL = "manual"  # NULL räknas också som manual
+    MONTH_CLOSE = "month_close"
+
+
+class MonthCloseState(StrEnum):
+    OPEN = "open"
+    WAITING = "waiting"
+    EXPORTED = "exported"
+    STALE = "stale"
+    EMPTY = "empty"
 
 
 class NotificationStatus(StrEnum):
