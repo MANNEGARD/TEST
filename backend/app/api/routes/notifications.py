@@ -92,6 +92,8 @@ class RespondIn(BaseModel):
     reply_text: str | None = Field(default=None, max_length=2000)
     as_phone: bool = Field(default=False, description="Simulera knapptryck på demotelefonen")
     idempotency_key: str | None = Field(default=None, min_length=8, max_length=100)
+    # "Gör alltid så här": sparar en egen regel när autopilot.can_remember tillåter det.
+    always: bool = False
 
 
 class SnoozeIn(BaseModel):

@@ -17,6 +17,7 @@ from app.models import AuditEvent, KnownLocation, Vehicle, WorkplacePeriod
 from app.schemas.common import AuditOut
 from app.services import audit, backup, privacy
 from app.services import settings as settings_svc
+from app.services.classify import autopilot
 from app.services.learning import feedback
 from app.services.stats import anomalies
 from app.services.trips import pipeline
@@ -88,6 +89,12 @@ def update_settings(section: str, body: dict[str, Any], principal: WebPrincipalD
         _reevaluate(db, principal)  # påverkar förslag för oavgjorda resor
     if section == "general" and before.get("journal_scope") != updated.get("journal_scope"):
         _apply_journal_scope(db, principal)
+    if section == "automation":
+        if before.get("mode") != settings_svc.MODE_SELF_DRIVING and updated.get("mode") == settings_svc.MODE_SELF_DRIVING:
+            # Självgående läge gäller från nu: resor från tiden i manuellt läge rörs aldrig.
+            settings_svc.update_section(db, principal.user.id, "automation", {"active_since": ""}, allow_read_only=True)
+        autopilot.ensure_active_since(db, principal.user.id)
+        updated = settings_svc.get_section(db, principal.user.id, section)
     db.commit()
     return updated
 

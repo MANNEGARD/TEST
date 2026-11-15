@@ -4904,6 +4904,141 @@
     }
    }
   },
+  "/api/v1/month-close": {
+   "get": {
+    "tags": [
+     "MonthClose"
+    ],
+    "summary": "Månadsskiftet: läget för innevarande och föregående månad",
+    "operationId": "get_month_close_api_v1_month_close_get",
+    "parameters": [
+     {
+      "name": "vehicle_id",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string",
+         "format": "uuid"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Vehicle Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/MonthCloseOut"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/month-close/links/revoke": {
+   "post": {
+    "tags": [
+     "MonthClose"
+    ],
+    "summary": "Stäng alla nedladdningslänkar",
+    "operationId": "revoke_links_api_v1_month_close_links_revoke_post",
+    "responses": {
+     "204": {
+      "description": "Successful Response"
+     }
+    }
+   }
+  },
+  "/api/v1/month-close/{month}/run": {
+   "post": {
+    "tags": [
+     "MonthClose"
+    ],
+    "summary": "Kontrollera månaden nu (och skapa underlaget om den är klar)",
+    "operationId": "run_month_api_v1_month_close__month__run_post",
+    "parameters": [
+     {
+      "name": "month",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Month"
+      }
+     },
+     {
+      "name": "vehicle_id",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string",
+         "format": "uuid"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Vehicle Id"
+      }
+     },
+     {
+      "name": "force",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "boolean",
+       "description": "Hoppa över väntan på månadsslutet",
+       "default": false,
+       "title": "Force"
+      },
+      "description": "Hoppa över väntan på månadsslutet"
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/MonthStatusOut"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
   "/api/v1/dashboard/summary": {
    "get": {
     "tags": [
@@ -8263,6 +8398,42 @@
     ],
     "title": "AuditOut"
    },
+   "BlockerOut": {
+    "properties": {
+     "code": {
+      "type": "string",
+      "title": "Code"
+     },
+     "text": {
+      "type": "string",
+      "title": "Text"
+     },
+     "count": {
+      "type": "integer",
+      "title": "Count",
+      "default": 0
+     },
+     "trip_ids": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Trip Ids",
+      "default": []
+     },
+     "web_only": {
+      "type": "boolean",
+      "title": "Web Only",
+      "default": false
+     }
+    },
+    "type": "object",
+    "required": [
+     "code",
+     "text"
+    ],
+    "title": "BlockerOut"
+   },
    "Body_preview_api_v1_imports_preview_post": {
     "properties": {
      "files": {
@@ -9238,6 +9409,28 @@
        }
       ],
       "title": "Error"
+     },
+     "origin": {
+      "type": "string",
+      "title": "Origin",
+      "default": "manual"
+     },
+     "superseded_by_id": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "uuid"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Superseded By Id"
+     },
+     "link_downloads": {
+      "type": "integer",
+      "title": "Link Downloads",
+      "default": 0
      }
     },
     "type": "object",
@@ -10620,6 +10813,83 @@
     ],
     "title": "MergeRequest"
    },
+   "MonthCloseOut": {
+    "properties": {
+     "months": {
+      "items": {
+       "$ref": "#/components/schemas/MonthStatusOut"
+      },
+      "type": "array",
+      "title": "Months"
+     }
+    },
+    "type": "object",
+    "required": [
+     "months"
+    ],
+    "title": "MonthCloseOut"
+   },
+   "MonthStatusOut": {
+    "properties": {
+     "vehicle_id": {
+      "type": "string",
+      "format": "uuid",
+      "title": "Vehicle Id"
+     },
+     "month": {
+      "type": "string",
+      "title": "Month"
+     },
+     "state": {
+      "type": "string",
+      "title": "State"
+     },
+     "blockers": {
+      "items": {
+       "$ref": "#/components/schemas/BlockerOut"
+      },
+      "type": "array",
+      "title": "Blockers"
+     },
+     "notes": {
+      "items": {
+       "$ref": "#/components/schemas/BlockerOut"
+      },
+      "type": "array",
+      "title": "Notes"
+     },
+     "export_id": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "uuid"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Export Id"
+     },
+     "review_rows": {
+      "items": {
+       "$ref": "#/components/schemas/ReviewRowOut"
+      },
+      "type": "array",
+      "title": "Review Rows",
+      "default": []
+     }
+    },
+    "type": "object",
+    "required": [
+     "vehicle_id",
+     "month",
+     "state",
+     "blockers",
+     "notes",
+     "export_id"
+    ],
+    "title": "MonthStatusOut"
+   },
    "NotificationDetail": {
     "properties": {
      "public_id": {
@@ -11594,6 +11864,11 @@
        }
       ],
       "title": "Idempotency Key"
+     },
+     "always": {
+      "type": "boolean",
+      "title": "Always",
+      "default": false
      }
     },
     "type": "object",
@@ -11715,6 +11990,77 @@
      "resolution"
     ],
     "title": "ReviewItemOut"
+   },
+   "ReviewRowOut": {
+    "properties": {
+     "trip_id": {
+      "type": "string",
+      "format": "uuid",
+      "title": "Trip Id"
+     },
+     "date": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Date"
+     },
+     "route": {
+      "type": "string",
+      "title": "Route"
+     },
+     "distance_km": {
+      "type": "number",
+      "title": "Distance Km"
+     },
+     "purpose": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Purpose"
+     },
+     "category": {
+      "type": "string",
+      "title": "Category"
+     },
+     "approval_source": {
+      "type": "string",
+      "title": "Approval Source"
+     },
+     "reason": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Reason"
+     }
+    },
+    "type": "object",
+    "required": [
+     "trip_id",
+     "date",
+     "route",
+     "distance_km",
+     "purpose",
+     "category",
+     "approval_source",
+     "reason"
+    ],
+    "title": "ReviewRowOut"
    },
    "RuleIn": {
     "properties": {
@@ -12636,6 +12982,56 @@
       "type": "boolean",
       "title": "Has Calendar Match",
       "default": false
+     },
+     "start_time_source": {
+      "type": "string",
+      "enum": [
+       "car",
+       "estimated",
+       "user",
+       "unknown"
+      ],
+      "title": "Start Time Source",
+      "default": "unknown"
+     },
+     "start_time_text": {
+      "type": "string",
+      "title": "Start Time Text",
+      "default": ""
+     },
+     "start_estimate_basis": {
+      "anyOf": [
+       {
+        "additionalProperties": true,
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Start Estimate Basis"
+     },
+     "approval_source": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Approval Source"
+     },
+     "approval_reason": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Approval Reason"
      }
     },
     "type": "object",
@@ -12925,6 +13321,18 @@
        }
       ],
       "title": "Driver Id"
+     },
+     "start_time": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Start Time"
      }
     },
     "type": "object",

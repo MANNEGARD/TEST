@@ -53,7 +53,7 @@ from app.services.classify import purpose as purpose_mod
 from app.services.classify import signals as sig
 from app.services.learning import feedback
 from app.services.places import registry as places
-from app.services.trips import pipeline
+from app.services.trips import pipeline, start_time
 from app.services.trips import segments as seg
 
 router = APIRouter(tags=["Trips"])
@@ -79,6 +79,12 @@ class TripUpdate(BaseModel):
     approve: bool = False
     is_favorite: bool | None = None
     driver_id: uuid.UUID | None = None
+    # Ägarens egen starttid (med tidszon); null tar bort den. Måste ligga inom 24 timmar
+    # före resans sluttid.
+    start_time: datetime | None = None
+
+
+START_TIME_MAX_BEFORE_END = timedelta(hours=24)
 
 
 class BulkUpdate(BaseModel):
@@ -396,6 +402,17 @@ def _cancel_notifications(db, trip_id: uuid.UUID) -> None:
         pass
 
 
+def _set_start_time(db, trip: LogicalTrip, value: datetime | None, principal) -> None:
+    if value is not None:
+        if value.tzinfo is None:
+            raise bad_request("Starttiden måste ange tidszon.")
+        if trip.ended_at is None:
+            raise bad_request("Resan saknar sluttid, så starttiden kan inte anges.")
+        if not (trip.ended_at - START_TIME_MAX_BEFORE_END <= value <= trip.ended_at):
+            raise bad_request("Starttiden måste ligga inom 24 timmar före resans sluttid.", "start_time_out_of_range")
+    start_time.set_override(db, trip, value, actor=principal.actor)
+
+
 @router.patch("/trips/{trip_id}", response_model=TripOut, summary="Ändra kategori, syfte m.m. (lär systemet)")
 def update_trip(trip_id: uuid.UUID, body: TripUpdate, principal: PrincipalDep, db: DbDep) -> TripOut:
     trip = get_owned_trip(db, principal, trip_id)
@@ -408,6 +425,8 @@ def update_trip(trip_id: uuid.UUID, body: TripUpdate, principal: PrincipalDep, d
         trip.driver_id = body.driver_id
     if body.is_favorite is not None:
         trip.is_favorite = body.is_favorite
+    if "start_time" in data:
+        _set_start_time(db, trip, body.start_time, principal)
     if any(k in data for k in ("category", "purpose", "subcategory", "contacts", "notes")) or body.approve:
         feedback.apply_decision(
             db, trip, user_id=principal.user.id, actor=principal.actor,

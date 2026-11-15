@@ -17,12 +17,14 @@ from app.models import (
     DataGap,
     ExportJob,
     FuelRecord,
+    GeocodeCache,
     ImportBatch,
     ImportedFile,
     LearningFeedback,
     LocationPattern,
     LogicalTrip,
     MergeDecision,
+    MonthClose,
     NotificationRequest,
     RawTrip,
     ReviewItem,
@@ -62,6 +64,8 @@ def delete_history(db: Session, *, user_id: uuid.UUID, scope: str, vehicle: Vehi
             db.delete(job)
             n += 1
         removed["exports"] = n
+        # Månadsskiftets läge pekar på filerna; det byggs upp igen vid nästa kontroll.
+        removed["month_closes"] = db.execute(delete(MonthClose).where(MonthClose.user_id == user_id)).rowcount or 0
     elif scope == "notifications":
         n = 0
         for req in db.execute(select(NotificationRequest).where(NotificationRequest.user_id == user_id)).scalars():
@@ -79,6 +83,7 @@ def delete_history(db: Session, *, user_id: uuid.UUID, scope: str, vehicle: Vehi
         db.execute(delete(DataGap).where(DataGap.vehicle_id == vid))
         db.execute(delete(TripMerge).where(TripMerge.vehicle_id == vid))
         db.execute(delete(MergeDecision).where(MergeDecision.vehicle_id == vid))
+        removed["month_closes"] = db.execute(delete(MonthClose).where(MonthClose.vehicle_id == vid)).rowcount or 0
         # ORM-radering så att segment, klassningar m.m. följer med via kaskad.
         for trip in db.execute(select(LogicalTrip).where(LogicalTrip.vehicle_id == vid)).scalars():
             trip.merged_into_id = None
@@ -110,6 +115,8 @@ def delete_history(db: Session, *, user_id: uuid.UUID, scope: str, vehicle: Vehi
             db.delete(batch)
         removed["import_files"] = files
         db.execute(delete(LocationPattern).where(LocationPattern.owner_user_id == user_id, LocationPattern.is_manual_rule.is_(False)))
+        # Sparade kartsvar (adresser för bilens stopp) hör till resehistoriken.
+        removed["geocode_cache"] = db.execute(delete(GeocodeCache).where(GeocodeCache.owner_user_id == user_id)).rowcount or 0
     audit.record(db, actor, "privacy.delete_history", "user", user_id,
                  after={"scope": scope, "vehicle_id": str(vehicle.id) if vehicle else None, "removed": removed})
     db.flush()

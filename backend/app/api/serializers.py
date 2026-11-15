@@ -10,9 +10,33 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import CalendarMatch, KnownLocation, LogicalTrip, RawTrip, ReviewItem, TripSegment, Vehicle
-from app.models.enums import ReviewState, TimeQuality
+from app.models.enums import ReviewState, TimeQuality, TripSource
 from app.schemas.common import LocationBrief, LocationOut, TripOut, VehicleOut
+from app.services import settings as settings_svc
 from app.services import vehicles as vehicles_svc
+from app.services.trips import start_time
+
+_UNCERTAIN = (TimeQuality.BOUNDED, TimeQuality.UNKNOWN)
+_USER_SOURCES = (TripSource.MANUAL, TripSource.GAP_FILL)
+
+
+def start_time_source(trip: LogicalTrip) -> str:
+    """car | estimated | user | unknown (TripOut.start_time_source)."""
+    if trip.start_time_override is not None:
+        return "user"
+    if trip.started_at is None or trip.start_time_quality in _UNCERTAIN:
+        return "unknown"
+    if trip.start_time_quality == TimeQuality.ESTIMATED:
+        return "estimated"
+    if trip.source in _USER_SOURCES:
+        return "user"
+    return "car"
+
+
+def approval_reason(trip: LogicalTrip) -> str | None:
+    basis = trip.approval_basis if isinstance(trip.approval_basis, dict) else {}
+    reason = basis.get("reason")
+    return reason if isinstance(reason, str) and reason else None
 
 
 def vehicle_out(v: Vehicle) -> VehicleOut:
@@ -47,21 +71,30 @@ def trips_out(db: Session, trips: Sequence[LogicalTrip]) -> list[TripOut]:
             )
         ).all()
     }
-    # Möjligt startintervall från första delresan när starttiden är okänd/begränsad.
-    uncertain = [
-        t.id for t in trips
-        if t.started_at is None or t.start_time_quality in (TimeQuality.BOUNDED, TimeQuality.UNKNOWN)
-    ]
+    # Möjligt startintervall från första delresan när starttiden är okänd/begränsad, och
+    # grunden för en uträknad starttid.
+    uncertain = {t.id for t in trips if t.started_at is None or t.start_time_quality in _UNCERTAIN}
+    estimated = {t.id for t in trips if t.start_time_quality == TimeQuality.ESTIMATED}
     bounds: dict[uuid.UUID, tuple] = {}
-    if uncertain:
+    bases: dict[uuid.UUID, dict | None] = {}
+    if uncertain or estimated:
         rows = db.execute(
-            select(TripSegment.logical_trip_id, RawTrip.start_earliest, RawTrip.start_latest)
+            select(TripSegment.logical_trip_id, RawTrip.start_earliest, RawTrip.start_latest,
+                   RawTrip.start_estimate_basis)
             .join(RawTrip, RawTrip.id == TripSegment.raw_trip_id)
-            .where(TripSegment.logical_trip_id.in_(uncertain))
+            .where(TripSegment.logical_trip_id.in_(uncertain | estimated))
             .order_by(TripSegment.logical_trip_id, TripSegment.seq, TripSegment.part)
         ).all()
-        for tid, lo, hi in rows:
-            bounds.setdefault(tid, (lo, hi))
+        for tid, lo, hi, basis in rows:
+            if tid in uncertain:
+                bounds.setdefault(tid, (lo, hi))
+            if tid in estimated:
+                bases.setdefault(tid, basis if isinstance(basis, dict) else None)
+    # Tidszon per fordonsägare för den färdiga starttidstexten.
+    zones: dict[uuid.UUID, object] = {}
+    owners = dict(
+        db.execute(select(Vehicle.id, Vehicle.owner_user_id).where(Vehicle.id.in_({t.vehicle_id for t in trips}))).all()
+    )
     out: list[TripOut] = []
     for t in trips:
         item = TripOut.model_validate(t)
@@ -71,6 +104,14 @@ def trips_out(db: Session, trips: Sequence[LogicalTrip]) -> list[TripOut]:
         item.open_review_kinds = sorted(kinds.get(t.id, []))
         item.has_calendar_match = t.id in matched
         item.start_earliest, item.start_latest = bounds.get(t.id, (None, None))
+        owner = owners.get(t.vehicle_id)
+        if owner is not None and owner not in zones:
+            zones[owner] = settings_svc.user_timezone(db, owner)
+        tz = zones.get(owner) if owner is not None else None
+        item.start_time_source = start_time_source(t)  # type: ignore[assignment]
+        item.start_time_text = start_time.display(t, tz) if tz is not None else ""  # type: ignore[arg-type]
+        item.start_estimate_basis = bases.get(t.id)
+        item.approval_reason = approval_reason(t)
         out.append(item)
     return out
 

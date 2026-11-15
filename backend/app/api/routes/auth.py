@@ -16,6 +16,7 @@ from app.db import utcnow
 from app.models import ApiToken, User
 from app.security import passwords, ratelimit, sessions
 from app.services import audit, vehicles
+from app.services.export import links
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -207,6 +208,8 @@ def change_password(body: PasswordChange, principal: WebPrincipalDep, db: DbDep)
     user.password_hash = passwords.hash_password(body.new_password)
     # Övriga sessioner loggas ut när lösenordet byts.
     sessions.destroy_all_for_user(db, user.id, except_id=principal.session.id if principal.session else None)
+    # Nedladdningslänkar till underlaget slutar gälla (signaturen bygger på link_epoch).
+    links.revoke_all(db, user)
     audit.record(db, principal.actor, "auth.password_changed", "user", user.id)
     db.commit()
     return Response(status_code=204)

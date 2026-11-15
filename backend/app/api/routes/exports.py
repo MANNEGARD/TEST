@@ -9,7 +9,7 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Query, Response
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.api.deps import DbDep, PrincipalDep, get_vehicle
 from app.api.errors import ApiError, bad_request, not_found
@@ -41,6 +41,20 @@ class ExportOut(ORM):
     warnings: list[dict[str, Any]]
     summary: dict[str, Any]
     error: str | None
+    # manual (NULL räknas som manual) eller month_close (skapad av månadsskiftet).
+    origin: str = "manual"
+    superseded_by_id: uuid.UUID | None = None
+    link_downloads: int = 0
+
+    @field_validator("origin", mode="before")
+    @classmethod
+    def _origin(cls, value: Any) -> str:
+        return value or "manual"
+
+    @field_validator("link_downloads", mode="before")
+    @classmethod
+    def _downloads(cls, value: Any) -> int:
+        return int(value or 0)
 
 
 class ExportCreate(BaseModel):

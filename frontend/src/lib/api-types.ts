@@ -1437,6 +1437,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/month-close": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Månadsskiftet: läget för innevarande och föregående månad */
+        get: operations["get_month_close_api_v1_month_close_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/month-close/links/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Stäng alla nedladdningslänkar */
+        post: operations["revoke_links_api_v1_month_close_links_revoke_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/month-close/{month}/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Kontrollera månaden nu (och skapa underlaget om den är klar) */
+        post: operations["run_month_api_v1_month_close__month__run_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/dashboard/summary": {
         parameters: {
             query?: never;
@@ -2543,6 +2594,28 @@ export interface components {
                 [key: string]: unknown;
             } | null;
         };
+        /** BlockerOut */
+        BlockerOut: {
+            /** Code */
+            code: string;
+            /** Text */
+            text: string;
+            /**
+             * Count
+             * @default 0
+             */
+            count: number;
+            /**
+             * Trip Ids
+             * @default []
+             */
+            trip_ids: string[];
+            /**
+             * Web Only
+             * @default false
+             */
+            web_only: boolean;
+        };
         /** Body_preview_api_v1_imports_preview_post */
         Body_preview_api_v1_imports_preview_post: {
             /**
@@ -2852,6 +2925,18 @@ export interface components {
             };
             /** Error */
             error: string | null;
+            /**
+             * Origin
+             * @default manual
+             */
+            origin: string;
+            /** Superseded By Id */
+            superseded_by_id?: string | null;
+            /**
+             * Link Downloads
+             * @default 0
+             */
+            link_downloads: number;
         };
         /** FeedbackOut */
         FeedbackOut: {
@@ -3262,6 +3347,34 @@ export interface components {
              */
             acknowledge_gap: boolean;
         };
+        /** MonthCloseOut */
+        MonthCloseOut: {
+            /** Months */
+            months: components["schemas"]["MonthStatusOut"][];
+        };
+        /** MonthStatusOut */
+        MonthStatusOut: {
+            /**
+             * Vehicle Id
+             * Format: uuid
+             */
+            vehicle_id: string;
+            /** Month */
+            month: string;
+            /** State */
+            state: string;
+            /** Blockers */
+            blockers: components["schemas"]["BlockerOut"][];
+            /** Notes */
+            notes: components["schemas"]["BlockerOut"][];
+            /** Export Id */
+            export_id: string | null;
+            /**
+             * Review Rows
+             * @default []
+             */
+            review_rows: components["schemas"]["ReviewRowOut"][];
+        };
         /** NotificationDetail */
         NotificationDetail: {
             /** Public Id */
@@ -3541,6 +3654,11 @@ export interface components {
             as_phone: boolean;
             /** Idempotency Key */
             idempotency_key?: string | null;
+            /**
+             * Always
+             * @default false
+             */
+            always: boolean;
         };
         /** ReviewItemOut */
         ReviewItemOut: {
@@ -3582,6 +3700,28 @@ export interface components {
                 [key: string]: unknown;
             };
             trip?: components["schemas"]["TripOut"] | null;
+        };
+        /** ReviewRowOut */
+        ReviewRowOut: {
+            /**
+             * Trip Id
+             * Format: uuid
+             */
+            trip_id: string;
+            /** Date */
+            date: string | null;
+            /** Route */
+            route: string;
+            /** Distance Km */
+            distance_km: number;
+            /** Purpose */
+            purpose: string | null;
+            /** Category */
+            category: string;
+            /** Approval Source */
+            approval_source: string;
+            /** Reason */
+            reason: string | null;
         };
         /** RuleIn */
         RuleIn: {
@@ -3899,6 +4039,25 @@ export interface components {
              * @default false
              */
             has_calendar_match: boolean;
+            /**
+             * Start Time Source
+             * @default unknown
+             * @enum {string}
+             */
+            start_time_source: "car" | "estimated" | "user" | "unknown";
+            /**
+             * Start Time Text
+             * @default
+             */
+            start_time_text: string;
+            /** Start Estimate Basis */
+            start_estimate_basis?: {
+                [key: string]: unknown;
+            } | null;
+            /** Approval Source */
+            approval_source?: string | null;
+            /** Approval Reason */
+            approval_reason?: string | null;
         };
         /** TripSummary */
         TripSummary: {
@@ -3957,6 +4116,8 @@ export interface components {
             is_favorite?: boolean | null;
             /** Driver Id */
             driver_id?: string | null;
+            /** Start Time */
+            start_time?: string | null;
         };
         /** UserOut */
         UserOut: {
@@ -7086,6 +7247,90 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_month_close_api_v1_month_close_get: {
+        parameters: {
+            query?: {
+                vehicle_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MonthCloseOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_links_api_v1_month_close_links_revoke_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    run_month_api_v1_month_close__month__run_post: {
+        parameters: {
+            query?: {
+                vehicle_id?: string | null;
+                /** @description Hoppa över väntan på månadsslutet */
+                force?: boolean;
+            };
+            header?: never;
+            path: {
+                month: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MonthStatusOut"];
                 };
             };
             /** @description Validation Error */

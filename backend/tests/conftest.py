@@ -12,6 +12,7 @@ from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import httpx
 import pytest
 
 os.environ.setdefault("DRIVELOG_ENVIRONMENT", "test")
@@ -41,10 +42,55 @@ from app.models.enums import (  # noqa: E402
 from app.security import passwords, ratelimit  # noqa: E402
 from app.services import audit  # noqa: E402
 from app.services import settings as settings_svc  # noqa: E402
+from app.services.places import geocode  # noqa: E402
 from app.services.places import registry as places  # noqa: E402
 from app.services.trips import segments as seg  # noqa: E402
 
 TEST_PASSWORD = "korrekt-häst-batteri-1"
+
+
+def pytest_configure(config) -> None:
+    config.addinivalue_line(
+        "markers", "new_defaults: kör testet med 1.1.0:s riktiga standardvärden (inte legacy_defaults)"
+    )
+
+
+# Standardvärden från före 1.1.0, som de befintliga testerna bygger på.
+LEGACY_DEFAULTS: dict[tuple[str, str], Any] = {
+    ("automation", "mode"): "manual",
+    ("privacy", "geocoding_enabled"): False,
+    ("notifications", "hide_locations_on_lock_screen"): True,
+    ("notifications", "reminder_after_hours"): 20,
+    ("notifications", "expire_after_hours"): 72,
+}
+
+
+@pytest.fixture(autouse=True)
+def legacy_defaults(request, monkeypatch) -> None:
+    """Befintliga tester körs med standardvärdena från före 1.1.0 (manuellt läge, ingen
+    geokodning). ``@pytest.mark.new_defaults`` ger de riktiga standardvärdena."""
+    if request.node.get_closest_marker("new_defaults"):
+        return
+    for (section, key), value in LEGACY_DEFAULTS.items():
+        monkeypatch.setitem(settings_svc.DEFAULTS[section], key, value)
+
+
+class OfflineTransport(httpx.BaseTransport):
+    """Geokodarens transport i testerna: inget nätverk, varje anrop misslyckas som offline."""
+
+    def __init__(self) -> None:
+        self.requests: list[httpx.Request] = []
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        raise httpx.ConnectError("Testerna är offline", request=request)
+
+
+@pytest.fixture(autouse=True)
+def offline_geocoder(monkeypatch) -> OfflineTransport:
+    transport = OfflineTransport()
+    monkeypatch.setattr(geocode, "_default_transport", transport)
+    return transport
 
 
 @pytest.fixture(autouse=True)

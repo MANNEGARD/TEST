@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -98,6 +98,16 @@ class TripOut(ORM):
     end_location: LocationBrief | None = None
     open_review_kinds: list[str] = []
     has_calendar_match: bool = False
+    # Starttidens ursprung: car (bilens/källans tid), estimated (uträknad, "≈"), user
+    # (angiven av ägaren) eller unknown (bara gränser). start_time_text är färdig att visa.
+    start_time_source: Literal["car", "estimated", "user", "unknown"] = "unknown"
+    start_time_text: str = ""
+    # Grunden för en uträknad starttid (metod, gränser, margin_min …) från första delresan.
+    start_estimate_basis: dict[str, Any] | None = None
+    # Vem eller vad som godkände resan (user, bulk, rule, history, return_trip, commute,
+    # private_place, assumed); NULL = ägaren före 1.1.0. approval_reason är skälet i klartext.
+    approval_source: str | None = None
+    approval_reason: str | None = None
 
 
 class TripListOut(BaseModel):
