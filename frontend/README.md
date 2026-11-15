@@ -10,7 +10,7 @@ All data kommer från backendens REST-API (`/api/v1`, proxas av Next till FastAP
 npm install                 # kopierar även MapLibre-workern till public/vendor (postinstall)
 ../scripts/dev.sh           # backend :8000 (SQLite) + next dev :3000
 npm run build && npm run lint
-npm run e2e                 # Playwright-röktest mot http://localhost:3000 (se e2e/smoke.mjs)
+../scripts/e2e.sh           # helhetstest över alla sidor mot en ny databas (egna portar 8100/3100)
 ```
 
 Miljö: `API_INTERNAL_URL` (standard `http://127.0.0.1:8000`) styr vart `/api/v1/*` proxas.

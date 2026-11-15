@@ -68,7 +68,8 @@ python -m venv .venv && .venv/bin/pip install -e ".[dev]"
 ```
 
 Testerna körs mot SQLite i minnet. Sätt `DRIVELOG_TEST_DATABASE_URL` för att köra samma svit
-mot PostgreSQL. `scripts/dev.sh` startar backend och webbapp lokalt.
+mot PostgreSQL. `scripts/dev.sh` startar backend och webbapp lokalt, och `scripts/e2e.sh` kör
+webbappens helhetstest (Playwright) mot en ny databas.
 
 API:t är dokumenterat med OpenAPI på `/api/v1/docs`.
 
