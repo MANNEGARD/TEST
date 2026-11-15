@@ -94,9 +94,9 @@ alltid är hel. Kopian innehåller databasen, filerna, certifikaten **och krypte
 förvara den som en hemlighet. Saknas nyckeln men databasen finns startar appen inte; återställ
 då ur en säkerhetskopia.
 
-**Uppdatera** visas så fort en ny version finns i repot, men avbilden byggs först efteråt:
-vänta tills arbetsflödet *Home Assistant-tillägg* under repots **Actions** är grönt innan du
-trycker **Uppdatera**. Databasen uppgraderas automatiskt vid start.
+**Uppdatera** visas först när en ny version är färdigbyggd och går att hämta – tryck direkt.
+Databasen uppgraderas automatiskt vid start, och Home Assistant tar en säkerhetskopia först om
+du låter rutan för det vara ikryssad.
 
 ## Felsökning
 

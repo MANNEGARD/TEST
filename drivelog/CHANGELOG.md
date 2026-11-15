@@ -1,8 +1,7 @@
 # Ändringar
 
-> Home Assistant visar **Uppdatera** så fort en ny version finns i repot, men avbilden byggs
-> först efteråt. Vänta tills arbetsflödet *Home Assistant-tillägg* under repots Actions är grönt
-> innan du trycker **Uppdatera**.
+> Från 1.0.2 visar Home Assistant **Uppdatera** först när den nya versionen är färdigbyggd och
+> går att hämta – det går bra att trycka direkt.
 
 ## 1.0.2
 
@@ -16,6 +15,9 @@
   redan finns – DriveLog startar som vanligt och loggen säger att lösenordet inte ändrades.
 - Första gången efter uppdateringen från 1.0.1 ändras inget lösenord om fältet redan är ifyllt
   (appen kan inte veta om det är ett gammalt lösenord). Vill du återställa: skriv ett nytt.
+- En ny version erbjuds i Home Assistant först när avbilden är publicerad och går att hämta
+  utan inloggning, så installation och uppdatering misslyckas inte längre med
+  `manifest unknown` medan en version byggs.
 
 ## 1.0.1
 

@@ -165,19 +165,26 @@ innan certifikatet är utfärdat. Lägg gärna till webbappen på telefonens hem
 - **Återställning:** nyckel och databas hör ihop och återställs tillsammans. Saknas nyckeln men
   databasen finns vägrar appen starta (`nyckeln … saknas men databasen finns`) i stället för att
   tyst skapa en ny – återställ då appen ur en säkerhetskopia.
-- **Uppdatera:** Home Assistant visar **Uppdatera** så fort en ny version finns i repot – men
-  avbilden byggs först efteråt. **Vänta tills arbetsflödet *Home Assistant-tillägg* under
-  Actions är grönt** för repots standardgren innan du trycker **Uppdatera** (annars misslyckas
-  hämtningen med `manifest unknown`; försök då igen senare). Databasen migreras automatiskt.
+- **Uppdatera:** Home Assistant visar **Uppdatera** först när en ny version är färdigbyggd och
+  går att hämta – tryck direkt. Databasen migreras automatiskt.
 
-För den som ger ut en ny version: höj `version` i [`drivelog/config.yaml`](../drivelog/config.yaml)
-och skriv en rad i [`drivelog/CHANGELOG.md`](../drivelog/CHANGELOG.md) på repots standardgren.
-En publicerad version skrivs aldrig över.
+För den som ger ut en ny version: skriv den nya versionen i
+[`drivelog/VERSION`](../drivelog/VERSION) och en rad i
+[`drivelog/CHANGELOG.md`](../drivelog/CHANGELOG.md) på repots standardgren. Arbetsflödet
+*Home Assistant-tillägg* bygger avbilden, provstartar den som Supervisor skulle göra och
+publicerar den. Först när avbilden går att hämta utan inloggning för både amd64 och aarch64
+höjer arbetsflödets sista jobb `version` i [`drivelog/config.yaml`](../drivelog/config.yaml) –
+det är den raden Home Assistant läser. Ändra alltså inte `version` i `config.yaml` för hand:
+misslyckas ett bygge ligger den gamla, fungerande versionen kvar. En publicerad version skrivs
+aldrig över.
 
 ## 8. Felsökning
 
 | Problem | Gör så här |
 | --- | --- |
+| **Misslyckades med att installera appen**, och Supervisorns logg (Inställningar → System → Loggar → Supervisor) säger `unauthorized` | Paketet `drivelog` på GitHub är fortfarande privat. Gör det publikt (steg 1.3) och tryck **Installera** igen. |
+| Samma fel, men loggen säger `manifest unknown` | Versionen är inte färdigbyggd (kan bara hända med 1.0.1 och äldre). Vänta tills arbetsflödet *Home Assistant-tillägg* under Actions är grönt och försök igen. |
+| **Kodförråd** går inte att lägga till (`could not read Username for 'https://github.com'`) | Adressen är fel eller repot privat. Rätt adress är `https://github.com/SMGD-MP/TEST`. |
 | Loggen säger att en inställning behöver rättas | Meddelandet säger vilken; rätta, spara och starta om. |
 | `Det finns inget konto` | Fyll i **Administratörens e-post** och **Administratörens lösenord**, spara, starta om. |
 | Glömt lösenordet | Skriv ett nytt lösenord i **Administratörens lösenord**, spara och starta om appen (steg 4.7). |

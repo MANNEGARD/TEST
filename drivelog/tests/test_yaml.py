@@ -161,14 +161,19 @@ def test_arbetsflodet_ar_giltigt():
     assert set(flode[True]) >= {"push", "workflow_dispatch"}
     assert flode["permissions"] == {"contents": "read"}
     jobb = flode["jobs"]
-    assert set(jobb) == {"tester", "amd64", "aarch64", "publicera"}
-    # Bara publiceringsjobbet får skriva paket.
+    assert set(jobb) == {"tester", "amd64", "aarch64", "publicera", "erbjud"}
+    # Bara publiceringsjobbet får skriva paket, och bara jobbet som höjer versionen i
+    # drivelog/config.yaml får skriva i repot. Båda körs enbart på standardgrenen.
     for namn, j in jobb.items():
         if namn == "publicera":
             assert j["permissions"] == {"contents": "read", "packages": "write"}
             assert "default_branch" in j["if"]
+        elif namn == "erbjud":
+            assert j["permissions"] == {"contents": "write"}
+            assert "default_branch" in j["if"] and "github.event_name == 'push'" in j["if"]
+            assert j["needs"] == "publicera"
         else:
-            assert "packages" not in j.get("permissions", {})
+            assert j.get("permissions", {}) in ({}, {"contents": "read"})
     for j in jobb.values():
         for steg in j["steps"]:
             assert "uses" in steg or "run" in steg

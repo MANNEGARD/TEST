@@ -2,8 +2,11 @@
 # Supervisor skulle göra – och på standardgrenen publicering av avbilden till GHCR.
 #
 # Actions är fästa vid commit-SHA (versionen står som kommentar).
-# Home Assistant visar en ny version så fort config.yaml ändras på standardgrenen – tryck alltså
-# på Uppdatera först när det här arbetsflödet är grönt (då finns avbilden på GHCR).
+#
+# Utgivning: ändra drivelog/VERSION (och CHANGELOG.md). Home Assistant läser däremot `version` ur
+# drivelog/config.yaml på standardgrenen och hämtar avbilden med den taggen – därför höjs
+# config.yaml av sista jobbet här, först när avbilden bevisligen finns på GHCR. Home Assistant
+# erbjuds alltså aldrig en version som inte går att hämta, inte ens om ett bygge misslyckas.
 name: Home Assistant-tillägg
 
 on:
@@ -19,6 +22,7 @@ on:
       - "frontend/**"
       - "deploy/smoke-test.sh"
       - ".github/workflows/addon.yml"
+      - ".github/scripts/**"
   workflow_dispatch:
 
 concurrency:
@@ -51,15 +55,9 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - name: Läs version ur drivelog/config.yaml
+      - name: Läs versionen som byggs ur drivelog/VERSION
         id: meta
-        run: |
-          python3 -m pip install --quiet pyyaml
-          python3 - <<'EOF' >> "$GITHUB_OUTPUT"
-          import yaml
-          c = yaml.safe_load(open("drivelog/config.yaml", encoding="utf-8"))
-          print(f"version={c['version']}")
-          EOF
+        run: echo "version=$(python3 .github/scripts/erbjud_version.py --visa)" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
@@ -390,15 +388,9 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - name: Läs version ur drivelog/config.yaml
+      - name: Läs versionen som byggs ur drivelog/VERSION
         id: meta
-        run: |
-          python3 -m pip install --quiet pyyaml
-          python3 - <<'EOF' >> "$GITHUB_OUTPUT"
-          import yaml
-          c = yaml.safe_load(open("drivelog/config.yaml", encoding="utf-8"))
-          print(f"version={c['version']}")
-          EOF
+        run: echo "version=$(python3 .github/scripts/erbjud_version.py --visa)" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
         with:
@@ -467,9 +459,10 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - name: Läs version och avbild ur drivelog/config.yaml
+      - name: Läs versionen ur drivelog/VERSION och avbildens namn ur drivelog/config.yaml
         id: meta
         run: |
+          echo "version=$(python3 .github/scripts/erbjud_version.py --visa)" >> "$GITHUB_OUTPUT"
           python3 -m pip install --quiet pyyaml
           python3 - <<'EOF' >> "$GITHUB_OUTPUT"
           import os, yaml
@@ -479,7 +472,6 @@ jobs:
           assert bild == bild.lower() and bild.startswith(f"ghcr.io/{agare}/"), (
               f"image i config.yaml ({bild}) måste ligga under ghcr.io/{agare}/ och vara gemener")
           assert "{arch}" not in bild, "avbilden publiceras för flera arkitekturer under ett namn"
-          print(f"version={c['version']}")
           print(f"image={bild}")
           EOF
 
@@ -504,7 +496,7 @@ jobs:
           # Bara ett uttryckligt "taggen finns inte" ger publicering; varje annat fel (nätverk,
           # behörighet, GHCR nere) avbryter jobbet i stället för att riskera att skriva över.
           if utskrift="$(docker buildx imagetools inspect "$IMAGE:$VERSION" 2>&1)"; then
-            echo "::notice::$IMAGE:$VERSION finns redan – höj version i drivelog/config.yaml (och CHANGELOG.md) för att publicera en ny."
+            echo "::notice::$IMAGE:$VERSION finns redan – höj drivelog/VERSION (och CHANGELOG.md) för att publicera en ny."
             echo "finns=true" >> "$GITHUB_OUTPUT"
           elif printf '%s\n' "$utskrift" | grep -qiE 'manifest unknown|: not found'; then
             echo "$IMAGE:$VERSION finns inte än – publiceras."
@@ -538,3 +530,56 @@ jobs:
           IMAGE: ${{ steps.meta.outputs.image }}
           VERSION: ${{ steps.meta.outputs.version }}
         run: docker buildx imagetools inspect "$IMAGE:$VERSION"
+
+  erbjud:
+    name: Erbjud versionen i Home Assistant
+    # Höjer `version` i drivelog/config.yaml till drivelog/VERSION – först när avbilden finns på
+    # GHCR för båda arkitekturerna. Det är den raden Home Assistant läser för att visa "Uppdatera".
+    needs: publicera
+    if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Läs versionen som erbjuds ur drivelog/VERSION
+        id: meta
+        run: echo "version=$(python3 .github/scripts/erbjud_version.py --visa)" >> "$GITHUB_OUTPUT"
+
+      - name: Avbilden går att hämta utan inloggning, för amd64 och arm64
+        # Samma fråga som Home Assistant ställer: anonymt, utan GitHub-inloggning. Är paketet
+        # privat eller saknas en arkitektur misslyckas steget – och då erbjuds versionen inte.
+        run: python3 .github/scripts/erbjud_version.py --avbild
+
+      - name: Höj version i drivelog/config.yaml på standardgrenen
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          GREN: ${{ github.event.repository.default_branch }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          for forsok in 1 2 3 4 5; do
+            # Utgå alltid från grenens senaste läge: någon kan ha checkat in under bygget.
+            git fetch --quiet origin "+refs/heads/$GREN:refs/remotes/origin/$GREN"
+            git checkout --quiet --detach "origin/$GREN"
+            if [ "$(python3 .github/scripts/erbjud_version.py --visa)" != "$VERSION" ]; then
+              echo "::notice::drivelog/VERSION har ändrats sedan den här körningen startade – den nyare körningen erbjuder sin version när dess avbild är publicerad."
+              exit 0
+            fi
+            resultat="$(python3 .github/scripts/erbjud_version.py)"
+            if [ "$resultat" = oforandrad ]; then
+              echo "drivelog/config.yaml visar redan $VERSION."
+              exit 0
+            fi
+            git commit --quiet -m "Tillägget $VERSION erbjuds i Home Assistant (avbilden är publicerad)" drivelog/config.yaml
+            if git push --quiet origin "HEAD:refs/heads/$GREN"; then
+              echo "::notice::drivelog/config.yaml visar nu $VERSION – Home Assistant erbjuder uppdateringen."
+              exit 0
+            fi
+            echo "Grenen ändrades under tiden – försöker igen ($forsok)."
+            sleep $((forsok * 3))
+          done
+          echo "::error::Kunde inte checka in den höjda versionen. Avbilden $VERSION är publicerad; kör arbetsflödet igen eller höj version i drivelog/config.yaml för hand."
+          exit 1

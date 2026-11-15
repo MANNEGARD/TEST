@@ -1,6 +1,8 @@
 # Home Assistant-tillägget SMGD DriveLog. Nycklarna följer Home Assistants referens för
 # tilläggets konfiguration (contributors.home-assistant.io/apps/reference/configuration).
 name: "SMGD DriveLog"
+# `version` är den version Home Assistant erbjuder. Raden höjs av arbetsflödet
+# (.github/workflows/addon.yml) när avbilden är publicerad – ändra drivelog/VERSION i stället.
 version: "1.0.1"
 slug: "drivelog"
 description: "Självhostad körjournal för tjänsteresor – nås på din egen domän med automatisk HTTPS."
