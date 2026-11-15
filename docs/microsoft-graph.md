@@ -25,7 +25,8 @@ instruktion till systemet.
 5. Registrera. Kopiera **Application (client) ID**.
 6. *Certificates & secrets* → *New client secret*. Kopiera **Value** direkt (visas bara en gång).
 7. *API permissions* → *Add a permission* → *Microsoft Graph* → *Delegated permissions* →
-   lägg till `Calendars.Read` och `offline_access`.
+   lägg till `Calendars.Read` och `offline_access`. (`openid` och `email` begärs också vid
+   inloggningen; de är standardbehörigheter och kräver inget administratörsgodkännande.)
 
 ## 2. Anslut i DriveLog
 

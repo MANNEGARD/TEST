@@ -99,7 +99,7 @@ originalresor och ändringshistorik.
 
 Den sammanslagna resan visar mellanstoppen ("via …"), summerar sträckan och behåller första
 starttid och sista sluttid. Originalresorna finns alltid kvar, och gränserna ändras under
-*Inställningar → Sammanslagning*.
+*Inställningar → Sammanslagning av resor*.
 
 Två resor slås inte ihop automatiskt om bilen har körts däremellan (kilometer saknas i
 mätarställningen), och en privat delsträcka blir aldrig tjänst genom en sammanslagning.
@@ -155,7 +155,7 @@ blandas med din riktiga journal. *Stäng av demoläge* tar bort demodatan.
 | --- | --- |
 | Fordon och förare | Registreringsnummer, bil, ditt namn och arbetsgivare (visas i exporten) |
 | Milersättning och export | Kronor per mil, visa belopp, exportens utseende, vad som redovisas |
-| Sammanslagning | Gränserna 15 och 60 minuter |
+| Sammanslagning av resor | Gränserna 15 och 60 minuter |
 | Förslag och AI | Trösklar, strikt läge, vad som får skickas till AI-leverantören |
 | Notiser | Typer, tysta timmar, max per dygn, påminnelser, veckosammanställning |
 | Kalender | Tidsfönster för matchning |
@@ -170,4 +170,5 @@ blandas med din riktiga journal. *Stäng av demoläge* tar bort demodatan.
 Behöver du i stället en fullständig körjournal där även privata resor redovisas och allt
 stäms av mot mätarställningen – till exempel för en förmånsbil – väljer du *Fullständig
 körjournal* under *Milersättning och export → Vad redovisas?*. Då visas luckor i
-mätarställningen som något att reda ut, och den detaljerade exporten med flera blad används.
+mätarställningen som något att reda ut. Välj samtidigt *Detaljerad* under *Exportens utseende*
+om du vill ha den utförliga arbetsboken med flera blad – de två valen är oberoende av varandra.
