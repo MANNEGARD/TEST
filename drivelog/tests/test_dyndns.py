@@ -8,10 +8,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
-from drivelog_addon import dyndns
+from drivelog_addon import dyndns, kontroll
 from drivelog_addon.dyndns import Uppdaterare, tolka_svar
 
-TOKEN = "kontrollvarde-" + "x" * 20
+TOKEN = "kontrollnyckel-" + "x" * 20
 LOSEN = "strato-losenord-hemligt"
 
 
@@ -57,16 +57,18 @@ def strato():
 
 @pytest.fixture
 def proxy():
-    """Låtsas-Caddy: svarar med kontrollvärdet (som tillägget gör)."""
-    tillstand = {"token": TOKEN}
+    """Låtsas-Caddy: svarar på kontrollfrågan med HMAC (som tilläggets kontrollserver gör)."""
+    tillstand = {"token": TOKEN, "fragor": []}
 
     class H(BaseHTTPRequestHandler):
         def do_GET(self):  # noqa: N802
-            if self.path != dyndns.DYNDNS_KONTROLLSOKVAG:
+            slump = kontroll.slumpvarde_ur(self.path)
+            if slump is None:
                 self.send_response(404)
                 self.end_headers()
                 return
-            data = tillstand["token"].encode()
+            tillstand["fragor"].append(slump)
+            data = kontroll.svar(tillstand["token"], slump).encode()
             self.send_response(200)
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
@@ -110,7 +112,7 @@ def _uppdaterare(strato, proxy, dns, klocka, **kw):
         kontroll_port=proxy.port,
         sla_upp=dns,
         klocka=klocka,
-        **kw,
+        **{"godta_adress": lambda a: True, **kw},  # låtsasservrarna ligger på 127.0.0.1
     )
 
 
@@ -227,7 +229,7 @@ def test_strato_gar_inte_att_na(proxy, caplog):
     upp = Uppdaterare(
         "drivelog.example.se", "example.se", LOSEN, TOKEN,
         strato_url="http://127.0.0.1:9/nic/update", kontroll_schema="http", kontroll_port=proxy.port,
-        sla_upp=Dns(a=[]), klocka=Klocka(),
+        sla_upp=Dns(a=[]), klocka=Klocka(), godta_adress=lambda a: True,
     )
     assert upp.kor_ett_varv() == 60
     assert "Kunde inte nå STRATO" in caplog.text
@@ -284,3 +286,119 @@ def test_kor_stoppas_med_event(strato, proxy):
     stopp.set()
     trad.join(5)
     assert not trad.is_alive()
+
+
+# --- Granskningen av tillägget: fråga och svar, globala adresser, AAAA utan DynDNS -------------------
+
+
+def test_kontrollen_ar_fraga_och_svar(strato, proxy):
+    upp = _uppdaterare(strato, proxy, Dns(a=["127.0.0.1"]), Klocka())
+    assert upp.leder_hit("127.0.0.1")
+    assert upp.leder_hit("127.0.0.1")
+    a, b = proxy.tillstand["fragor"]
+    assert a != b  # nytt slumpvärde varje gång
+
+
+def test_ateranvant_svar_godtas_inte(strato):
+    """En server som har läst ett tidigare svar (eller den gamla statiska texten) kan inte svara rätt."""
+    sett = kontroll.svar(TOKEN, "a" * 32)
+
+    class H(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            data = sett.encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, *a):
+            pass
+
+    fel_server = Server(H)
+    try:
+        upp = _uppdaterare(strato, fel_server, Dns(a=["127.0.0.1"]), Klocka())
+        assert not upp.leder_hit("127.0.0.1")
+    finally:
+        fel_server.stang()
+
+
+@pytest.mark.parametrize(("adress", "globalt"), [
+    ("81.2.69.160", True), ("2a00:1450:4001:80b::200e", True),
+    ("192.168.1.10", False), ("10.0.0.5", False), ("172.20.0.1", False), ("100.64.1.1", False),
+    ("127.0.0.1", False), ("fd00::1", False), ("fe80::1%eth0", False), ("inte-en-adress", False),
+])
+def test_ar_global(adress, globalt):
+    assert dyndns.ar_global(adress) is globalt
+
+
+def test_lokal_dns_post_godtas_inte_som_bevis(strato, proxy, caplog):
+    """GUI-F5: med en lokal DNS-post (192.168.x.y) uppdateras STRATO direkt i stället för efter 24 timmar."""
+    caplog.set_level(logging.INFO)
+    strato.tillstand["svar"] = [(200, "good 81.2.69.160")]
+    upp = Uppdaterare(
+        "drivelog.example.se", "example.se", LOSEN, TOKEN,
+        strato_url=f"http://127.0.0.1:{strato.port}/nic/update", kontroll_schema="http", kontroll_port=proxy.port,
+        sla_upp=Dns(a=["192.168.1.10"]), klocka=Klocka(),
+    )
+    upp.kor_ett_varv()
+    assert len(strato.tillstand["anrop"]) == 1
+    assert proxy.tillstand["fragor"] == []  # den lokala adressen prövades aldrig
+    assert "lokal adress" in caplog.text
+    assert upp.kand_adress == "81.2.69.160"
+
+
+def test_lokal_adress_fran_strato_sparas_inte(strato, proxy):
+    strato.tillstand["svar"] = [(200, "good 10.1.2.3")]
+    upp = Uppdaterare(
+        "drivelog.example.se", "example.se", LOSEN, TOKEN,
+        strato_url=f"http://127.0.0.1:{strato.port}/nic/update", kontroll_schema="http", kontroll_port=proxy.port,
+        sla_upp=Dns(a=[]), klocka=Klocka(),
+    )
+    upp.kor_ett_varv()
+    assert upp.kand_adress is None
+
+
+def test_lokal_aaaa_post_ger_ingen_varning(caplog):
+    upp = Uppdaterare("drivelog.example.se", "", "", TOKEN, sla_upp=Dns(aaaa=["fd00::5", "fe80::1"]))
+    upp.kontrollera_aaaa()
+    assert "AAAA" not in caplog.text
+
+
+def test_aaaa_kontroll_utan_dyndns(caplog):
+    """SUP-F5: AAAA-kontrollen körs också när DynDNS är avslaget – och skickar inget till STRATO."""
+    anrop = []
+
+    def hamta(url, **kw):
+        anrop.append(url)
+        return 0, ""  # adressen svarar inte
+
+    dyndns.kontrollera_aaaa_en_gang(
+        "drivelog.example.se", TOKEN, threading.Event(), fordrojning=0,
+        sla_upp=Dns(aaaa=["2a00:1450:4001:80b::200e"]), hamta=hamta,
+    )
+    assert anrop and all(dyndns.DYNDNS_KONTROLLSOKVAG in u for u in anrop)  # bara kontrollen, aldrig STRATO
+    assert "AAAA" in caplog.text and "Domainverwaltung" in caplog.text
+    assert "Domänverwaltung" not in caplog.text
+
+
+def test_aaaa_kontroll_utan_dyndns_avbryts_vid_stopp(caplog):
+    stopp = threading.Event()
+    stopp.set()
+    dyndns.kontrollera_aaaa_en_gang("drivelog.example.se", TOKEN, stopp, fordrojning=5,
+                                    sla_upp=Dns(aaaa=["2a00:1450:4001:80b::200e"]))
+    assert "AAAA" not in caplog.text
+
+
+def test_kontrollservern_svarar_bara_pa_giltiga_fragor():
+    server = kontroll.Kontrollserver(TOKEN, port=0).starta()
+    try:
+        bas = f"http://127.0.0.1:{server.port}"
+        slump = kontroll.nytt_slumpvarde()
+        status, text = dyndns.http_get(f"{bas}{kontroll.SOKVAG}?n={slump}")
+        assert status == 200 and kontroll.ar_ratt_svar(TOKEN, slump, text)
+        assert TOKEN not in text
+        for fel in ("/", kontroll.SOKVAG, f"{kontroll.SOKVAG}?n=kort", f"{kontroll.SOKVAG}?n={slump}&n={slump}",
+                    f"{kontroll.SOKVAG}?n=" + "%22" * 20):
+            assert dyndns.http_get(bas + fel)[0] == 404, fel
+    finally:
+        server.stang()

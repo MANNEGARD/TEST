@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import functools
+import ipaddress
+import os
 import uuid
 from dataclasses import dataclass
 from typing import Annotated
@@ -43,17 +46,54 @@ class Principal:
         return scope in (self.api_token.scopes or []) or "*" in (self.api_token.scopes or [])
 
 
-def client_ip(request: Request) -> str:
-    """Klientens adress enligt närmaste proxy.
+@functools.lru_cache(maxsize=8)
+def _trusted_proxies(raw: str) -> tuple[bool, frozenset[str], tuple]:
+    """Tolkar FORWARDED_ALLOW_IPS som uvicorn: kommaseparerade adresser/nät eller "*"."""
+    items = [item.strip() for item in raw.split(",") if item.strip()]
+    if "*" in items:
+        return True, frozenset(), ()
+    literals: set[str] = set()
+    networks: list = []
+    for item in items:
+        try:
+            networks.append(ipaddress.ip_network(item, strict=False))
+        except ValueError:
+            literals.add(item)  # t.ex. en unix-socket; jämförs som text
+    return False, frozenset(literals), tuple(networks)
 
-    Det SISTA värdet i X-Forwarded-For är det som den egna proxyn lade till; värden
-    längre till vänster kan klienten själv ha skickat med och får inte styra
-    inloggningsspärren eller ändringsloggen.
+
+def _is_trusted_proxy(host: str) -> bool:
+    always, literals, networks = _trusted_proxies(os.environ.get("FORWARDED_ALLOW_IPS", "*"))
+    if always or host in literals:
+        return True
+    try:
+        addr = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return any(addr in net for net in networks)
+
+
+def client_ip(request: Request) -> str:
+    """Klientens adress.
+
+    X-Forwarded-For används bara när den direkta avsändaren är en betrodd proxy enligt
+    FORWARDED_ALLOW_IPS (samma variabel som uvicorn läser; osatt = "*", som i Compose-driften där
+    bara proxyn når API:t). Då är det SISTA värdet det som den egna proxyn lade till; värden
+    längre till vänster kan klienten själv ha skickat med.
+
+    uvicorn --proxy-headers har redan ersatt request.client med klientens adress när avsändaren var
+    betrodd. Den adressen är då (normalt) inte själv en betrodd proxy och används som den är. Har
+    uvicorn inte skrivit om den (t.ex. i testerna) gäller samma regel för den riktiga avsändaren.
+    Ett anrop direkt mot port 8000 från en obetrodd adress räknas alltså alltid på sin egen adress,
+    hur X-Forwarded-For än ser ut.
     """
+    peer = request.client.host if request.client else ""
     fwd = request.headers.get("x-forwarded-for")
-    if fwd:
-        return fwd.split(",")[-1].strip()[:64]
-    return (request.client.host if request.client else "")[:64]
+    if fwd and _is_trusted_proxy(peer):
+        last = fwd.split(",")[-1].strip()
+        if last:
+            return last[:64]
+    return peer[:64]
 
 
 def _bearer(request: Request) -> str | None:

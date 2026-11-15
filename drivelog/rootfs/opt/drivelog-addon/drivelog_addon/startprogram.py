@@ -10,12 +10,24 @@ Ordning:
    internet utan konto. API:t fortsätter att gå (bara på Home Assistants interna nät) så att
    tillägget inte startas om i en slinga; loggen säger vad ägaren ska fylla i.
 4. Webbappen (bara på 127.0.0.1) och sedan Caddy (80/443, automatisk HTTPS) startas, och
-   DynDNS-uppdateraren om den är påslagen.
+   DynDNS-uppdateraren om den är påslagen (annars en engångskontroll av AAAA-posten).
 5. Dör någon av processerna avslutas allt med felkod så att Supervisor startar om tillägget.
    SIGTERM ger en ren nedstängning i omvänd ordning.
 
 Processerna körs som var sin icke-root-användare. Caddy får bara förmågan att binda port
 80/443 (CAP_NET_BIND_SERVICE som "ambient capability" via setpriv) – inget annat.
+
+Lagringen i /data (kontraktet, se docs/home-assistant-tillagg.md):
+
+    /data                 root:root 711   (ingen annan kan skapa, flytta eller ta bort något här)
+    /data/options.json    root      600   (Supervisor skriver den)
+    /data/hemligheter/    root      700   nycklarna, filerna 600 (hemligheter.py)
+    /data/app/            drivelog  700   API:ts databas (drivelog.sqlite3) och dess kataloger
+    /data/caddy/          caddy     700   certifikat och ACME-konto
+
+Första kontot skapas i tillägget alltid ur inställningarna (DRIVELOG_FIRST_ADMIN_*): API:t får
+DRIVELOG_WEB_SETUP=false, så att inget annat tillägg på Home Assistants interna nät kan skapa
+kontot via /api/v1/auth/setup medan tillägget väntar.
 """
 
 from __future__ import annotations
@@ -24,9 +36,9 @@ import json
 import logging
 import os
 import pwd
-import secrets
 import signal
 import socket
+import stat
 import subprocess
 import threading
 import time
@@ -37,8 +49,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-from . import caddyfil, hemligheter, installningar
-from .dyndns import Uppdaterare
+from . import caddyfil, hemligheter, installningar, kontroll
+from .dyndns import Uppdaterare, kontrollera_aaaa_en_gang
 
 logger = logging.getLogger("drivelog.addon")
 
@@ -68,6 +80,15 @@ class Sokvagar:
     @property
     def caddy_data(self) -> Path:
         return self.data / "caddy"
+
+    @property
+    def app_data(self) -> Path:
+        """API:ts egen katalog (DRIVELOG_DATA_DIR)."""
+        return self.data / "app"
+
+    @property
+    def databas(self) -> Path:
+        return self.app_data / "drivelog.sqlite3"
 
 
 class Process(Protocol):
@@ -169,7 +190,10 @@ class Startprogram:
     version: str = field(default_factory=lambda: os.environ.get("DRIVELOG_ADDON_VERSION", "okänd"))
     processer: dict[str, Process] = field(default_factory=dict)
     lage: str = "startar"
-    dyndns_token: str | None = None
+    kontrollnyckel: str = field(default_factory=kontroll.ny_nyckel, repr=False)
+    kontroll_port: int = kontroll.PORT
+    aaaa_fordrojning: float = 30.0
+    _kontrollserver: kontroll.Kontrollserver | None = None
     _dyndns_trad: threading.Thread | None = None
 
     # Miljöer ------------------------------------------------------------------------------------
@@ -186,12 +210,12 @@ class Startprogram:
 
     def miljo_api(self) -> dict[str, str]:
         """Kontraktet mellan tillägget och backend (se docs/home-assistant-tillagg.md)."""
-        d = str(self.sokvagar.data)
+        d = str(self.sokvagar.app_data)
         miljo = self._grundmiljo(hem=d)
         miljo.update(
             {
                 "DRIVELOG_ENVIRONMENT": "production",
-                "DRIVELOG_DATABASE_URL": f"sqlite:///{d}/drivelog.sqlite3",
+                "DRIVELOG_DATABASE_URL": f"sqlite:///{self.sokvagar.databas}",
                 "DRIVELOG_DATA_DIR": d,
                 "DRIVELOG_JOBS_EAGER": "true",
                 "DRIVELOG_REDIS_URL": "",
@@ -201,6 +225,8 @@ class Startprogram:
                 "DRIVELOG_TIMEZONE": self.tidszon,
                 "DRIVELOG_LOG_LEVEL": self.inst.log_level.upper(),
                 "FORWARDED_ALLOW_IPS": "127.0.0.1",
+                # Första kontot skapas bara ur inställningarna, aldrig via /auth/setup.
+                "DRIVELOG_WEB_SETUP": "false",
             }
         )
         if self.inst.har_adminuppgifter:
@@ -230,37 +256,15 @@ class Startprogram:
     # Förberedelser ------------------------------------------------------------------------------
 
     def forbered_data(self) -> None:
-        """Rättigheter i /data (bara som root): API-användaren äger databasen och sina kataloger,
-        Caddy sin egen katalog; options.json och nycklarna kan bara root läsa."""
-        data = self.sokvagar.data
-        self.sokvagar.runtime.mkdir(parents=True, exist_ok=True)
-        self.sokvagar.caddy_data.mkdir(parents=True, exist_ok=True)
-        if not (self.byt_anvandare and os.geteuid() == 0):
-            return
-        api = pwd.getpwnam(ANVANDARE_API)
-        caddy = pwd.getpwnam(ANVANDARE_CADDY)
-        if self.sokvagar.options.exists():
-            os.chmod(self.sokvagar.options, 0o600)
-        os.chown(data, api.pw_uid, api.pw_gid)
-        # Klistrig katalog: API-användaren kan skapa filer men inte byta namn på eller ta bort
-        # filer som ägs av root (options.json, hemligheter/) eller av Caddy.
-        os.chmod(data, 0o1711)  # noqa: S103 - bara genomgång för andra, ingen läsrätt
-        for namn in os.listdir(data):
-            if namn.startswith("drivelog.sqlite3") or namn in ("imports", "exports", "backups"):
-                _chown_rekursivt(data / namn, api.pw_uid, api.pw_gid)
-        _chown_rekursivt(self.sokvagar.caddy_data, caddy.pw_uid, caddy.pw_gid)
-        os.chmod(self.sokvagar.caddy_data, 0o700)
-        os.chmod(self.sokvagar.runtime, 0o755)  # noqa: S103 - bara Caddyfile, ingen hemlighet
+        forbered_data(self.sokvagar, som_root=self.byt_anvandare and os.geteuid() == 0)
 
     def skriv_caddyfil(self) -> Path:
-        if self.inst.strato_dyndns:
-            self.dyndns_token = secrets.token_urlsafe(24)
         text = caddyfil.skapa_caddyfil(
             self.inst.domain,
             lagring=str(self.sokvagar.caddy_data),
             api=f"127.0.0.1:{API_PORT}",
             webb=f"127.0.0.1:{WEBB_PORT}",
-            dyndns_token=self.dyndns_token,
+            kontroll=f"127.0.0.1:{self.kontroll_port}",
         )
         path = self.sokvagar.runtime / "Caddyfile"
         path.write_text(text, encoding="utf-8")
@@ -308,15 +312,30 @@ class Startprogram:
             return None
         return bool(data["needs_setup"])
 
+    def starta_kontrollserver(self) -> None:
+        """Svarar på kontrollen "leder domänen hit?" (kontroll.py) – bara på 127.0.0.1, via Caddy."""
+        self._kontrollserver = kontroll.Kontrollserver(self.kontrollnyckel, port=self.kontroll_port).starta()
+        self.kontroll_port = self._kontrollserver.port
+
     def starta_dyndns(self, stopp: threading.Event) -> None:
-        if not self.inst.strato_dyndns or not self.dyndns_token:
+        if not self.inst.strato_dyndns:
             logger.info("STRATO DynDNS är avslaget – domänens adress sköts någon annanstans (t.ex. av routern).")
+            if not self.inst.ar_lokal:
+                # Varningen för en främmande AAAA-post behövs lika mycket när routern sköter DynDNS.
+                self._dyndns_trad = threading.Thread(
+                    target=kontrollera_aaaa_en_gang,
+                    args=(self.inst.domain, self.kontrollnyckel, stopp),
+                    kwargs={"fordrojning": self.aaaa_fordrojning},
+                    name="aaaa-kontroll",
+                    daemon=True,
+                )
+                self._dyndns_trad.start()
             return
         uppdaterare = Uppdaterare(
             self.inst.domain,
             self.inst.strato_dyndns_user or "",
             self.inst.strato_dyndns_password or "",
-            self.dyndns_token,
+            self.kontrollnyckel,
             version=self.version,
         )
         self._dyndns_trad = threading.Thread(target=uppdaterare.kor, args=(stopp,), name="dyndns", daemon=True)
@@ -336,6 +355,7 @@ class Startprogram:
             logger.warning(varning)
         for namn in self.nycklar.nyskapade:
             logger.info("%s skapades och sparades i %s (rättigheter 600).", namn, self.sokvagar.data / hemligheter.KATALOG)
+        logger.info("Data: %s (API:ts databas i %s).", self.sokvagar.data, self.sokvagar.app_data)
         self.forbered_data()
 
         self._starta("API", list(self.sokvagar.api_start), self.miljo_api(), self.sokvagar.app, ANVANDARE_API)
@@ -362,14 +382,17 @@ class Startprogram:
                 )
             else:
                 logger.warning(
-                    "Det finns inget konto i DriveLog än. Fyll i 'admin_email' och 'admin_password' "
-                    "(minst 12 tecken) under tilläggets Konfiguration och starta om tillägget. Tills dess "
-                    "startas varken webbappen eller proxyn – ingenting är öppet mot internet."
+                    "Det finns inget konto i DriveLog än. Fyll i 'Administratörens e-post' (admin_email) och "
+                    "'Administratörens lösenord' (admin_password, minst 12 tecken) i fliken Konfiguration och "
+                    "starta om. Tills dess startas varken webbappen eller proxyn – ingenting är öppet mot "
+                    "internet, och kontot kan inte skapas på något annat sätt."
                 )
         else:
             if self.inst.admin_password:
                 logger.info(
-                    "Kontot finns. 'admin_password' behövs inte längre – du kan tömma fältet i inställningarna."
+                    "Det finns ett konto i DriveLog, så 'Administratörens lösenord' används inte längre – töm "
+                    "fältet i fliken Konfiguration. (Saknas ett konto med adressen i 'Administratörens e-post' "
+                    "varnar API:t ovan.)"
                 )
             self._starta(
                 "webbappen",
@@ -382,6 +405,7 @@ class Startprogram:
                 f"http://127.0.0.1:{WEBB_PORT}/api/healthz", self.webb_tidsgrans, stopp, "Webbappen"
             ):
                 return 0 if stopp.is_set() else 1
+            self.starta_kontrollserver()
             caddyfile = self.skriv_caddyfil()
             self._starta(
                 "Caddy",
@@ -409,6 +433,9 @@ class Startprogram:
         return 0
 
     def stang_ned(self) -> None:
+        if self._kontrollserver is not None:
+            self._kontrollserver.stang()
+            self._kontrollserver = None
         for namn in reversed(list(self.processer)):
             proc = self.processer[namn]
             if proc.poll() is not None:
@@ -422,12 +449,66 @@ class Startprogram:
                 proc.wait()
 
 
+class OsakerLagring(RuntimeError):
+    """/data ser inte ut som väntat (t.ex. en symlänk där en katalog ska vara)."""
+
+
+def _egen_katalog(path: Path, uid: int | None, gid: int | None, rattighet: int) -> None:
+    """Skapar katalogen om den saknas; vägrar symlänkar. Som root sätts ägare och rättigheter."""
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        path.mkdir(mode=rattighet, parents=True)
+        st = os.lstat(path)
+    if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode):
+        raise OsakerLagring(f"{path} ska vara en katalog men är det inte (symlänk?). Starten avbryts.")
+    if uid is not None and gid is not None:
+        _chown_rekursivt(path, uid, gid)
+        os.chmod(path, rattighet, follow_symlinks=False)
+
+
+def forbered_data(sokvagar: Sokvagar, *, som_root: bool) -> None:
+    """Lagringslayouten i /data (se modulens beskrivning). Körs före nycklarna läses.
+
+    /data ägs av root (711): API-användaren kan inte byta namn på, ta bort eller ersätta
+    options.json eller hemligheter/ – den skriver bara i sin egen /data/app."""
+    data = sokvagar.data
+    sokvagar.runtime.mkdir(parents=True, exist_ok=True)
+    if not som_root:
+        for katalog in (sokvagar.app_data, sokvagar.caddy_data):
+            _egen_katalog(katalog, None, None, 0o700)
+        return
+    st = os.lstat(data)
+    if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode):
+        raise OsakerLagring(f"{data} ska vara en katalog. Starten avbryts.")
+    os.chown(data, 0, 0, follow_symlinks=False)
+    os.chmod(data, 0o711, follow_symlinks=False)  # noqa: S103 - bara genomgång för andra, ingen läsrätt
+    if sokvagar.options.exists() and not sokvagar.options.is_symlink():
+        os.chmod(sokvagar.options, 0o600, follow_symlinks=False)
+    api = pwd.getpwnam(ANVANDARE_API)
+    caddy = pwd.getpwnam(ANVANDARE_CADDY)
+    _egen_katalog(sokvagar.app_data, api.pw_uid, api.pw_gid, 0o700)
+    _egen_katalog(sokvagar.caddy_data, caddy.pw_uid, caddy.pw_gid, 0o700)
+    os.chmod(sokvagar.runtime, 0o755)  # noqa: S103 - bara Caddyfile, ingen hemlighet
+
+
 def _chown_rekursivt(path: Path, uid: int, gid: int) -> None:
-    os.chown(path, uid, gid, follow_symlinks=False)
+    """chown utan att följa symlänkar. Filer med flera hårda länkar hoppas över: en hård länk till
+    en fil utanför katalogen (t.ex. options.json) får aldrig byta ägare den här vägen."""
+
+    def _chown(p: str) -> None:
+        st = os.lstat(p)
+        if stat.S_ISREG(st.st_mode) and st.st_nlink > 1:
+            logger.warning("%s har flera hårda länkar och får inte byta ägare – kontrollera filen.", p)
+            return
+        if (st.st_uid, st.st_gid) != (uid, gid):
+            os.chown(p, uid, gid, follow_symlinks=False)
+
+    _chown(str(path))
     if path.is_dir() and not path.is_symlink():
         for rot, kataloger, filer in os.walk(path):
             for namn in kataloger + filer:
-                os.chown(os.path.join(rot, namn), uid, gid, follow_symlinks=False)
+                _chown(os.path.join(rot, namn))
 
 
 def main(sokvagar: Sokvagar | None = None) -> int:
@@ -450,8 +531,9 @@ def main(sokvagar: Sokvagar | None = None) -> int:
     logging.getLogger().setLevel(inst.python_loggniva)
     try:
         sokvagar.data.mkdir(parents=True, exist_ok=True)
-        nycklar = hemligheter.las_eller_skapa(sokvagar.data)
-    except (hemligheter.TrasigaHemligheter, OSError) as exc:
+        forbered_data(sokvagar, som_root=os.geteuid() == 0)
+        nycklar = hemligheter.las_eller_skapa(sokvagar.data, databas=sokvagar.databas)
+    except (hemligheter.TrasigaHemligheter, OsakerLagring, OSError) as exc:
         logger.error("%s", exc)
         return 1
     return Startprogram(inst, nycklar, sokvagar=sokvagar).kor(stopp)

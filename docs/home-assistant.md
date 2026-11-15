@@ -23,8 +23,8 @@ med API-token). Notiser kan levereras på två sätt – se [Leveranslägen](#le
 Krav: Home Assistant **2024.11** eller senare, Companion-appen installerad och
 inloggad på telefonen, och att DriveLog kan nås från Home Assistant.
 
-> **Kör du DriveLog som Home Assistant-tillägg?** Ange då adressen
-> `http://<värdnamn>:8000` – värdnamnet står i tilläggets logg vid start (t.ex.
+> **Kör du DriveLog som app i Home Assistant (tillägg före 2026.2)?** Ange då adressen
+> `http://<värdnamn>:8000` – värdnamnet står i appens logg vid start (t.ex.
 > `82cbe348-drivelog`). Trafiken går då på Home Assistants interna nät. Se
 > [home-assistant-tillagg.md](home-assistant-tillagg.md#6-notiser-i-home-assistant).
 

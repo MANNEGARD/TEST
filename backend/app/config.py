@@ -52,6 +52,10 @@ class AppConfig(BaseSettings):
     public_docs: bool = False
     first_admin_email: str | None = None
     first_admin_password: str | None = None
+    # Får första kontot skapas i webbgränssnittet (POST /auth/setup)? Home Assistant-tillägget
+    # stänger av det (DRIVELOG_WEB_SETUP=false): där skapas kontot alltid ur inställningarna,
+    # eftersom API:t nås av alla andra tillägg på Home Assistants interna nät medan det väntar.
+    web_setup: bool = True
 
     cors_origins: str = ""
     log_level: str = "INFO"

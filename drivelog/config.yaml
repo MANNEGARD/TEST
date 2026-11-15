@@ -1,7 +1,7 @@
 # Home Assistant-tillägget SMGD DriveLog. Nycklarna följer Home Assistants referens för
 # tilläggets konfiguration (contributors.home-assistant.io/apps/reference/configuration).
 name: "SMGD DriveLog"
-version: "1.0.0"
+version: "1.0.1"
 slug: "drivelog"
 description: "Självhostad körjournal för tjänsteresor – nås på din egen domän med automatisk HTTPS."
 url: "https://github.com/SMGD-MP/TEST"
@@ -32,13 +32,23 @@ ports_description:
   80/tcp: "HTTP – certifikatkontroll (Let's Encrypt) och vidarekoppling till HTTPS"
   443/tcp: "HTTPS – DriveLog"
   443/udp: "HTTP/3 (QUIC) – snabbare HTTPS för moderna webbläsare"
+# Alla fält står under options – även de tomma – så att Home Assistants formulär visar dem
+# direkt (valfria fält utan värde göms annars bakom "Visa oanvända valfria konfigurationsalternativ").
+# Typerna måste därför godta en tom sträng: admin_email är "str?" (typen "email" underkänner "")
+# och e-postadressen kontrolleras i stället av startprogrammet, som behandlar "" som "inte ifyllt".
+# Prövat med Supervisors egen validering (SCHEMA_APP_CONFIG och AppOptions), se
+# drivelog/tests/test_yaml.py.
 options:
   domain: "drivelog.smgd.se"
+  admin_email: ""
+  admin_password: ""
   strato_dyndns: false
+  strato_dyndns_user: ""
+  strato_dyndns_password: ""
   log_level: info
 schema:
   domain: str
-  admin_email: "email?"
+  admin_email: "str?"
   admin_password: "password?"
   strato_dyndns: bool
   strato_dyndns_user: "str?"

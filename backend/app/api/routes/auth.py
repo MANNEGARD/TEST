@@ -113,6 +113,13 @@ def setup_status(db: DbDep) -> SetupStatus:
 
 @router.post("/setup", response_model=SessionOut, summary="Skapa första administratörskontot")
 def setup(body: SetupRequest, request: Request, response: Response, db: DbDep) -> SessionOut:
+    if not get_config().web_setup:
+        raise ApiError(
+            403,
+            "Första kontot skapas inte här i den här installationen. Fyll i administratörens e-post och "
+            "lösenord i inställningarna (Home Assistant: appens Konfiguration) och starta om.",
+            "setup_disabled",
+        )
     ip = client_ip(request)
     allowed, wait = ratelimit.hit(f"setup:{ip}", 10, 600)
     if not allowed:

@@ -84,6 +84,8 @@ def _program(tmp_path, varld, **inst):
         webb_tidsgrans=2,
         tidszon="Europe/Stockholm",
         version="test",
+        kontroll_port=0,
+        aaaa_fordrojning=60,
     )
 
 
@@ -165,7 +167,7 @@ def test_kontraktets_miljovariabler(tmp_path):
     varld = Varld()
     program = _program(tmp_path, varld)
     miljo = program.miljo_api()
-    data = str(tmp_path / "data")
+    data = str(tmp_path / "data" / "app")
     assert miljo["DRIVELOG_ENVIRONMENT"] == "production"
     assert miljo["DRIVELOG_DATABASE_URL"] == f"sqlite:///{data}/drivelog.sqlite3"
     assert miljo["DRIVELOG_DATA_DIR"] == data
@@ -176,11 +178,13 @@ def test_kontraktets_miljovariabler(tmp_path):
     assert miljo["FORWARDED_ALLOW_IPS"] == "127.0.0.1"
     assert miljo["DRIVELOG_SECRET_KEY"] == program.nycklar.secret_key
     assert miljo["DRIVELOG_ENCRYPTION_KEYS"] == program.nycklar.encryption_keys
+    assert miljo["DRIVELOG_WEB_SETUP"] == "false"  # SAK-S1: kontot skapas bara ur inställningarna
+    assert miljo["HOME"] == data
     assert "DRIVELOG_FIRST_ADMIN_PASSWORD" not in miljo
-    # I tillägget blir sökvägen den i kontraktet: sqlite:////data/drivelog.sqlite3
+    # I tillägget blir sökvägen den i kontraktet: sqlite:////data/app/drivelog.sqlite3
     standard = Startprogram(program.inst, program.nycklar).miljo_api()
-    assert standard["DRIVELOG_DATABASE_URL"] == "sqlite:////data/drivelog.sqlite3"
-    assert standard["DRIVELOG_DATA_DIR"] == "/data"
+    assert standard["DRIVELOG_DATABASE_URL"] == "sqlite:////data/app/drivelog.sqlite3"
+    assert standard["DRIVELOG_DATA_DIR"] == "/data/app"
     # Supervisors token och liknande ärvs inte.
     assert "SUPERVISOR_TOKEN" not in miljo
     assert program.miljo_webb()["HOSTNAME"] == "127.0.0.1"
@@ -222,7 +226,7 @@ def test_api_som_dor_under_start(tmp_path):
     assert program.kor(threading.Event()) == 1
 
 
-def test_dyndns_ger_kontrollvarde_i_caddyfilen(tmp_path, monkeypatch):
+def test_dyndns_ger_kontrollfraga_i_caddyfilen(tmp_path, monkeypatch):
     startade = []
     monkeypatch.setattr(startprogram.Uppdaterare, "kor", lambda self, stopp: startade.append(self.doman))
     varld = Varld(behover_konto=False)
@@ -233,8 +237,9 @@ def test_dyndns_ger_kontrollvarde_i_caddyfilen(tmp_path, monkeypatch):
     assert _vanta_tills(lambda: program.lage == "igang" and startade)
     stopp.set()
     trad.join(5)
-    assert program.dyndns_token
-    assert program.dyndns_token in (tmp_path / "run" / "Caddyfile").read_text()
+    caddyfil = (tmp_path / "run" / "Caddyfile").read_text()
+    assert program.kontrollnyckel not in caddyfil  # nyckeln lämnar aldrig startprogrammet
+    assert f"reverse_proxy 127.0.0.1:{program.kontroll_port}" in caddyfil
     assert startade == ["drivelog.example.se"]
 
 
@@ -274,3 +279,131 @@ def test_lagsta_oprivilegierade_port(tmp_path):
     fil.write_text("0\n")
     assert startprogram.lagsta_oprivilegierade_port(fil) == 0
     assert startprogram.lagsta_oprivilegierade_port(tmp_path / "saknas") == 1024
+
+
+# --- Granskningen av tillägget -----------------------------------------------------------------------
+
+import os  # noqa: E402
+import stat  # noqa: E402
+
+from drivelog_addon import dyndns, kontroll  # noqa: E402
+
+
+def test_kontrollservern_svarar_medan_tillagget_gar(tmp_path):
+    varld = Varld(behover_konto=False)
+    program = _program(tmp_path, varld)
+    stopp, trad, _ = _kor_i_bakgrunden(program)
+    assert _vanta_tills(lambda: program.lage == "igang")
+    slump = kontroll.nytt_slumpvarde()
+    status, text = dyndns.http_get(f"http://127.0.0.1:{program.kontroll_port}{kontroll.SOKVAG}?n={slump}")
+    assert status == 200 and kontroll.ar_ratt_svar(program.kontrollnyckel, slump, text)
+    stopp.set()
+    trad.join(5)
+    assert program._kontrollserver is None  # stängd vid nedstängning
+
+
+def test_aaaa_kontroll_kors_aven_utan_dyndns(tmp_path, monkeypatch):
+    """SUP-F5: utan DynDNS körs ändå AAAA-kontrollen en gång efter start."""
+    anrop = []
+    monkeypatch.setattr(
+        startprogram, "kontrollera_aaaa_en_gang",
+        lambda doman, nyckel, stopp, fordrojning: anrop.append((doman, nyckel, fordrojning)),
+    )
+    varld = Varld(behover_konto=False)
+    program = _program(tmp_path, varld)
+    stopp, trad, _ = _kor_i_bakgrunden(program)
+    assert _vanta_tills(lambda: program.lage == "igang" and anrop)
+    stopp.set()
+    trad.join(5)
+    assert anrop == [("drivelog.example.se", program.kontrollnyckel, 60)]
+
+
+def test_sparrlaget_sager_att_kontot_bara_skapas_ur_installningarna(tmp_path, caplog):
+    caplog.set_level(logging.INFO)
+    varld = Varld(behover_konto=True)
+    program = _program(tmp_path, varld)
+    stopp, trad, _ = _kor_i_bakgrunden(program)
+    assert _vanta_tills(lambda: program.lage == "sparrad")
+    stopp.set()
+    trad.join(5)
+    assert "Administratörens e-post" in caplog.text and "Konfiguration" in caplog.text
+    assert varld.miljoer["API"]["DRIVELOG_WEB_SETUP"] == "false"
+
+
+def test_med_konto_paminns_om_att_tomma_losenordet_utan_att_paasta_vems_kontot_ar(tmp_path, caplog):
+    caplog.set_level(logging.INFO)
+    varld = Varld(behover_konto=False)
+    program = _program(tmp_path, varld, admin_email="agare@example.se", admin_password=ADMIN_LOSEN)
+    stopp, trad, _ = _kor_i_bakgrunden(program)
+    assert _vanta_tills(lambda: program.lage == "igang")
+    stopp.set()
+    trad.join(5)
+    assert "Kontot finns" not in caplog.text
+    assert "töm" in caplog.text
+
+
+def test_main_avbryter_nar_nyckeln_saknas_men_databasen_finns(tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr(startprogram.pwd, "getpwnam", lambda n: _Pw(os.geteuid()))
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "options.json").write_text(json.dumps({"domain": "drivelog.example.se", "strato_dyndns": False}))
+    sok = Sokvagar(data=data, runtime=tmp_path / "run")
+    hemligheter.las_eller_skapa(data)
+    sok.app_data.mkdir()
+    sok.databas.write_bytes(b"SQLite format 3\x00")
+    (data / hemligheter.KATALOG / hemligheter.ENCRYPTION_KEYS_FIL).unlink()
+    assert startprogram.main(sok) == 1
+    assert "saknas men databasen finns" in capsys.readouterr().err
+    assert not (data / hemligheter.KATALOG / hemligheter.ENCRYPTION_KEYS_FIL).exists()
+
+
+def test_forbered_data_utan_root_skapar_katalogerna(tmp_path):
+    sok = Sokvagar(data=tmp_path / "data", runtime=tmp_path / "run")
+    sok.data.mkdir()
+    startprogram.forbered_data(sok, som_root=False)
+    assert sok.app_data.is_dir() and sok.caddy_data.is_dir() and sok.runtime.is_dir()
+
+
+def test_forbered_data_vagrar_symlank_som_appkatalog(tmp_path):
+    sok = Sokvagar(data=tmp_path / "data", runtime=tmp_path / "run")
+    sok.data.mkdir()
+    (sok.data / "hemligheter").mkdir()
+    sok.app_data.symlink_to("hemligheter")
+    with pytest.raises(startprogram.OsakerLagring):
+        startprogram.forbered_data(sok, som_root=False)
+
+
+class _Pw:
+    def __init__(self, uid):
+        self.pw_uid = self.pw_gid = uid
+
+
+@pytest.mark.skipif(os.geteuid() != 0, reason="kräver root (ägarbyte)")
+def test_forbered_data_som_root_ger_ny_layout(tmp_path, monkeypatch):
+    """SAK-S3/SUP-F1: /data root 711, /data/app API:t 700, /data/caddy Caddy 700, inga klistriga bitar."""
+    monkeypatch.setattr(startprogram.pwd, "getpwnam", lambda n: _Pw({"drivelog": 10001, "caddy": 10003}[n]))
+    sok = Sokvagar(data=tmp_path / "data", runtime=tmp_path / "run")
+    sok.data.mkdir()
+    os.chown(sok.data, 10001, 10001)  # som i 1.0.0
+    os.chmod(sok.data, 0o1711)  # noqa: S103 - layouten i 1.0.0
+    sok.options.write_text("{}")
+    os.chmod(sok.options, 0o644)
+    sok.app_data.mkdir()
+    # Nycklarna skapas av en tidigare start (som i 1.0.0, innan databasen fanns).
+    hemligheter.las_eller_skapa(sok.data)
+    (sok.app_data / "drivelog.sqlite3").write_text("")
+    # En hård länk till options.json i API:ts katalog får inte byta ägare på options.json.
+    os.link(sok.options, sok.app_data / "lank")
+    startprogram.forbered_data(sok, som_root=True)
+    hemligheter.las_eller_skapa(sok.data, databas=sok.databas)
+
+    def info(p):
+        st = os.lstat(p)
+        return st.st_uid, stat.S_IMODE(st.st_mode)
+
+    assert info(sok.data) == (0, 0o711)
+    assert info(sok.options) == (0, 0o600)
+    assert info(sok.data / hemligheter.KATALOG) == (0, 0o700)
+    assert info(sok.app_data) == (10001, 0o700)
+    assert info(sok.databas)[0] == 10001
+    assert info(sok.caddy_data) == (10003, 0o700)

@@ -25,18 +25,20 @@ integrationer som kan slås på var för sig; allt fungerar även utan dem.
 | Webbapp (PWA) | [`frontend/`](frontend/) | Next.js, TypeScript, Tailwind CSS, Recharts, MapLibre GL |
 | Home Assistant-integration | [`custom_components/smgd_drivelog/`](custom_components/smgd_drivelog/) | Custom integration, installeras via HACS |
 | Drift | [`docker-compose.yml`](docker-compose.yml), [`deploy/`](deploy/) | Docker Compose, Caddy (HTTPS), backup-skript |
-| Home Assistant-tillägg | [`drivelog/`](drivelog/), [`repository.yaml`](repository.yaml) | En container: API, webbapp och Caddy; SQLite; avbilder för amd64/aarch64 |
+| Home Assistant-app (tillägg) | [`drivelog/`](drivelog/), [`repository.yaml`](repository.yaml) | En container: API, webbapp och Caddy; SQLite; avbilder för amd64/aarch64 |
 | Dokumentation | [`docs/`](docs/) | Svenska guider |
 
 ## Två sätt att köra DriveLog
 
 | Sätt | Passar när | Guide |
 | --- | --- | --- |
-| **Home Assistant-tillägg** | Du har Home Assistant OS/Supervised och vill slippa en egen server. Allt körs i ett tillägg (SQLite, automatisk HTTPS, valfri STRATO DynDNS). | [docs/home-assistant-tillagg.md](docs/home-assistant-tillagg.md) |
+| **App i Home Assistant** (tillägg) | Du har Home Assistant OS och vill slippa en egen server. Allt körs i en app (SQLite, automatisk HTTPS, valfri STRATO DynDNS). | [docs/home-assistant-tillagg.md](docs/home-assistant-tillagg.md) |
 | **Egen server med Docker Compose** | Du har en Linux-server eller VPS. PostgreSQL, Redis och separata bakgrundsprocesser. | [docs/installation.md](docs/installation.md) |
 
-Tillägget läggs till i Home Assistant via förrådet `https://github.com/SMGD-MP/TEST`
-(**Inställningar → Tillägg → Tilläggsbutik → ⋮ → Förråd**).
+Appen läggs till i Home Assistant via förrådet `https://github.com/SMGD-MP/TEST`
+(**Inställningar → Appar → Installera app → ⋮ → Kodförråd**; före Home Assistant 2026.2
+**Tillägg → Tilläggsbutik**), eller direkt med
+[My Home Assistant](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2FSMGD-MP%2FTEST).
 
 ## Snabbstart (egen server)
 

@@ -62,16 +62,15 @@ def test_options_och_schema(config):
         "domain", "admin_email", "admin_password", "strato_dyndns",
         "strato_dyndns_user", "strato_dyndns_password", "log_level",
     }
-    # Obligatoriska inställningar har ett standardvärde; valfria (?) kan saknas.
-    for nyckel, typ in schema.items():
-        if not str(typ).endswith("?"):
-            assert nyckel in config["options"], nyckel
-    assert set(config["options"]) <= set(schema)
+    # SUP-F3/GUI-F1: alla fält står under options så att formuläret visar dem direkt.
+    assert set(config["options"]) == set(schema)
     assert schema["admin_password"] == "password?"
     assert schema["strato_dyndns_password"] == "password?"
-    # Inga hemligheter som standardvärden.
+    # "email" underkänner en tom sträng i Supervisor – adressen kontrolleras av startprogrammet.
+    assert schema["admin_email"] == "str?"
+    # Inga hemligheter som standardvärden – de tomma fälten är tomma strängar.
     for nyckel in ("admin_password", "strato_dyndns_password", "admin_email", "strato_dyndns_user"):
-        assert nyckel not in config["options"]
+        assert config["options"][nyckel] == ""
     nivaer = re.fullmatch(r"list\((.*)\)", schema["log_level"]).group(1).split("|")
     assert config["options"]["log_level"] in nivaer
 
@@ -81,9 +80,60 @@ def test_standardinstallningarna_godtas_av_startprogrammet(config):
 
     inst = installningar.tolka(dict(config["options"]))
     assert inst.domain == config["options"]["domain"]
+    # Tomma strängar betyder "inte ifyllt".
+    assert inst.admin_email is None and inst.admin_password is None and not inst.har_adminuppgifter
+    assert inst.strato_dyndns_user is None and inst.strato_dyndns_password is None
+    assert inst.varningar == ()
     assert set(installningar.LOGGNIVAER) == set(
         re.fullmatch(r"list\((.*)\)", config["schema"]["log_level"]).group(1).split("|")
     )
+
+
+_SUPERVISOR_PROV = r"""
+import json, sys, yaml
+from supervisor.apps.validate import SCHEMA_APP_CONFIG
+from supervisor.apps.options import AppOptions
+config = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
+SCHEMA_APP_CONFIG(config)
+class CoreSys:
+    pass
+validera = AppOptions(CoreSys(), config["schema"], config["name"], config["slug"], resolve_secrets=False)
+ut = {"standard": validera(config["options"])}
+ut["ifyllt"] = validera({**config["options"], "admin_email": "agare@example.se", "admin_password": "x" * 12,
+                         "strato_dyndns": True, "strato_dyndns_user": "example.se",
+                         "strato_dyndns_password": "hemligt"})
+print(json.dumps(ut))
+"""
+
+
+def test_supervisors_egen_validering_godkanner_config_och_standardvarden(tmp_path):
+    """SUP-F3: körs med Supervisors egen kod om den finns: antingen importerbar här, eller via
+    DRIVELOG_SUPERVISOR_SRC (en klon av github.com/home-assistant/supervisor) och
+    DRIVELOG_SUPERVISOR_PYTHON (en Python med Supervisors beroenden). Annars hoppas den över."""
+    import json
+    import os
+    import subprocess
+    import sys
+    from importlib.util import find_spec
+
+    prov = tmp_path / "prov.py"
+    prov.write_text(_SUPERVISOR_PROV, encoding="utf-8")
+    kalla = os.environ.get("DRIVELOG_SUPERVISOR_SRC")
+    python = os.environ.get("DRIVELOG_SUPERVISOR_PYTHON")
+    if kalla and python:
+        miljo = {**os.environ, "PYTHONPATH": kalla}
+        kommando = [python, str(prov), str(ADDON / "config.yaml")]
+    elif find_spec("supervisor") is not None and find_spec("supervisor.apps") is not None:
+        miljo = dict(os.environ)
+        kommando = [sys.executable, str(prov), str(ADDON / "config.yaml")]
+    else:
+        pytest.skip("Supervisors källkod finns inte (sätt DRIVELOG_SUPERVISOR_SRC och DRIVELOG_SUPERVISOR_PYTHON)")
+    resultat = subprocess.run(kommando, env=miljo, capture_output=True, text=True, timeout=120, check=False)  # noqa: S603
+    assert resultat.returncode == 0, resultat.stderr[-3000:]
+    ut = json.loads(resultat.stdout.strip().splitlines()[-1])
+    config = _las(ADDON / "config.yaml")
+    assert ut["standard"] == config["options"]
+    assert ut["ifyllt"]["admin_email"] == "agare@example.se"
 
 
 @pytest.mark.parametrize("sprak", ["sv", "en"])

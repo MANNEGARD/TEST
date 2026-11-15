@@ -19,8 +19,12 @@ Hur adressen kontrolleras – utan någon annan tjänst än STRATO
 Ägaren vill inte bero på fler tjänster, så tillägget frågar ingen "vad är min IP"-tjänst. I stället:
 
 1. Den adress domänen har (A-posten, eller adressen STRATO senast svarade med) prövas: tillägget
-   ansluter dit på port 443 och hämtar ``/.well-known/drivelog-dyndns``. Svarar den egna proxyn med
-   det slumpvärde som skapades vid starten leder domänen fortfarande hit, och ingenting skickas.
+   ansluter dit på port 443 och hämtar ``/.well-known/drivelog-dyndns?n=<nytt slumpvärde>``. Bara
+   den egna proxyn kan svara rätt (HMAC med en nyckel som skapas vid varje start, se kontroll.py).
+   Svarar den rätt leder domänen fortfarande hit, och ingenting skickas.
+   Bara globala (publika) adresser godtas: en lokal DNS-post för domänen (192.168.x.y, t.ex. för
+   att nå DriveLog hemma utan hårnåls-NAT) säger ingenting om vad omvärlden ser och räknas som
+   ingen adress alls – då skickas en uppdatering och STRATO svarar med den publika adressen.
 2. Svarar den inte (adressen har bytts) skickas en uppdatering till STRATO utan ``myip`` – över
    IPv4 – så att STRATO själv sätter hemmets publika IPv4-adress. STRATO svarar med adressen.
 3. Var 24:e timme skickas ändå en uppdatering (gles säkerhetsuppdatering).
@@ -31,13 +35,15 @@ loggar en förklaring och uppdaterar då i stället högst varannan timme när k
 
 Domänen får inte ha en AAAA-post (IPv6) som leder någon annanstans: Let's Encrypt föredrar IPv6
 och certifikatet kan då inte utfärdas. STRATO lägger in en sådan för sin parkeringssida.
-Tillägget varnar om en AAAA-post finns och inte leder till den egna proxyn.
+Tillägget varnar om en global AAAA-post finns och inte leder till den egna proxyn – den kontrollen
+körs också när DynDNS är avslaget (``kontrollera_aaaa_en_gang``).
 """
 
 from __future__ import annotations
 
 import base64
 import http.client
+import ipaddress
 import logging
 import socket
 import ssl
@@ -47,6 +53,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from urllib.parse import urlencode, urlsplit
 
+from . import kontroll
 from .caddyfil import DYNDNS_KONTROLLSOKVAG
 
 logger = logging.getLogger("drivelog.dyndns")
@@ -181,6 +188,14 @@ def sla_upp(doman: str, familj: int) -> list[str]:
     return adresser
 
 
+def ar_global(adress: str) -> bool:
+    """Bara publika adresser säger något om vart omvärlden kommer (inte 192.168.x.y, fd00::/8 …)."""
+    try:
+        return ipaddress.ip_address(adress.split("%", 1)[0]).is_global
+    except ValueError:
+        return False
+
+
 # --- Uppdateraren --------------------------------------------------------------------------------
 
 
@@ -192,7 +207,7 @@ class Uppdaterare:
         doman: str,
         anvandare: str,
         losenord: str,
-        token: str,
+        kontrollnyckel: str,
         *,
         version: str = "okänd",
         strato_url: str = STRATO_URL,
@@ -201,11 +216,13 @@ class Uppdaterare:
         hamta: Callable[..., tuple[int, str]] = http_get,
         sla_upp: Callable[[str, int], list[str]] = sla_upp,
         klocka: Callable[[], float] = time.monotonic,
+        godta_adress: Callable[[str], bool] = ar_global,
     ) -> None:
         self.doman = doman
         self._anvandare = anvandare
         self._losenord = losenord
-        self._token = token
+        self._nyckel = kontrollnyckel
+        self._godta_adress = godta_adress
         self.strato_url = strato_url
         self.kontroll_schema = kontroll_schema
         self.kontroll_port = kontroll_port
@@ -230,24 +247,26 @@ class Uppdaterare:
         return "Basic " + base64.b64encode(par).decode("ascii")
 
     def leder_hit(self, adress: str) -> bool:
-        """Svarar den egna proxyn på ``adress``? (Se modulens beskrivning.)"""
+        """Svarar den egna proxyn på ``adress``? (Se modulens beskrivning och kontroll.py.)"""
         vard = f"[{adress}]" if ":" in adress else adress
-        url = f"{self.kontroll_schema}://{self.doman}:{self.kontroll_port}{DYNDNS_KONTROLLSOKVAG}"
+        slump = kontroll.nytt_slumpvarde()
+        url = f"{self.kontroll_schema}://{self.doman}:{self.kontroll_port}{DYNDNS_KONTROLLSOKVAG}?n={slump}"
         try:
             status, text = self._hamta(
                 url,
                 headers={"User-Agent": self.user_agent},
                 timeout=6,
                 ansluta_till=adress,
-                verifiera=False,  # certifikatet kanske inte är utfärdat än; slumpvärdet räcker
+                verifiera=False,  # certifikatet kanske inte är utfärdat än; svaret (HMAC) räcker
             )
         except (OSError, http.client.HTTPException, ValueError) as exc:
             logger.debug("Kontroll av %s misslyckades: %s", vard, exc)
             return False
-        return status == 200 and text.strip() == self._token
+        return status == 200 and kontroll.ar_ratt_svar(self._nyckel, slump, text)
 
     def kontrollera_aaaa(self) -> None:
-        adresser = tuple(self._sla_upp(self.doman, socket.AF_INET6))
+        # Lokala IPv6-adresser (fd00::/8, fe80::/10) ser inte Let's Encrypt – bara globala räknas.
+        adresser = tuple(a for a in self._sla_upp(self.doman, socket.AF_INET6) if self._godta_adress(a))
         if not adresser:
             self._varnade_aaaa = ()
             return
@@ -256,7 +275,7 @@ class Uppdaterare:
             logger.warning(
                 "%s har en AAAA-post (IPv6) som inte leder hit: %s. Let's Encrypt försöker då nå den "
                 "adressen och certifikatet kan inte utfärdas. Ta bort AAAA-posten hos STRATO "
-                "(Domänverwaltung → DNS → AAAA-Record) – STRATO lägger in en för sin parkeringssida.",
+                "(Domainverwaltung → DNS → AAAA-Record) – STRATO lägger in en för sin parkeringssida.",
                 self.doman,
                 ", ".join(fel),
             )
@@ -296,14 +315,22 @@ class Uppdaterare:
         self.kontrollera_aaaa()
 
         adress = self.kand_adress
+        lokal: str | None = None
         if adress is None:
             a_poster = self._sla_upp(self.doman, socket.AF_INET)
-            adress = a_poster[0] if a_poster else None
+            globala = [a for a in a_poster if self._godta_adress(a)]
+            adress = globala[0] if globala else None
+            if adress is None and a_poster:
+                lokal = a_poster[0]
 
         orsak: str | None = None
         kontroll_ok = False
         if adress is None:
-            orsak = "domänen har ingen A-post"
+            orsak = (
+                f"domänen ger bara en lokal adress här ({lokal}) – den publika kan inte kontrolleras"
+                if lokal
+                else "domänen har ingen A-post"
+            )
         else:
             kontroll_ok = self.leder_hit(adress)
             if kontroll_ok:
@@ -351,7 +378,7 @@ class Uppdaterare:
                         adress,
                     )
                 self.harnal_saknas = True
-            if svar.adress:
+            if svar.adress and self._godta_adress(svar.adress):
                 self.kand_adress = svar.adress
             self.senast_bekraftad = nu
             return float(KONTROLLINTERVALL)
@@ -373,3 +400,15 @@ class Uppdaterare:
             if vanta is None:
                 return
             stopp.wait(vanta)
+
+
+def kontrollera_aaaa_en_gang(doman: str, kontrollnyckel: str, stopp: threading.Event, *, fordrojning: float = 30.0,
+                             **kw) -> None:
+    """AAAA-kontrollen när DynDNS är avslaget (t.ex. när routern sköter DynDNS): en gång, strax efter
+    att Caddy har startat. Uppdaterar ingenting hos STRATO."""
+    if stopp.wait(fordrojning):
+        return
+    try:
+        Uppdaterare(doman, "", "", kontrollnyckel, **kw).kontrollera_aaaa()
+    except Exception:  # noqa: BLE001 - kontrollen får aldrig fälla DriveLog
+        logger.exception("Oväntat fel i AAAA-kontrollen")

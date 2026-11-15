@@ -5,8 +5,8 @@ bakgrundsarbetare (worker), schemaläggare (beat), webbapp och en omvänd proxy 
 sköter HTTPS.
 
 > **Två sätt att köra DriveLog.** Den här guiden gäller en egen server med Docker Compose.
-> Har du Home Assistant OS eller Supervised kan hela DriveLog i stället köras som ett
-> Home Assistant-tillägg – utan separat server, med SQLite, automatisk HTTPS och valfri
+> Har du Home Assistant OS kan hela DriveLog i stället köras som en app i Home Assistant
+> (före 2026.2 kallat tillägg) – utan separat server, med SQLite, automatisk HTTPS och valfri
 > STRATO DynDNS. Se [home-assistant-tillagg.md](home-assistant-tillagg.md).
 
 ## Krav
@@ -206,9 +206,11 @@ och allt annat till `web:3000`, terminera TLS i din proxy och skicka `X-Forwarde
 `X-Forwarded-Proto`.
 
 DriveLog använder det sista värdet i `X-Forwarded-For` – det som din proxy själv lagt till –
-för inloggningsspärren och ändringsloggen. Sätt gärna `FORWARDED_ALLOW_IPS` till proxyns
-adress i `.env` (standard är `*`, vilket förutsätter att API:t bara nås via proxyn, som i den
-medföljande Compose-filen där port 8000 inte publiceras).
+för inloggningsspärren och ändringsloggen, men bara när anropet kommer från en adress i
+`FORWARDED_ALLOW_IPS` (adresser eller nät, kommaseparerade). Övriga anrop räknas på sin egen
+adress. Sätt gärna variabeln till proxyns adress i `.env` (standard är `*`, vilket förutsätter
+att API:t bara nås via proxyn, som i den medföljande Compose-filen där port 8000 inte
+publiceras).
 
 ## Utvecklingsläge utan Docker
 

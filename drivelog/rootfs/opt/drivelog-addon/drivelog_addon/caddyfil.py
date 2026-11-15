@@ -10,8 +10,9 @@ from __future__ import annotations
 
 import re
 
-DYNDNS_KONTROLLSOKVAG = "/.well-known/drivelog-dyndns"
-_TOKEN = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
+from .kontroll import SOKVAG as DYNDNS_KONTROLLSOKVAG
+
+_UPPSTROM = re.compile(r"^127\.0\.0\.1:[0-9]{1,5}$")
 
 
 def skapa_caddyfil(
@@ -20,19 +21,21 @@ def skapa_caddyfil(
     lagring: str = "/data/caddy",
     api: str = "127.0.0.1:8000",
     webb: str = "127.0.0.1:3000",
-    dyndns_token: str | None = None,
+    kontroll: str | None = None,
 ) -> str:
-    """Returnerar Caddyfile-texten. ``doman`` ska redan vara kontrollerad (installningar)."""
-    if dyndns_token is not None and not _TOKEN.match(dyndns_token):
-        raise ValueError("Ogiltigt kontrollvärde för DynDNS")
+    """Returnerar Caddyfile-texten. ``doman`` ska redan vara kontrollerad (installningar).
+
+    ``kontroll`` är adressen till startprogrammets kontrollserver (kontroll.py), t.ex.
+    ``127.0.0.1:8099``."""
+    if kontroll is not None and not _UPPSTROM.match(kontroll):
+        raise ValueError("Ogiltig adress till kontrollservern")
     dyndns_block = ""
-    if dyndns_token:
-        # DynDNS-uppdateraren frågar här om domänens adress fortfarande leder hit. Svaret är ett
-        # slumpvärde som skapas vid varje start och inte avslöjar något.
+    if kontroll:
+        # Kontrollen "leder domänen hit?" (DynDNS och AAAA-kontrollen): fråga och svar som
+        # startprogrammet räknar ut – Caddy vet inte svaret själv (se kontroll.py).
         dyndns_block = (
             f"\thandle {DYNDNS_KONTROLLSOKVAG} {{\n"
-            f'\t\theader Cache-Control "no-store"\n'
-            f'\t\trespond "{dyndns_token}" 200\n'
+            f"\t\treverse_proxy {kontroll}\n"
             "\t}\n\n"
         )
     return f"""# Skapas av tilläggets startprogram vid varje start – ändringar här skrivs över.

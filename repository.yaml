@@ -1,5 +1,6 @@
-# Gör repot till ett förråd för Home Assistant-tillägg:
-# Inställningar → Tillägg → Tilläggsbutik → ⋮ → Förråd → https://github.com/SMGD-MP/TEST
+# Gör repot till ett förråd för Home Assistant-appar (före 2026.2 kallade tillägg):
+# Inställningar → Appar → Installera app → ⋮ → Kodförråd → https://github.com/SMGD-MP/TEST
+# eller direkt: https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2FSMGD-MP%2FTEST
 # Tillägget ligger i katalogen drivelog/ (se docs/home-assistant-tillagg.md).
 name: "SMGD DriveLog"
 url: "https://github.com/SMGD-MP/TEST"

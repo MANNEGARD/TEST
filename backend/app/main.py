@@ -51,6 +51,16 @@ def bootstrap_admin() -> None:
 
     with session_scope() as db:
         if (db.scalar(select(func.count()).select_from(User)) or 0) > 0:
+            email = email_raw.lower()
+            if email and db.scalar(select(func.count()).select_from(User).where(func.lower(User.email) == email)) == 0:
+                # Kontot ägaren angav skapades aldrig: någon annan hann skapa det första kontot
+                # (eller adressen har bytts). Säg det tydligt i stället för att tiga.
+                logger.warning(
+                    "DRIVELOG_FIRST_ADMIN_EMAIL är satt till %s, men det finns redan konton och inget av dem "
+                    "har den adressen – inget konto skapades. Har du inte själv skapat de befintliga "
+                    "kontona: stäng av tjänsten och kontrollera vem som har gjort det.",
+                    email,
+                )
             return
         if not email_raw or not password:
             raise BootstrapError(

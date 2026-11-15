@@ -38,20 +38,21 @@ def test_x_forwarded_for_ersatts():
     assert text.count("header_up X-Forwarded-For {remote_host}") == 2
 
 
-def test_dyndns_kontroll_bara_nar_paslagen():
+def test_kontrollen_skickas_till_startprogrammet():
     assert DYNDNS_KONTROLLSOKVAG not in skapa_caddyfil("drivelog.example.se")
-    token = "A" * 32
-    text = skapa_caddyfil("drivelog.example.se", dyndns_token=token)
+    text = skapa_caddyfil("drivelog.example.se", kontroll="127.0.0.1:8099")
     assert f"handle {DYNDNS_KONTROLLSOKVAG}" in text
-    assert f'respond "{token}" 200' in text
+    assert "reverse_proxy 127.0.0.1:8099" in text
+    assert "respond" not in text  # inget statiskt kontrollvärde som kan läsas och återanvändas
     # Kontrollen ligger före proxyreglerna.
     assert text.index(DYNDNS_KONTROLLSOKVAG) < text.index("handle /api/v1/*")
+    assert text.count("{") == text.count("}")
 
 
-@pytest.mark.parametrize("token", ["kort", 'a"b' * 10, "a b" * 10])
-def test_ogiltigt_token_avvisas(token):
+@pytest.mark.parametrize("adress", ["10.0.0.1:8099", "127.0.0.1", 'a"b', "127.0.0.1:80 {"])
+def test_ogiltig_kontrolladress_avvisas(adress):
     with pytest.raises(ValueError):
-        skapa_caddyfil("drivelog.example.se", dyndns_token=token)
+        skapa_caddyfil("drivelog.example.se", kontroll=adress)
 
 
 def test_localhost_for_provkorning():

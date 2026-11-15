@@ -1,5 +1,9 @@
 # Home Assistant-tillägget (drivelog/): tester, bygge för amd64 och aarch64, provstart som
 # Supervisor skulle göra – och på standardgrenen publicering av avbilden till GHCR.
+#
+# Actions är fästa vid commit-SHA (versionen står som kommentar); Dependabot föreslår nya.
+# Home Assistant visar en ny version så fort config.yaml ändras på standardgrenen – tryck alltså
+# på Uppdatera först när det här arbetsflödet är grönt (då finns avbilden på GHCR).
 name: Home Assistant-tillägg
 
 on:
@@ -26,8 +30,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.13"
       - name: Installera
@@ -41,7 +45,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Läs version ur drivelog/config.yaml
         id: meta
@@ -53,10 +57,10 @@ jobs:
           print(f"version={c['version']}")
           EOF
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       - name: Bygg avbilden (linux/amd64)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           file: drivelog/Dockerfile
@@ -91,7 +95,9 @@ jobs:
           skriv_options() { # volym, med_admin (1/0)
             python3 - "$2" > "$RUNNER_TEMP/options.json" <<'PY'
           import json, os, sys
-          o = {"domain": "localhost", "strato_dyndns": False, "log_level": "info"}
+          # Som Supervisor skriver den med standardvärdena i config.yaml: tomma fält är "".
+          o = {"domain": "localhost", "admin_email": "", "admin_password": "", "strato_dyndns": False,
+               "strato_dyndns_user": "", "strato_dyndns_password": "", "log_level": "info"}
           if sys.argv[1] == "1":
               o.update(admin_email="ci@example.com", admin_password=os.environ["CI_ADMIN_PASSWORD"])
           print(json.dumps(o))
@@ -121,6 +127,12 @@ jobs:
             echo "Hittade inte '$2' i loggen" >&2; return 1
           }
           fingeravtryck() { docker exec "$1" sh -c 'cat /data/hemligheter/secret_key /data/hemligheter/encryption_keys | sha256sum'; }
+          # Kör Python i en ANNAN container på samma Docker-nät – som ett annat tillägg på
+          # Home Assistants interna nät (hassio). Avbilden återanvänds; inget mer hämtas.
+          annan_container() { # python-kod, argument …
+            kod="$1"; shift
+            docker run --rm --entrypoint python3 drivelog-addon:test -I -c "$kod" "$@"
+          }
           EOF
 
       - name: Första start med administratörsuppgifter
@@ -147,10 +159,34 @@ jobs:
             if docker logs drivelog 2>&1 | grep -F "$v" >/dev/null; then echo "$f finns i loggen" >&2; exit 1; fi
           done
           if docker logs drivelog 2>&1 | grep -F "$CI_ADMIN_PASSWORD" >/dev/null; then echo "Lösenordet finns i loggen" >&2; exit 1; fi
-          docker exec drivelog stat -c '%a %U %n' /data/hemligheter /data/hemligheter/secret_key /data/hemligheter/encryption_keys /data/options.json
+          # Lagringslayouten i /data (drivelog_addon/startprogram.py): /data ägs av root, API:t och
+          # Caddy har var sin egen katalog, nycklarna och options.json kan bara root läsa.
+          docker exec drivelog stat -c '%a %U %n' /data /data/options.json /data/hemligheter /data/hemligheter/secret_key \
+            /data/hemligheter/encryption_keys /data/app /data/app/drivelog.sqlite3 /data/caddy
+          test "$(docker exec drivelog stat -c '%a %U' /data)" = "711 root"
+          test "$(docker exec drivelog stat -c '%a %U' /data/options.json)" = "600 root"
+          test "$(docker exec drivelog stat -c '%a %U' /data/hemligheter)" = "700 root"
           test "$(docker exec drivelog stat -c '%a %U' /data/hemligheter/secret_key)" = "600 root"
           test "$(docker exec drivelog stat -c '%a %U' /data/hemligheter/encryption_keys)" = "600 root"
-          test "$(docker exec drivelog stat -c '%a %U' /data/options.json)" = "600 root"
+          test "$(docker exec drivelog stat -c '%a %U' /data/app)" = "700 drivelog"
+          test "$(docker exec drivelog stat -c '%U' /data/app/drivelog.sqlite3)" = "drivelog"
+          test "$(docker exec drivelog stat -c '%a %U' /data/caddy)" = "700 caddy"
+          if docker exec drivelog sh -c 'ls /data/*.sqlite3' 2>/dev/null; then echo "Databasen ligger direkt i /data" >&2; exit 1; fi
+          # API-användaren kan inte flytta, ersätta eller skapa något direkt i /data.
+          docker exec -u drivelog drivelog python3 -I - <<'EOF'
+          import os
+          for forsok in (lambda: os.rename("/data/options.json", "/data/x"),
+                         lambda: os.rename("/data/hemligheter", "/data/y"),
+                         lambda: open("/data/ny-fil", "w"),
+                         lambda: open("/data/options.json"),
+                         lambda: open("/data/hemligheter/secret_key")):
+              try:
+                  forsok()
+              except PermissionError:
+                  continue
+              raise SystemExit("API-användaren kunde ändra i /data")
+          print("API-användaren når bara /data/app")
+          EOF
           # API, webbapp och Caddy körs som icke-root.
           docker exec drivelog python3 - <<'EOF'
           import os
@@ -175,6 +211,34 @@ jobs:
           # Webbappen lyssnar bara på 127.0.0.1 i containern.
           if curl -fsS --max-time 3 "http://$ip:3000/api/healthz" 2>/dev/null; then echo "Webbappen nås utanför containern" >&2; exit 1; fi
           fingeravtryck drivelog > "$RUNNER_TEMP/nycklar-1"
+
+      - name: Port 8000 från en annan container – inget konto via setup, ingen förfalskad IP
+        run: |
+          . "$RUNNER_TEMP/addon.sh"
+          ip="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' drivelog)"
+          # 1) POST /api/v1/auth/setup avvisas (tillägget skapar kontot bara ur inställningarna).
+          # 2) En förfalskad X-Forwarded-For kringgår inte inloggningsspärren per IP: API:t litar bara
+          #    på rubriken från Caddy (FORWARDED_ALLOW_IPS=127.0.0.1), så alla försök räknas på
+          #    containerns riktiga adress och spärren (429) slår till.
+          annan_container '
+          import json, sys, urllib.error, urllib.request
+          bas = f"http://{sys.argv[1]}:8000/api/v1"
+          def post(sokvag, data, rubriker=None):
+              req = urllib.request.Request(bas + sokvag, data=json.dumps(data).encode(), method="POST",
+                                           headers={"Content-Type": "application/json", **(rubriker or {})})
+              try:
+                  with urllib.request.urlopen(req, timeout=15) as svar:
+                      return svar.status, svar.read().decode()
+              except urllib.error.HTTPError as fel:
+                  return fel.code, fel.read().decode()
+          status, text = post("/auth/setup", {"email": "inkraktare@example.com", "password": "x" * 20})
+          print("setup:", status, text)
+          assert status == 403 and "setup_disabled" in text, (status, text)
+          koder = [post("/auth/login", {"email": f"okand{i}@example.com", "password": "fel-losenord-123"},
+                        {"X-Forwarded-For": f"10.0.{i}.1"})[0] for i in range(15)]
+          print("inloggningsförsök:", koder)
+          assert 429 in koder, "förfalskad X-Forwarded-For kringgick spärren"
+          ' "$ip"
 
       - name: Omstart med samma /data behåller konto och nycklar
         env:
@@ -208,6 +272,24 @@ jobs:
           if curl -sS --max-time 5 -o /dev/null http://localhost/ 2>/dev/null; then echo "Port 80 svarar utan konto" >&2; exit 1; fi
           ip="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' drivelog-tom)"
           curl -fsS --max-time 5 "http://$ip:8000/api/v1/auth/setup-status"; echo
+          # Spärrläget: ingen annan container kan skapa första kontot via API:t.
+          annan_container '
+          import json, sys, urllib.error, urllib.request
+          req = urllib.request.Request(f"http://{sys.argv[1]}:8000/api/v1/auth/setup", method="POST",
+                                       data=json.dumps({"email": "inkraktare@example.com", "password": "x" * 20}).encode(),
+                                       headers={"Content-Type": "application/json"})
+          try:
+              urllib.request.urlopen(req, timeout=15)
+              raise SystemExit("setup godtogs i spärrläget")
+          except urllib.error.HTTPError as fel:
+              text = fel.read().decode()
+              print(fel.code, text)
+              assert fel.code == 403 and "setup_disabled" in text
+          ' "$ip"
+          test "$(curl -fsS --max-time 5 "http://$ip:8000/api/v1/auth/setup-status")" = '{"needs_setup":true}'
+          # Layouten gäller också en helt ny /data.
+          test "$(docker exec drivelog-tom stat -c '%a %U' /data)" = "711 root"
+          test "$(docker exec drivelog-tom stat -c '%a %U' /data/app)" = "700 drivelog"
           docker stop -t 30 drivelog-tom >/dev/null
           test "$(docker inspect -f '{{.State.ExitCode}}' drivelog-tom)" = 0
 
@@ -232,7 +314,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Läs version ur drivelog/config.yaml
         id: meta
@@ -244,13 +326,13 @@ jobs:
           print(f"version={c['version']}")
           EOF
 
-      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
         with:
           platforms: arm64
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       - name: Bygg avbilden (linux/arm64)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           file: drivelog/Dockerfile
@@ -272,7 +354,7 @@ jobs:
       - name: Tillägget startar (API:t blir redo, spärren håller utan konto)
         run: |
           docker volume create drivelog-arm >/dev/null
-          echo '{"domain":"localhost","strato_dyndns":false,"log_level":"info"}' > "$RUNNER_TEMP/options.json"
+          echo '{"domain":"localhost","admin_email":"","admin_password":"","strato_dyndns":false,"strato_dyndns_user":"","strato_dyndns_password":"","log_level":"info"}' > "$RUNNER_TEMP/options.json"
           docker run --rm --platform linux/arm64 -v drivelog-arm:/data -v "$RUNNER_TEMP/options.json:/in.json:ro" \
             --entrypoint cp drivelog-addon:arm64 /in.json /data/options.json
           docker run -d --name drivelog-arm --platform linux/arm64 --init -v drivelog-arm:/data drivelog-addon:arm64 >/dev/null
@@ -283,6 +365,9 @@ jobs:
           done
           docker logs drivelog-arm 2>&1 | grep -F "Det finns inget konto" >/dev/null
           docker exec drivelog-arm python3 -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/ready', timeout=10).read().decode())"
+          test "$(docker exec drivelog-arm stat -c '%a %U' /data)" = "711 root"
+          test "$(docker exec drivelog-arm stat -c '%a %U' /data/app)" = "700 drivelog"
+          test "$(docker exec drivelog-arm stat -c '%a %U' /data/hemligheter)" = "700 root"
           docker stop -t 30 drivelog-arm >/dev/null
           test "$(docker inspect -f '{{.State.ExitCode}}' drivelog-arm)" = 0
 
@@ -306,7 +391,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Läs version och avbild ur drivelog/config.yaml
         id: meta
@@ -324,12 +409,12 @@ jobs:
           print(f"image={bild}")
           EOF
 
-      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
         with:
           platforms: arm64
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -342,16 +427,23 @@ jobs:
           VERSION: ${{ steps.meta.outputs.version }}
         run: |
           # En publicerad tagg skrivs aldrig över (Home Assistant-installationer hämtar den).
-          if docker buildx imagetools inspect "$IMAGE:$VERSION" >/dev/null 2>&1; then
+          # Bara ett uttryckligt "taggen finns inte" ger publicering; varje annat fel (nätverk,
+          # behörighet, GHCR nere) avbryter jobbet i stället för att riskera att skriva över.
+          if utskrift="$(docker buildx imagetools inspect "$IMAGE:$VERSION" 2>&1)"; then
             echo "::notice::$IMAGE:$VERSION finns redan – höj version i drivelog/config.yaml (och CHANGELOG.md) för att publicera en ny."
             echo "finns=true" >> "$GITHUB_OUTPUT"
-          else
+          elif printf '%s\n' "$utskrift" | grep -qiE 'manifest unknown|: not found'; then
+            echo "$IMAGE:$VERSION finns inte än – publiceras."
             echo "finns=false" >> "$GITHUB_OUTPUT"
+          else
+            printf '%s\n' "$utskrift" >&2
+            echo "::error::Kunde inte avgöra om $IMAGE:$VERSION redan finns. Inget publiceras."
+            exit 1
           fi
 
       - name: Bygg och publicera (amd64 + arm64)
         if: steps.finns.outputs.finns == 'false'
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           file: drivelog/Dockerfile
