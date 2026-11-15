@@ -21,6 +21,7 @@ on:
       - "backend/**"
       - "frontend/**"
       - "deploy/smoke-test.sh"
+      - "deploy/server.sh"
       - ".github/workflows/addon.yml"
       - ".github/scripts/**"
   workflow_dispatch:
@@ -368,10 +369,48 @@ jobs:
           docker stop -t 30 drivelog-tom >/dev/null
           test "$(docker inspect -f '{{.State.ExitCode}}' drivelog-tom)" = 0
 
+      - name: Egen server – installationsraden (deploy/server.sh) installerar, uppdaterar och byter lösenord
+        run: |
+          . "$RUNNER_TEMP/addon.sh"
+          docker rm -f drivelog-tom >/dev/null 2>&1 || true
+          # Samma avbild som nyss byggdes (ingen hämtning), egen datakatalog som på en hyrd server.
+          export DRIVELOG_IMAGE=drivelog-addon DRIVELOG_VERSION=test DRIVELOG_PULL=0
+          export DRIVELOG_DATA="$RUNNER_TEMP/server-data" DRIVELOG_CONTAINER=drivelog-server
+          # 1) Ny installation utan frågor (uppgifterna i miljön).
+          sudo -E env DRIVELOG_ADMIN_EMAIL=ci@example.com DRIVELOG_ADMIN_PASSWORD="$CI_ADMIN_PASSWORD" \
+            deploy/server.sh localhost
+          SMOKE_EMAIL=ci@example.com SMOKE_PASSWORD="$CI_ADMIN_PASSWORD" deploy/smoke-test.sh https://localhost
+          # Lösenordet ligger inte kvar i inställningsfilen eller någon annanstans i datakatalogen.
+          sudo python3 -c 'import json, sys; d = json.load(open(sys.argv[1])); assert d["admin_password"] == "" and d["admin_email"] == "ci@example.com" and d["domain"] == "localhost", d' "$DRIVELOG_DATA/options.json"
+          test "$(sudo stat -c '%a %U' "$DRIVELOG_DATA/options.json")" = "600 root"
+          if sudo grep -rF "$CI_ADMIN_PASSWORD" "$DRIVELOG_DATA" >/dev/null 2>&1; then
+            echo "Lösenordet finns i klartext i datakatalogen" >&2; exit 1
+          fi
+          test "$(docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' drivelog-server)" = unless-stopped
+          # 2) Samma rad igen = uppdatering: inga frågor (här finns ingen terminal), kontot finns kvar.
+          sudo -E deploy/server.sh localhost </dev/null
+          test "$(logga_in "$CI_ADMIN_PASSWORD")" = 200
+          # 3) Glömt lösenord: --nytt-losenord byter det, och det gamla slutar gälla.
+          sudo -E env DRIVELOG_ADMIN_EMAIL=ci@example.com DRIVELOG_ADMIN_PASSWORD="$CI_NYTT_PASSWORD" \
+            deploy/server.sh localhost --nytt-losenord
+          test "$(logga_in "$CI_NYTT_PASSWORD")" = 200
+          test "$(logga_in "$CI_ADMIN_PASSWORD")" = 401
+          if sudo grep -rF "$CI_NYTT_PASSWORD" "$DRIVELOG_DATA" >/dev/null 2>&1; then
+            echo "Det nya lösenordet finns i klartext i datakatalogen" >&2; exit 1
+          fi
+          # 4) Ny server utan uppgifter och utan terminal: tydligt fel i stället för en halv installation.
+          docker rm -f drivelog-server >/dev/null
+          if sudo -E env DRIVELOG_DATA="$RUNNER_TEMP/server-tom" DRIVELOG_CONTAINER=drivelog-server-tom \
+               deploy/server.sh localhost </dev/null 2> "$RUNNER_TEMP/server-fel.txt"; then
+            echo "Skriptet gick igenom utan konto" >&2; exit 1
+          fi
+          grep -F "Ingen terminal att fråga i" "$RUNNER_TEMP/server-fel.txt"
+          test -z "$(docker ps -aq --filter name=drivelog-server-tom)"
+
       - name: Loggar vid fel
         if: failure()
         run: |
-          for c in drivelog drivelog-tom; do
+          for c in drivelog drivelog-tom drivelog-server; do
             docker inspect -f '{{.Name}} {{.State.Status}} kod={{.State.ExitCode}}' "$c" 2>/dev/null || continue
             docker logs --tail 300 "$c" 2>&1
           done
@@ -379,8 +418,9 @@ jobs:
       - name: Städa
         if: always()
         run: |
-          docker rm -f drivelog drivelog-tom >/dev/null 2>&1 || true
+          docker rm -f drivelog drivelog-tom drivelog-server drivelog-server-tom >/dev/null 2>&1 || true
           docker volume rm drivelog-data drivelog-tom >/dev/null 2>&1 || true
+          sudo rm -rf "$RUNNER_TEMP/server-data" "$RUNNER_TEMP/server-tom" "$RUNNER_TEMP/server-fel.txt"
           rm -f "$RUNNER_TEMP/options.json" "$RUNNER_TEMP"/nycklar-* "$RUNNER_TEMP"/kaka* "$RUNNER_TEMP/inloggning.json"
 
   aarch64:

@@ -9,6 +9,34 @@ sköter HTTPS.
 > (före 2026.2 kallat tillägg) – utan separat server, med SQLite, automatisk HTTPS och valfri
 > STRATO DynDNS. Se [home-assistant-tillagg.md](home-assistant-tillagg.md).
 
+## Enklast: en rad på en hyrd server
+
+Har du ingen publik adress hemma (t.ex. Starlink eller mobilt bredband, där operatören delar
+adress mellan kunder) är en liten hyrd server (VPS) det enklaste sättet att få DriveLog på din
+egen domän. Du behöver en Linux-server med Ubuntu och minst 1 GB minne.
+
+1. Peka domänens **A-post** på serverns adress (för `smgd.se`: hos STRATO) och se till att det
+   inte finns någon **AAAA-post** som pekar någon annanstans.
+2. Logga in på servern och klistra in:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/SMGD-MP/TEST/HEAD/deploy/server.sh | sudo bash -s -- drivelog.smgd.se
+```
+
+Skriptet installerar Docker om det saknas, kontrollerar att domänen pekar på servern, frågar
+efter e-post och lösenord för ditt konto, startar den färdiga avbilden (samma som Home
+Assistant-appen: API, webbapp och proxy i en container, med SQLite) och väntar tills
+`https://drivelog.smgd.se` svarar med giltigt certifikat. Lösenordet sparas inte i klartext.
+
+- **Uppdatera:** kör samma rad igen. Allt ditt ligger kvar i `/opt/drivelog/data`.
+- **Glömt lösenordet:** lägg till `--nytt-losenord` sist på raden.
+- **Säkerhetskopia:** ta med `/opt/drivelog/data` i serverns säkerhetskopior (databasen,
+  krypteringsnyckeln och certifikaten ligger där).
+- **Loggen:** `docker logs --tail 50 drivelog`.
+
+Resten av den här sidan beskriver den större uppsättningen med Docker Compose (PostgreSQL,
+Redis och separata tjänster), som bygger avbilderna på servern.
+
 ## Krav
 
 - En server med Docker Engine 24+ och Docker Compose v2. Driften klarar sig på 2 GB RAM, men
