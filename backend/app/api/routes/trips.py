@@ -411,12 +411,12 @@ def update_trip(trip_id: uuid.UUID, body: TripUpdate, principal: PrincipalDep, d
     if any(k in data for k in ("category", "purpose", "subcategory", "contacts", "notes")) or body.approve:
         feedback.apply_decision(
             db, trip, user_id=principal.user.id, actor=principal.actor,
-            channel="ha" if principal.api_token else "web",
+            channel="web",
             category=body.category, purpose=body.purpose, subcategory=body.subcategory,
             contacts=body.contacts, notes=body.notes, approve=body.approve,
         )
-        if trip.review_status == ReviewStatus.APPROVED:
-            _cancel_notifications(db, trip.id)
+        # Frågor som blivit inaktuella (klassning godkänd, syfte bekräftat) avbryts.
+        _cancel_notifications(db, trip.id)
     db.commit()
     enqueue("classify.pending", user_id=str(principal.user.id), vehicle_id=str(trip.vehicle_id))
     return trip_out(db, get_owned_trip(db, principal, trip_id))
@@ -469,8 +469,7 @@ def bulk_update(body: BulkUpdate, principal: WebPrincipalDep, db: DbDep) -> dict
             purpose=body.purpose, approve=body.approve,
         )
         for t in trips:
-            if t.review_status == ReviewStatus.APPROVED:
-                _cancel_notifications(db, t.id)
+            _cancel_notifications(db, t.id)
     else:
         done = len(trips)
     db.commit()

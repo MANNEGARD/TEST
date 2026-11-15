@@ -143,7 +143,9 @@ Värden kan komma som tal **eller** sträng (t.ex. `"heading": "129"`) – Drive
   görs inga anrop alls.
 * **5xx och nätverksfel**: högst två nya försök med backoff och jitter.
 * **403/404** på en enskild endpoint betyder att bilen/behörigheten saknar stöd – det är ett
-  kapabilitetsbesked, inte ett fel. Endpointen provas igen efter 24 timmar.
+  kapabilitetsbesked, inte ett fel. Endpointen provas igen efter 24 timmar. En endpoint som
+  tidigare har fungerat räknas som "stöds inte" först efter tre sådana svar i rad, så att ett
+  tillfälligt fel hos Volvo inte stänger av insamlingen.
   `404` från Location betyder "ingen position".
 * Tokens, API-nyckel och VIN loggas aldrig (VIN maskeras även i HTTP-bibliotekets loggrader
   och tas bort ur lagrade råsvar).
@@ -161,6 +163,9 @@ Resedetekteringen (`detection.process_vehicle`) är en tillståndsmaskin:
   (150 m).
 * Resan anses avslutad när läget varit oförändrat i `settle_minutes` (10 min) – eller när
   bilen rapporterat avstängd motor efter en ny positionsrapport, bekräftat av en till hämtning.
+  Har bara mätarställningen eller bara positionen hunnit ändras väntar systemet tre gånger så
+  länge (30 min), eftersom det andra värdet ofta kommer med fördröjning – annars skulle samma
+  körning kunna bli två resor.
 * Varje ny positionsrapport inom en rörelse delar upp den i delresor.
 * **Sträcka** = skillnad i mätarställning (`distance_quality = odometer`).
 * **Sluttid** = bilens positionstidsstämpel (`reported`) om den är rimlig, annars en märkt

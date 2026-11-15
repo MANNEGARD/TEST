@@ -235,7 +235,7 @@ def vehicle_status(db: Session, vehicle: Vehicle, user_id: uuid.UUID) -> dict[st
     ).scalar_one_or_none()
     position = None
     if obs is not None:
-        loc, distance = places.resolve_position(db, user_id, obs.latitude, obs.longitude)
+        loc, distance = places.resolve_position(db, user_id, obs.latitude, obs.longitude, demo=vehicle.is_demo)
         position = {
             "latitude": obs.latitude,
             "longitude": obs.longitude,

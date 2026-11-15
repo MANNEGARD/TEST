@@ -77,8 +77,17 @@ def list_patterns(
     location_id: uuid.UUID | None = None,
     min_count: int = Query(default=1, ge=0),
     limit: int = Query(default=200, ge=1, le=1000),
+    include_demo: bool = False,
 ) -> list[PatternOut]:
     q = select(LocationPattern).where(LocationPattern.owner_user_id == principal.user.id)
+    if not include_demo:  # som GET /locations: mönster till/från demoplatser visas inte
+        demo_ids = select(KnownLocation.id).where(
+            KnownLocation.owner_user_id == principal.user.id, KnownLocation.is_demo.is_(True)
+        )
+        q = q.where(
+            LocationPattern.destination_location_id.not_in(demo_ids),
+            LocationPattern.origin_location_id.is_(None) | LocationPattern.origin_location_id.not_in(demo_ids),
+        )
     if pattern_type:
         q = q.where(LocationPattern.pattern_type == pattern_type)
     if status:

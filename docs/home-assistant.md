@@ -85,6 +85,8 @@ Integrationen hämtar notiser från DriveLog var 30:e sekund
   10 minuter visas status *fel*; frågorna ligger kvar i utkorgen och levereras när
   integrationen hör av sig igen. En notis som inte kvitterats skickas igen – taggen
   gör att den ersätter sig själv i stället för att dyka upp två gånger.
+- **Koppla bort** i DriveLog gäller tills du sparar Home Assistant-inställningarna i DriveLog
+  igen. Ett livstecken från integrationen återansluter alltså inte av sig självt.
 
 ### Push-läge
 
@@ -211,7 +213,7 @@ notiser. Användbart efter att DriveLog varit nere.
 
 | Symptom | Åtgärd |
 | --- | --- |
-| Status *konfigurerad* men inte *ansluten* | Push: välj **Testa anslutning**. Pull: kontrollera att integrationen är installerad och att adressen stämmer – status blir *ansluten* vid första livstecknet. |
+| Status *konfigurerad* eller *inte konfigurerad* fast du fyllt i uppgifterna | Push: adress och token måste båda vara sparade – välj sedan **Testa anslutning**. Pull: kontrollera att integrationen är installerad och att adressen stämmer – status blir *ansluten* vid första livstecknet. |
 | Status *fel* i pull-läget | Inget livstecken på 10 minuter. Kontrollera att Home Assistant når DriveLog (t.ex. `curl https://drivelog.example.se/api/v1/health` från HA-värden) och Home Assistants logg. |
 | *Återautentisering krävs* | API-token har återkallats – skapa en ny i DriveLog och ange den. |
 | Notisen kommer men knapparna saknas | Kontrollera att en `notify.mobile_app_*`-tjänst används (inte en notify-entitet), och tryck länge/dra ned på notisen för att se knapparna. |

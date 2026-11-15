@@ -108,5 +108,11 @@ dess hemligheter.
 - Ingen tvåfaktorsautentisering. Lägg gärna en extra spärr framför (VPN, IP-filter eller
   autentisering i proxyn) om tjänsten exponeras mot internet.
 - Hastighetsbegränsningen gäller inloggning och första-gången-flödet, inte hela API:t.
+- Kontospärren räknar misslyckade inloggningar per e-postadress. Den som känner till din
+  adress kan därför tillfälligt (fem minuter) spärra inloggningen genom upprepade felaktiga
+  försök. Befintliga sessioner påverkas inte.
+- Klientens adress i inloggningsspärren och ändringsloggen tas från det sista värdet i
+  `X-Forwarded-For`, det vill säga det som den egna proxyn lagt till. Publicera inte API-porten
+  direkt mot internet utan proxy.
 - Databasen är inte krypterad i vila utöver hemligheterna – använd diskkryptering på servern.
 - Säkerhetskopior innehåller känsliga uppgifter och måste skyddas på samma sätt som servern.

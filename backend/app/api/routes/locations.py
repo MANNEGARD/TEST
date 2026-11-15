@@ -178,8 +178,10 @@ def update_location(location_id: uuid.UUID, body: LocationIn, principal: WebPrin
     for field in ("name", "type", "company", "radius_m", "notes", "confirmed"):
         if field in data and data[field] is not None:
             setattr(loc, field, data[field].strip() if isinstance(data[field], str) else data[field])
-    if "company" in data and data["company"] in (None, ""):
-        loc.company = None
+    # null (eller tom text) rensar de valfria textfälten; null för namn/typ/radie ignoreras.
+    for field in ("company", "notes"):
+        if field in data and (data[field] is None or not data[field].strip()):
+            setattr(loc, field, None)
     if "type" in data or "name" in data:
         loc.confirmed = True if "confirmed" not in data else loc.confirmed  # ett uttryckligt val bekräftar platsen
         loc.suggested_type, loc.suggested_name, loc.suggestion_reason = None, None, None

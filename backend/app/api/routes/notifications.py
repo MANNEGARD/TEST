@@ -17,7 +17,7 @@ from app.db import utcnow
 from app.models import LogicalTrip, NotificationRequest, RawTrip
 from app.models.enums import NotificationKind, NotificationStatus
 from app.services.ha import actions as A
-from app.services.ha import demo, notifier, responses
+from app.services.ha import demo, messages, notifier, responses
 from app.services.ha.connection import CHANNEL_DEMO
 
 router = APIRouter(prefix="/notifications", tags=["Notifications"])
@@ -50,6 +50,11 @@ class TripSummary(BaseModel):
     purpose: str | None
     purpose_confirmed: bool
     state: str
+    # Samma platsetiketter som notistexterna (aldrig hemadress/privat plats i klartext).
+    start_label: str | None = None
+    end_label: str | None = None
+    start_time_quality: str | None = None
+    end_time_quality: str | None = None
 
 
 class NotificationOut(BaseModel):
@@ -144,9 +149,10 @@ def _out(req: NotificationRequest, now: datetime) -> dict[str, Any]:
     }
 
 
-def _trip_summary(trip: LogicalTrip | None) -> TripSummary | None:
+def _trip_summary(db, trip: LogicalTrip | None) -> TripSummary | None:
     if trip is None:
         return None
+    start_label, end_label = messages.trip_labels(db, trip)
     return TripSummary(
         id=trip.id,
         started_at=trip.started_at,
@@ -159,6 +165,10 @@ def _trip_summary(trip: LogicalTrip | None) -> TripSummary | None:
         purpose=trip.purpose,
         purpose_confirmed=trip.purpose_confirmed,
         state=trip.state,
+        start_label=start_label,
+        end_label=end_label,
+        start_time_quality=trip.start_time_quality,
+        end_time_quality=trip.end_time_quality,
     )
 
 
@@ -209,7 +219,7 @@ def get_notification(public_id: str, principal: WebPrincipalDep, db: DbDep) -> d
     req = _get(db, principal.user.id, public_id)
     out = _out(req, utcnow())
     ctx = req.context or {}
-    out["trip"] = _trip_summary(db.get(LogicalTrip, req.logical_trip_id) if req.logical_trip_id else None)
+    out["trip"] = _trip_summary(db, db.get(LogicalTrip, req.logical_trip_id) if req.logical_trip_id else None)
     merge_trips: list[TripSummary] = []
     if req.kind == NotificationKind.MERGE:
         from app.models import TripSegment
@@ -228,7 +238,7 @@ def get_notification(public_id: str, principal: WebPrincipalDep, db: DbDep) -> d
                 .where(TripSegment.raw_trip_id == raw_id, LogicalTrip.state == LogicalState.ACTIVE)
                 .limit(1)
             ).scalar_one_or_none()
-            summary = _trip_summary(trip)
+            summary = _trip_summary(db, trip)
             if summary is not None and all(t.id != summary.id for t in merge_trips):
                 merge_trips.append(summary)
     out["merge_trips"] = merge_trips
