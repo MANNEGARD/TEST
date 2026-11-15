@@ -282,6 +282,11 @@ def _summarize(db: Session, batch: ImportBatch, vehicle: Vehicle, merge_settings
     }
 
 
+def _count(n: int, singular: str, plural: str) -> str:
+    """Antal med rätt numerus: "1 resa", "3 resor"."""
+    return f"{n} {singular if n == 1 else plural}"
+
+
 def _summary_notes(
     gap_count: int,
     gap_km: float,
@@ -301,7 +306,7 @@ def _summary_notes(
         out.append(f"Mellan resorna finns {gap_km:.0f} km som inte ingår i underlaget (övrig körning).")
     elif gap_count:
         out.append(
-            f"Mätarställningarna har {gap_count} luckor på totalt {gap_km:.0f} km mellan resorna. "
+            f"Mätarställningarna har {_count(gap_count, 'lucka', 'luckor')} på totalt {gap_km:.0f} km mellan resorna. "
             "Underlaget är därför ett urval och inte en komplett fordonsjournal."
         )
     if single_category and not business_only:
@@ -311,10 +316,35 @@ def _summary_notes(
         )
     if includes_stops:
         out.append(
-            f"{includes_stops} resor har kortare körtid än tiden mellan start och slut; "
+            f"{_count(includes_stops, 'resa', 'resor')} har kortare körtid än tiden mellan start och slut; "
             "källan har sannolikt redan slagit ihop delsträckor med stopp."
         )
     return out
+
+
+def file_stored(f: ImportedFile) -> bool:
+    """Finns originalfilen kvar på disk?"""
+    if not f.stored_path:
+        return False
+    try:
+        return Path(f.stored_path).is_file()
+    except OSError:
+        return False
+
+
+def summary_with_storage(db: Session, batch: ImportBatch, summary: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Sammanställningen med ``stored`` per fil (om originalfilen finns kvar på disk)."""
+    summary = dict((batch.summary or {}) if summary is None else summary)
+    stored = {
+        str(f.id): file_stored(f)
+        for f in db.execute(select(ImportedFile).where(ImportedFile.batch_id == batch.id)).scalars()
+    }
+    if isinstance(summary.get("files"), list):
+        summary["files"] = [
+            {**f, "stored": stored.get(str(f.get("id")), False)} if isinstance(f, dict) else f
+            for f in summary["files"]
+        ]
+    return summary
 
 
 def get_batch(db: Session, user_id: uuid.UUID, batch_id: uuid.UUID) -> ImportBatch:
@@ -362,14 +392,18 @@ def commit(
     imported = 0
     new_trips: list[LogicalTrip] = []
     location_cache: dict[str, Any] = {}
+    created_locations: set[uuid.UUID] = set()
 
     def loc_for(address: str | None):
         if not address:
             return None
         if address not in location_cache:
+            existed = places.find_by_address(db, batch.user_id, address) is not None
             location_cache[address] = places.resolve_address(
                 db, batch.user_id, address, created_from="import", is_demo=vehicle.is_demo
             )
+            if not existed and location_cache[address] is not None:
+                created_locations.add(location_cache[address].id)
         return location_cache[address]
 
     for row in rows:
@@ -483,6 +517,8 @@ def commit(
             "open_gaps": result.get("open_gaps", 0),
             "open_gap_km": result.get("open_gap_km", 0),
             "locations_created": len([loc for loc in location_cache.values() if loc is not None]),
+            # Platser som faktiskt skapades av importen (locations_created räknar alla som användes).
+            "locations_new": len(created_locations),
             "reconciled_api_trips": {k: v for k, v in reconciled.items() if isinstance(v, (int, float))},
         }
     )

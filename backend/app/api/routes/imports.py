@@ -33,6 +33,13 @@ def _batch(db, principal, batch_id: uuid.UUID) -> ImportBatch:
     return imp.get_batch(db, principal.user.id, batch_id)
 
 
+def _batch_out(db, batch: ImportBatch) -> ImportBatchOut:
+    """Importen med ``stored`` per fil i sammanställningen (originalfilen finns kvar på disk)."""
+    out = ImportBatchOut.model_validate(batch)
+    out.summary = imp.summary_with_storage(db, batch)
+    return out
+
+
 @router.post("/preview", response_model=ImportBatchOut, status_code=201,
              summary="Ladda upp en eller flera Volvo-exporter (XLSX/CSV) och förhandsgranska")
 async def preview(
@@ -40,7 +47,7 @@ async def preview(
     db: DbDep,
     files: Annotated[list[UploadFile], File(description="En eller flera XLSX/CSV-filer")],
     vehicle_id: Annotated[uuid.UUID | None, Form()] = None,
-) -> ImportBatch:
+) -> ImportBatchOut:
     cfg = get_config()
     if not files:
         raise bad_request("Ingen fil har laddats upp.")
@@ -57,7 +64,7 @@ async def preview(
         payload.append((f.filename or "fil", data))
     batch = imp.create_preview(db, user_id=principal.user.id, vehicle=vehicle, files=payload, actor=principal.actor)
     db.commit()
-    return batch
+    return _batch_out(db, batch)
 
 
 @router.get("", summary="Tidigare importer")
@@ -69,15 +76,15 @@ def list_batches(principal: PrincipalDep, db: DbDep, vehicle_id: uuid.UUID | Non
         .order_by(ImportBatch.created_at.desc()).limit(limit)
     ).scalars()
     return {
-        "items": [ImportBatchOut.model_validate(b).model_dump(mode="json") for b in rows],
+        "items": [_batch_out(db, b).model_dump(mode="json") for b in rows],
         "coverage_labels": {k: v for k, v in COVERAGE_LABELS_SV.items()},
         "default_coverage": settings_svc.get_section(db, principal.user.id, "import")["default_coverage"],
     }
 
 
 @router.get("/{batch_id}", response_model=ImportBatchOut, summary="En import med sammanställning")
-def get_batch(batch_id: uuid.UUID, principal: PrincipalDep, db: DbDep) -> ImportBatch:
-    return _batch(db, principal, batch_id)
+def get_batch(batch_id: uuid.UUID, principal: PrincipalDep, db: DbDep) -> ImportBatchOut:
+    return _batch_out(db, _batch(db, principal, batch_id))
 
 
 @router.get("/{batch_id}/rows", summary="Rader i en import (med fel och varningar per rad)")
@@ -110,7 +117,7 @@ def commit(batch_id: uuid.UUID, body: CommitRequest, principal: WebPrincipalDep,
     batch = _batch(db, principal, batch_id)
     result = imp.commit(db, batch, actor=principal.actor, coverage=body.coverage, apply_merge_rules=body.apply_merge_rules)
     db.commit()
-    return result
+    return {**result, **imp.summary_with_storage(db, batch, {"files": result.get("files")})}
 
 
 @router.post("/{batch_id}/undo", summary="Ångra importen (resorna makuleras)")
