@@ -247,7 +247,7 @@
     "tags": [
      "Authentication"
     ],
-    "summary": "Återkalla API-token",
+    "summary": "Återkalla API-token (en återkallad token tas bort)",
     "operationId": "revoke_token_api_v1_auth_tokens__token_id__delete",
     "parameters": [
      {
@@ -2789,6 +2789,16 @@
        "default": 200,
        "title": "Limit"
       }
+     },
+     {
+      "name": "include_demo",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "boolean",
+       "default": false,
+       "title": "Include Demo"
+      }
      }
     ],
     "responses": {
@@ -3710,6 +3720,23 @@
     ],
     "summary": "Koppla bort Outlook och radera tokens och kalenderposter",
     "operationId": "disconnect_api_v1_integrations_microsoft_disconnect_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "anyOf": [
+         {
+          "$ref": "#/components/schemas/DisconnectOptions"
+         },
+         {
+          "type": "null"
+         }
+        ],
+        "title": "Body"
+       }
+      }
+     }
+    },
     "responses": {
      "200": {
       "description": "Successful Response",
@@ -3719,6 +3746,16 @@
          "additionalProperties": true,
          "type": "object",
          "title": "Response Disconnect Api V1 Integrations Microsoft Disconnect Post"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
         }
        }
       }
@@ -4499,6 +4536,28 @@
        ],
        "title": "Trip Ids"
       }
+     },
+     {
+      "name": "layout",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "enum": [
+          "simple",
+          "detailed"
+         ],
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "simple eller detailed; utelämnad: inställningen",
+       "title": "Layout"
+      },
+      "description": "simple eller detailed; utelämnad: inställningen"
      }
     ],
     "responses": {
@@ -4510,6 +4569,113 @@
          "type": "object",
          "additionalProperties": true,
          "title": "Response Precheck Api V1 Exports Checks Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/exports/preview": {
+   "get": {
+    "tags": [
+     "Exports"
+    ],
+    "summary": "Förhandsvisning av den enkla körjournalen",
+    "description": "Exakt de rader och summor som den enkla exporten (layout ``simple``) skulle innehålla.",
+    "operationId": "preview_api_v1_exports_preview_get",
+    "parameters": [
+     {
+      "name": "vehicle_id",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string",
+         "format": "uuid"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Vehicle Id"
+      }
+     },
+     {
+      "name": "from",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string",
+         "format": "date"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "From"
+      }
+     },
+     {
+      "name": "to",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string",
+         "format": "date"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "To"
+      }
+     },
+     {
+      "name": "trip_ids",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "array",
+         "items": {
+          "type": "string",
+          "format": "uuid"
+         }
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Trip Ids"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Preview Api V1 Exports Preview Get"
         }
        }
       }
@@ -8845,6 +9011,17 @@
     ],
     "title": "DemoPhoneNotification"
    },
+   "DisconnectOptions": {
+    "properties": {
+     "forget_app": {
+      "type": "boolean",
+      "title": "Forget App",
+      "default": false
+     }
+    },
+    "type": "object",
+    "title": "DisconnectOptions"
+   },
    "DriverIn": {
     "properties": {
      "name": {
@@ -8954,6 +9131,21 @@
        }
       ],
       "title": "Label"
+     },
+     "layout": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "simple",
+         "detailed"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Layout"
      }
     },
     "type": "object",
@@ -11335,7 +11527,7 @@
       "anyOf": [
        {
         "type": "string",
-        "pattern": "^(work|private)$"
+        "pattern": "^(work|private|undecided)$"
        },
        {
         "type": "null"
@@ -11547,7 +11739,7 @@
       "anyOf": [
        {
         "type": "string",
-        "pattern": "^(work|private)$"
+        "pattern": "^(work|private|undecided)$"
        },
        {
         "type": "null"
@@ -12208,6 +12400,30 @@
       "type": "string",
       "title": "End Time Quality"
      },
+     "start_earliest": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Start Earliest"
+     },
+     "start_latest": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Start Latest"
+     },
      "odometer_start": {
       "anyOf": [
        {
@@ -12558,6 +12774,50 @@
      "state": {
       "type": "string",
       "title": "State"
+     },
+     "start_label": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Start Label"
+     },
+     "end_label": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "End Label"
+     },
+     "start_time_quality": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Start Time Quality"
+     },
+     "end_time_quality": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "End Time Quality"
      }
     },
     "type": "object",

@@ -134,7 +134,7 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /** Återkalla API-token */
+        /** Återkalla API-token (en återkallad token tas bort) */
         delete: operations["revoke_token_api_v1_auth_tokens__token_id__delete"];
         options?: never;
         head?: never;
@@ -1356,6 +1356,26 @@ export interface paths {
         };
         /** Förhandskontroll inför export */
         get: operations["precheck_api_v1_exports_checks_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/exports/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Förhandsvisning av den enkla körjournalen
+         * @description Exakt de rader och summor som den enkla exporten (layout ``simple``) skulle innehålla.
+         */
+        get: operations["preview_api_v1_exports_preview_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2746,6 +2766,14 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** DisconnectOptions */
+        DisconnectOptions: {
+            /**
+             * Forget App
+             * @default false
+             */
+            forget_app: boolean;
+        };
         /** DriverIn */
         DriverIn: {
             /** Name */
@@ -2780,6 +2808,8 @@ export interface components {
             trip_ids?: string[] | null;
             /** Label */
             label?: string | null;
+            /** Layout */
+            layout?: ("simple" | "detailed") | null;
         };
         /** ExportOut */
         ExportOut: {
@@ -3798,6 +3828,10 @@ export interface components {
             start_time_quality: string;
             /** End Time Quality */
             end_time_quality: string;
+            /** Start Earliest */
+            start_earliest?: string | null;
+            /** Start Latest */
+            start_latest?: string | null;
             /** Odometer Start */
             odometer_start: number | null;
             /** Odometer End */
@@ -3893,6 +3927,14 @@ export interface components {
             purpose_confirmed: boolean;
             /** State */
             state: string;
+            /** Start Label */
+            start_label?: string | null;
+            /** End Label */
+            end_label?: string | null;
+            /** Start Time Quality */
+            start_time_quality?: string | null;
+            /** End Time Quality */
+            end_time_quality?: string | null;
         };
         /** TripUpdate */
         TripUpdate: {
@@ -5725,6 +5767,7 @@ export interface operations {
                 location_id?: string | null;
                 min_count?: number;
                 limit?: number;
+                include_demo?: boolean;
             };
             header?: never;
             path?: never;
@@ -6377,7 +6420,11 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["DisconnectOptions"] | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -6388,6 +6435,15 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -6815,6 +6871,44 @@ export interface operations {
         };
     };
     precheck_api_v1_exports_checks_get: {
+        parameters: {
+            query?: {
+                vehicle_id?: string | null;
+                from?: string | null;
+                to?: string | null;
+                trip_ids?: string[] | null;
+                /** @description simple eller detailed; utelämnad: inställningen */
+                layout?: ("simple" | "detailed") | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_api_v1_exports_preview_get: {
         parameters: {
             query?: {
                 vehicle_id?: string | null;
