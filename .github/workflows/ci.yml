@@ -7,9 +7,11 @@ on:
   push:
   workflow_dispatch:
 
+# En körning i taget per gren. En pågående körning får gå klart (den provstartar hela
+# systemet); nyare ändringar väntar på sin tur.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: read
