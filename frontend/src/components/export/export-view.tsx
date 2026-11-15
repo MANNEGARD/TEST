@@ -3,7 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { ArrowRight, BookOpen, ClipboardCheck, FileSpreadsheet, Info, Upload } from "lucide-react";
+import { ArrowLeft, ArrowRight, BookOpen, ClipboardCheck, FileSpreadsheet, Info, ListChecks, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -19,7 +19,16 @@ import { startDownload, useCreateExport, useExportChecks, useExportPreview } fro
 import { useSettings } from "@/lib/queries/settings";
 import { useVehicle } from "@/lib/vehicle";
 import { AllClear, AttentionCard, attentionItems, flaggedTripIds } from "./attention-card";
-import { inSentence, monthLabel, parsePeriod, periodRange, periodSearch, type ExportPeriod } from "./export-period";
+import {
+  EXPORT_SELECTION_KEY,
+  inSentence,
+  monthLabel,
+  parsePeriod,
+  periodRange,
+  periodSearch,
+  SELECTION_PARAM,
+  type ExportPeriod,
+} from "./export-period";
 import { JournalPreview } from "./journal-preview";
 import { PeriodPicker } from "./period-picker";
 import { PreviousFiles } from "./previous-files";
@@ -38,22 +47,28 @@ export function ExportView() {
   const range = periodRange(period);
   const setPeriod = (p: ExportPeriod) => router.replace(`${pathname}${periodSearch(p)}`, { scroll: false });
 
+  // Urvalsläge ("Exportera valda" i körjournalen): id:na ligger i sessionStorage.
+  const selectionMode = params.get(SELECTION_PARAM) === "1";
+  const storedSelection = useStoredSelection();
+  const tripIds = selectionMode ? storedSelection : null;
+  const backToMonth = () => router.replace(`${pathname}${periodSearch(period)}`, { scroll: false });
+
   const { vehicleId, isLoading: vehiclesLoading } = useVehicle();
-  const preview = useExportPreview(range);
-  const checks = useExportChecks(range);
+  const preview = useExportPreview(selectionMode ? null : range, tripIds);
+  const checks = useExportChecks(selectionMode ? null : range, tripIds);
   const settings = useSettings();
   const create = useCreateExport();
   const detailed = settings.data?.settings.export?.layout === "detailed";
 
-  const rangeKey = `${vehicleId}|${range.from}|${range.to}`;
+  const rangeKey = tripIds ? `${vehicleId}|urval|${tripIds.join(",")}` : `${vehicleId}|${range.from}|${range.to}`;
   const [created, setCreated] = React.useState<{ key: string; job: ExportJob } | null>(null);
 
-  const p = preview.data;
+  const p = selectionMode && !tripIds?.length ? undefined : preview.data;
   const stale = preview.isPlaceholderData;
   const label = period.kind === "month" ? monthLabel(period.month) : `${range.from} – ${range.to}`;
 
   const onCreate = () => {
-    create.mutate(range, {
+    create.mutate(tripIds ? { tripIds } : range, {
       onSuccess: (job) => {
         startDownload(job);
         setCreated({ key: rangeKey, job });
@@ -67,7 +82,29 @@ export function ExportView() {
   };
 
   let body: React.ReactNode;
-  if (!vehiclesLoading && !vehicleId) {
+  if (selectionMode && storedSelection !== null && !storedSelection.length) {
+    body = (
+      <Card>
+        <EmptyState
+          icon={<ListChecks />}
+          title="Inga resor valda"
+          description="Markera resor i körjournalen och välj Exportera valda, eller gå tillbaka till månadens underlag."
+          action={
+            <>
+              <Button variant="primary" onClick={backToMonth}>
+                <ArrowLeft aria-hidden /> Till månadens underlag
+              </Button>
+              <Button asChild variant="secondary">
+                <Link href="/journal">
+                  <BookOpen aria-hidden /> Körjournal
+                </Link>
+              </Button>
+            </>
+          }
+        />
+      </Card>
+    );
+  } else if (!vehiclesLoading && !vehicleId) {
     body = (
       <Card>
         <EmptyState
@@ -93,9 +130,10 @@ export function ExportView() {
   } else if (!p) {
     body = <LoadingLayout />;
   } else if (!p.rows.length && !stale) {
-    body = <NoTrips preview={p} label={label} />;
+    body = tripIds ? <NoTripsInSelection preview={p} onBack={backToMonth} /> : <NoTrips preview={p} label={label} />;
   } else {
     const items = attentionItems(p, checks.data);
+    const left = tripIds ? tripIds.length - new Set(p.rows.map((r) => r.trip_id)).size : 0;
     body = (
       <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_18rem]">
         <aside className="grid gap-4 md:grid-cols-2 md:items-start xl:sticky xl:top-20 xl:col-start-2 xl:row-start-1 xl:grid-cols-1">
@@ -112,6 +150,14 @@ export function ExportView() {
           {checks.isPending ? null : <AttentionCard items={items} />}
         </aside>
         <div className="min-w-0 xl:col-start-1 xl:row-start-1">
+          {left > 0 && !stale ? (
+            <p role="status" className="mb-3 flex items-start gap-2 text-[13px] text-fg-muted">
+              <Info className="mt-0.5 size-4 shrink-0 text-fg-subtle" aria-hidden />
+              <span>
+                {left === 1 ? "1 av de valda resorna" : `${left} av de valda resorna`} tas inte med – underlaget innehåller bara godkända tjänsteresor.
+              </span>
+            </p>
+          ) : null}
           <JournalPreview preview={p} flaggedIds={flaggedTripIds(checks.data)} busy={stale} />
         </div>
       </div>
@@ -127,7 +173,18 @@ export function ExportView() {
       />
 
       <div className="mb-6 flex flex-col gap-3">
-        <PeriodPicker value={period} onChange={setPeriod} />
+        {selectionMode ? (
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+            <h2 className="text-lg font-semibold tracking-tight text-fg">
+              Urval{storedSelection?.length ? ` (${plural(storedSelection.length, "resa", "resor")})` : ""}
+            </h2>
+            <Button variant="ghost" size="sm" onClick={backToMonth}>
+              <ArrowLeft aria-hidden /> Tillbaka till månadsläget
+            </Button>
+          </div>
+        ) : (
+          <PeriodPicker value={period} onChange={setPeriod} />
+        )}
         {detailed ? (
           <p className="flex items-start gap-2 text-[13px] text-fg-muted">
             <Info className="mt-0.5 size-4 shrink-0 text-accent-ink" aria-hidden />
@@ -181,6 +238,66 @@ function NoTrips({ preview, label }: { preview: ExportPreview; label: string }) 
               </Button>
             </>
           )
+        }
+      />
+    </Card>
+  );
+}
+
+/** Läser urvalet som körjournalen lämnade i sessionStorage (null under serverrenderingen). */
+function useStoredSelection(): string[] | null {
+  const raw = React.useSyncExternalStore(
+    subscribeStorage,
+    () => {
+      try {
+        return window.sessionStorage.getItem(EXPORT_SELECTION_KEY) ?? "[]";
+      } catch {
+        return "[]";
+      }
+    },
+    () => null,
+  );
+  return React.useMemo(() => {
+    if (raw == null) return null;
+    try {
+      const v: unknown = JSON.parse(raw);
+      return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+    } catch {
+      return [];
+    }
+  }, [raw]);
+}
+
+function subscribeStorage(onChange: () => void) {
+  window.addEventListener("storage", onChange);
+  return () => window.removeEventListener("storage", onChange);
+}
+
+function NoTripsInSelection({ preview, onBack }: { preview: ExportPreview; onBack: () => void }) {
+  const waiting = preview.excluded.pending_approval.count + preview.excluded.undecided.count;
+  return (
+    <Card>
+      <EmptyState
+        icon={<FileSpreadsheet />}
+        title="Inga godkända tjänsteresor i urvalet"
+        description={
+          waiting > 0
+            ? `${plural(waiting, "resa väntar", "resor väntar")} på granskning. Underlaget innehåller bara godkända tjänsteresor – godkänn dem så kommer de med.`
+            : "Underlaget innehåller bara godkända tjänsteresor, och inga av de valda resorna är det."
+        }
+        action={
+          <>
+            {waiting > 0 ? (
+              <Button asChild variant="primary">
+                <Link href="/review">
+                  <ClipboardCheck aria-hidden /> Granska <ArrowRight aria-hidden />
+                </Link>
+              </Button>
+            ) : null}
+            <Button variant="secondary" onClick={onBack}>
+              <ArrowLeft aria-hidden /> Till månadens underlag
+            </Button>
+          </>
         }
       />
     </Card>

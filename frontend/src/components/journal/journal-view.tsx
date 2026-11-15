@@ -19,7 +19,8 @@ import { DEFAULT_VISIBLE } from "@/components/trips/trip-columns";
 import { TotalsLine, TripTable, type TripRowHandlers } from "@/components/trips/trip-table";
 import { useTripActions } from "@/components/trips/use-trip-actions";
 import { periodToRange } from "@/lib/period";
-import { useTrips, type TripListParams } from "@/lib/queries/trips";
+import { EXPORT_SELECTION_KEY } from "@/components/export/export-period";
+import { useJourneys, useTrips, type TripListParams } from "@/lib/queries/trips";
 import { readStorage, writeStorage } from "@/lib/utils";
 import { BulkBar } from "./bulk-bar";
 import { ColumnPicker } from "./column-picker";
@@ -30,8 +31,6 @@ import { useMergeFlow } from "./merge-flow";
 
 const COLS_KEY = "drivelog.journal.columns";
 const PAGE_SIZE = 50;
-/** Nyckel i sessionStorage där "Exportera valda" lämnar resornas id:n till /export. */
-export const EXPORT_SELECTION_KEY = "drivelog.export.selected";
 
 type Quick = "all" | "work" | "private" | "review";
 
@@ -52,6 +51,7 @@ function filtersFromUrl(params: URLSearchParams): JournalFilters {
     category: params.getAll("category"),
     needs_review: params.get("needs_review") === "1",
     favorite: params.get("favorite") === "1",
+    journey: params.get("journey") ?? "",
   };
 }
 
@@ -87,6 +87,7 @@ export function JournalView() {
       for (const c of f.category) sp.append("category", c);
       if (f.needs_review) sp.set("needs_review", "1");
       if (f.favorite) sp.set("favorite", "1");
+      if (f.journey) sp.set("journey", f.journey);
       const qs = sp.toString();
       setLastUrlQ(f.q);
       router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
@@ -111,12 +112,15 @@ export function JournalView() {
     q: filters.q || undefined,
     favorite: filters.favorite || undefined,
     needs_review: filters.needs_review || undefined,
+    journey_id: filters.journey || undefined,
     sort,
     order,
     page,
     page_size: PAGE_SIZE,
   };
   const trips = useTrips(query);
+  const journeys = useJourneys(!!filters.journey);
+  const journeyName = journeys.data?.find((j) => j.id === filters.journey)?.name;
   const actions = useTripActions();
   const mergeFlow = useMergeFlow(() => setSelected(new Set()));
 
@@ -223,7 +227,7 @@ export function JournalView() {
           />
         </div>
       </div>
-      <ActiveFilterChips filters={{ ...filters, category: quick ? [] : filters.category, needs_review: quick ? false : filters.needs_review }} onChange={setFilters} />
+      <ActiveFilterChips filters={{ ...filters, category: quick ? [] : filters.category, needs_review: quick ? false : filters.needs_review }} onChange={setFilters} journeyName={journeyName} />
 
       <Card className="mt-3 overflow-clip">
         <BulkBar

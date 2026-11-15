@@ -143,6 +143,8 @@ export interface MicrosoftStatus extends IntegrationView {
   selected_calendar_ids: string[];
   stored_events: number;
   stores_body_preview: boolean;
+  /** Påhittade demomöten som finns kvar (nyare backend). */
+  demo_events?: number;
 }
 
 export interface MicrosoftCalendar {

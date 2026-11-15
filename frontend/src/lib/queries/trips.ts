@@ -224,6 +224,37 @@ export function useUpdateJourney() {
   });
 }
 
+/** En överordnad tjänsteresa (GET /journeys, backend/app/api/routes/trips.py → list_journeys). */
+export interface JourneySummary {
+  id: string;
+  name: string;
+  purpose: string | null;
+  status: string;
+  started_at: string | null;
+  ended_at: string | null;
+  distance_km: number;
+  trip_count: number;
+}
+
+/** Fordonets tjänsteresor. Nyckeln ligger under qk.trips.all så att invalidateJournalData() träffar den. */
+export function useJourneys(enabled = true) {
+  const { vehicleId } = useVehicle();
+  return useQuery({
+    queryKey: [...qk.trips.all, "journeys", vehicleId] as const,
+    queryFn: ({ signal }) => api.get<JourneySummary[]>("/journeys", { query: { vehicle_id: vehicleId }, signal }),
+    enabled: enabled && !!vehicleId,
+  });
+}
+
+/** "Inte en tjänsteresa": löser upp grupperingen. Körningarna och deras klassning påverkas inte. */
+export function useDeleteJourney() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.del(`/journeys/${id}`),
+    onSuccess: () => invalidateJournalData(qc),
+  });
+}
+
 /** Ångra en korrigering (lärande-feedback), t.ex. senaste kategoriändringen. */
 export function useUndoFeedback() {
   const qc = useQueryClient();

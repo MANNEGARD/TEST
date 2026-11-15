@@ -14,7 +14,14 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.models import LogicalTrip
-from app.models.enums import Category, LocationType, ReviewStatus
+from app.models.enums import (
+    SUBCATEGORY_LABELS_SV,
+    Category,
+    DecisionSource,
+    LocationType,
+    ReviewStatus,
+    Subcategory,
+)
 from app.services.classify import textnorm
 from app.services.classify.signals import WEAK_GEO_BASES, RuleResult, TripContext
 from app.services.learning import patterns as patterns_svc
@@ -225,15 +232,21 @@ def unsupported_tokens(text: str, corpus: set[str]) -> list[str]:
 
 
 # Allmänna ord som får förekomma i ett genererat syfte utan att vara belagda i underlaget.
-# Namn, orter, företag och ärenden måste däremot alltid finnas i underlaget – oavsett skiftläge.
-_ALLOWED_WORDS = frozenset(
+# Namn, orter och företag måste däremot alltid finnas i underlaget – oavsett skiftläge.
+# Ärendetypen (kundbesök, möte, personalärende …) prövas separat mot underlaget, se
+# ``unsupported_types``.
+_FUNCTION_WORDS = frozenset(
     {
-        # funktionsord
         "i", "på", "hos", "med", "och", "samt", "till", "från", "för", "av", "om", "vid", "efter", "inför", "under",
         "mellan", "via", "mot", "inom", "utan", "över", "en", "ett", "den", "det", "de", "som", "att", "är", "var",
         "har", "hade", "fick", "nya", "ny", "nytt", "ordinarie", "flera", "andra", "annat", "egen", "eget",
         "vår", "vårt", "våra", "min", "mitt", "mina", "dag", "dagen", "dagens", "samma", "tillbaka", "vidare", "hem",
-        # vanliga ord i körjournalssyften
+    }
+)
+# Vanliga ord i körjournalssyften. De får också sättas samman och böjas
+# ("Projektmöte", "Avstämningsmötet", "Säljmöte").
+_COMMON_WORDS = frozenset(
+    {
         "kund", "kunden", "kunder", "kundbesök", "kundmöte", "kundmöten", "besök", "besöket", "möte", "mötet",
         "möten", "resa", "resan", "resor", "rest", "åkt", "hemresa", "återresa", "tjänsteresa", "tjänsteärende",
         "ärende", "arbete", "arbetsplats", "kontor", "kontoret", "hotell", "hotellet", "övernattning", "dagsresa",
@@ -243,13 +256,35 @@ _ALLOWED_WORDS = frozenset(
         "verksamhetsuppföljning", "platsbesök", "besiktning", "inventering", "upphandling", "internrevision",
         "revision", "upplärning", "introduktion", "lunch", "lunchmöte", "syfte", "behöver", "bekräftas",
         "jobbat", "arbetat", "driftat", "tankning", "laddning", "material", "offert", "avtal", "projekt",
+        "sälj", "försäljning", "installation", "felsökning", "leverantör", "leverantörer", "leverantören",
+        "montage", "montering", "visning", "reparation", "underhåll", "support", "demonstration", "information",
     }
 )
-# Böjnings- och sammansättningsändelser som får läggas till ett belagt ord.
-_ALLOWED_SUFFIXES = (
-    "s", "en", "et", "n", "t", "er", "ar", "or", "na", "erna", "arna", "orna",
-    "kontoret", "kontor", "kontorets", "skontoret", "skontor", "besök", "möte", "mötet",
-)
+_ALLOWED_WORDS = _FUNCTION_WORDS | _COMMON_WORDS
+# Böjningsändelser som får läggas till ett belagt eller allmänt ord.
+_ALLOWED_SUFFIXES = ("s", "en", "et", "n", "t", "er", "ar", "or", "na", "erna", "arna", "orna", "ens", "ets")
+
+
+def _compound_supported(key: str, heads: set[str], depth: int = 0) -> bool:
+    """Sammansättning/böjning: belagt eller allmänt ord + (foge-s) + allmänt ord eller ändelse."""
+    if depth > 2:
+        return False
+    for head in heads:
+        if len(key) <= len(head) or not key.startswith(head):
+            continue
+        rest = key[len(head):]
+        if rest in _ALLOWED_SUFFIXES:
+            return True
+        for tail in (rest, rest[1:] if rest.startswith("s") else None):
+            if not tail or len(tail) < 3:
+                continue
+            if tail in _COMMON_WORDS or _compound_supported(tail, _COMPOUND_HEADS, depth + 1):
+                return True
+    return False
+
+
+# Allmänna ord som kan inleda en sammansättning (funktionsord gör det aldrig).
+_COMPOUND_HEADS = {w for w in _COMMON_WORDS if len(w) >= 3}
 
 
 def _word_supported(key: str, corpus: set[str]) -> bool:
@@ -257,11 +292,9 @@ def _word_supported(key: str, corpus: set[str]) -> bool:
         return True
     if any(c.isdigit() for c in key):
         return False  # siffror måste stå ordagrant i underlaget
-    # Böjningsform eller sammansättning av ett belagt ord, t.ex. "Örebrokontoret" eller "Exempelbolagets".
-    for c in corpus:
-        if len(c) >= 4 and key.startswith(c) and key[len(c):] in _ALLOWED_SUFFIXES:
-            return True
-    return False
+    # Böjningsform eller sammansättning, t.ex. "Örebrokontoret", "Exempelbolagets" eller "Projektmöte".
+    heads = {c for c in corpus if len(c) >= 4 and not any(ch.isdigit() for ch in c)} | _COMPOUND_HEADS
+    return _compound_supported(key, heads)
 
 
 def unsupported_words(text: str, corpus: set[str]) -> list[str]:
@@ -281,9 +314,100 @@ def unsupported_words(text: str, corpus: set[str]) -> list[str]:
     return missing
 
 
-def validate_generated(text: str | None, ctx: TripContext) -> tuple[bool, list[str]]:
-    """Godkänner ett AI-genererat syfte endast om varje ord är belagt i underlaget eller
-    är ett allmänt ord. Skiftläge spelar ingen roll – påhittade namn i gemener stoppas också."""
+# Ärendetyper som AI bara får ange när samma typ har stöd i underlaget.
+_GATED_TYPES = frozenset(
+    {
+        Subcategory.CUSTOMER_VISIT,
+        Subcategory.OFFICE_WORK,
+        Subcategory.MEETING,
+        Subcategory.TRAINING,
+        Subcategory.PERSONNEL,
+        Subcategory.OPERATIONS,
+        Subcategory.HOTEL_TRANSFER,
+    }
+)
+# Platstyp → ärendetyper som platsen i sig belägger.
+_TYPES_BY_LOCATION = {
+    LocationType.CUSTOMER: {Subcategory.CUSTOMER_VISIT},
+    LocationType.OFFICE: {Subcategory.OFFICE_WORK, Subcategory.MEETING},
+    LocationType.REGULAR_WORKPLACE: {Subcategory.OFFICE_WORK, Subcategory.MEETING},
+    LocationType.HOTEL: {Subcategory.HOTEL_TRANSFER},
+}
+# Särskilda ärenden som inte följer av platstypen: de måste stå i underlaget
+# (kalenderbokning, bekräftat syfte, regelmotorns förslag), t.ex. "Styrelsemöte".
+_SPECIFIC_TERMS = (
+    "styrelse", "ledningsgrupp", "kvartalsmöte", "verksamhetsmöte", "revision", "upphandling",
+    "medarbetarsamtal", "avtackning", "personalmöte",
+)
+
+
+def _support_texts(ctx: TripContext, rule_proposal: PurposeProposal | None) -> list[str]:
+    """Texter i underlaget som kan belägga en ärendetyp."""
+    texts: list[str] = []
+    for m, ev in ctx.calendar_matches:
+        if not m.is_conflict and (ev.sensitivity or "").lower() not in ("personal", "private"):
+            texts.append(ev.subject or "")
+    for p in candidate_purposes(ctx, limit=12):
+        texts.append(p["text"])
+    prior = ctx.arrival_at_origin
+    if prior is not None and prior.purpose and prior.purpose_confirmed:
+        texts.append(prior.purpose)
+    if rule_proposal is not None and rule_proposal.source != DecisionSource.AI:
+        texts.append(rule_proposal.text)
+    return [textnorm.expand_abbreviations(t, ctx.abbreviations) for t in texts if t]
+
+
+def supported_types(
+    ctx: TripContext, rules: RuleResult | None = None, rule_proposal: PurposeProposal | None = None
+) -> set[str]:
+    """Ärendetyper som har stöd i underlaget: vald/matchad kalenderbokning, tidigare bekräftat
+    syfte för platsen eller rutten, platstypen eller regelmotorns eget förslag."""
+    found: set[str] = set()
+    for t in _support_texts(ctx, rule_proposal):
+        found |= textnorm.purpose_types(t)
+    for loc in (ctx.origin, ctx.destination):
+        if loc is not None:
+            found |= _TYPES_BY_LOCATION.get(loc.type, set())
+    if rules is not None:
+        if rules.subcategory:
+            found.add(rules.subcategory)
+        if any(s.kind == "hotel" for s in rules.signals):
+            found.add(Subcategory.HOTEL_TRANSFER)
+    return found
+
+
+def unsupported_types(
+    text: str, ctx: TripContext, rules: RuleResult | None = None, rule_proposal: PurposeProposal | None = None
+) -> list[str]:
+    """Ärendetyper/särskilda ärenden i ``text`` som saknar stöd i underlaget."""
+    claimed = textnorm.purpose_types(text) & _GATED_TYPES
+    missing: list[str] = []
+    if claimed:
+        have = supported_types(ctx, rules, rule_proposal)
+        for kind in sorted(claimed - have):
+            missing.append(f"ärendetyp utan stöd: {SUBCATEGORY_LABELS_SV.get(kind, kind)}")
+    folded = fold(text)
+    terms = [t for t in _SPECIFIC_TERMS if t in folded]
+    if terms:
+        support = fold(" ".join(_support_texts(ctx, rule_proposal)))
+        missing += [f"ärende utan stöd: {t}" for t in terms if t not in support]
+    return missing
+
+
+def validate_generated(
+    text: str | None,
+    ctx: TripContext,
+    rules: RuleResult | None = None,
+    rule_proposal: PurposeProposal | None = None,
+) -> tuple[bool, list[str]]:
+    """Godkänner ett AI-genererat syfte endast om
+
+    1. varje ord är belagt i underlaget eller är ett allmänt ord (även sammansatt/böjt) –
+       skiftläge spelar ingen roll, påhittade namn i gemener stoppas också, och
+    2. syftets ärendetyp (kundbesök, möte, personalärende, utbildning …) har stöd i
+       underlaget: en matchad kalenderbokning, ett tidigare bekräftat syfte för platsen
+       eller rutten, platstypen eller regelmotorns eget förslag.
+    """
     if not text or not text.strip():
         return False, []
     cleaned = text.strip()
@@ -295,6 +419,7 @@ def validate_generated(text: str | None, ctx: TripContext) -> tuple[bool, list[s
     corpus = grounding_corpus(ctx)
     corpus |= {fold(w) for w in textnorm.GENERIC_WORDS}
     missing = unsupported_words(cleaned, corpus)
+    missing += unsupported_types(cleaned, ctx, rules, rule_proposal)
     return (not missing), missing
 
 
@@ -340,7 +465,9 @@ __all__ = [
     "grounding_corpus",
     "propose",
     "similar_trips",
+    "supported_types",
     "unsupported_tokens",
+    "unsupported_types",
     "unsupported_words",
     "validate_generated",
     "places",

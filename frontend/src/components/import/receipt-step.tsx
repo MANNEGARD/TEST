@@ -59,7 +59,9 @@ export function ReceiptStep({
   const imported = result.already_committed ? (result.imported ?? result.rows_new ?? 0) : (result.imported ?? 0);
   const autoMerged = result.auto_merged ?? 0;
   const questions = result.merge_questions ?? 0;
-  const places = result.locations_created ?? 0;
+  // locations_new (nyare backend) = nyskapade platser; annars alla platser som adresserna kopplats till.
+  const newPlaces = result.locations_new;
+  const places = newPlaces ?? result.locations_created ?? 0;
   const superseded = result.reconciled_api_trips?.superseded ?? 0;
 
   return (
@@ -101,9 +103,9 @@ export function ReceiptStep({
             />
             <ReceiptLine
               icon={<MapPin />}
-              label={places === 1 ? "plats" : "platser"}
+              label={newPlaces != null ? (places === 1 ? "ny plats" : "nya platser") : places === 1 ? "plats" : "platser"}
               value={places}
-              hint="Adresser i filerna som kopplats till platser."
+              hint={newPlaces != null ? "Platser som skapades ur adresserna i filerna." : "Adresser i filerna som kopplats till platser."}
               href="/places"
               linkLabel="Visa platser"
             />

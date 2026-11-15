@@ -183,7 +183,11 @@ export function useMicrosoftSync() {
 }
 
 export function useMicrosoftDisconnect() {
-  return useIntegrationMutation(() => api.post<unknown>("/integrations/microsoft/disconnect"), { journal: true });
+  // forget_app: radera även appregistreringens klient-ID och klienthemlighet.
+  return useIntegrationMutation(
+    (opts: { forgetApp?: boolean } | void) => api.post<unknown>("/integrations/microsoft/disconnect", opts?.forgetApp ? { forget_app: true } : undefined),
+    { journal: true },
+  );
 }
 
 export function useMicrosoftDemo() {

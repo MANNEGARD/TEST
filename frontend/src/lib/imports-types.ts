@@ -34,6 +34,8 @@ export interface ImportFileInfo {
   error: string | null;
   warnings: string[];
   ignored_columns: string[];
+  /** Om originalfilen finns kvar på servern (GET /imports). Saknas i äldre backend → okänt. */
+  stored?: boolean;
 }
 
 export interface ImportSummary {
@@ -58,6 +60,8 @@ export interface ImportSummary {
   merge_questions?: number;
   /** Antal adresser i importen som kopplats till en plats (befintlig eller nyskapad). */
   locations_created?: number;
+  /** Antal platser som importen skapade (nyare backend). */
+  locations_new?: number;
   reconciled_api_trips?: { superseded?: number; transferred?: number; review_items?: number; exact?: number };
 }
 

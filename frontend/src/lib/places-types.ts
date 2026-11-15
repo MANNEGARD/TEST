@@ -85,6 +85,10 @@ export interface Pattern extends Omit<S["PatternOut"], "purposes" | "pattern_typ
 export interface RuleInput {
   origin_location_id?: string | null;
   destination_location_id: string;
-  category?: "work" | "private" | null;
+  /** "undecided" = "Fråga mig alltid": resorna föreslås aldrig automatiskt. */
+  category?: "work" | "private" | "undecided" | null;
   purpose?: string | null;
 }
+
+/** Status på ett inlärt mönster (PatternUpdate i backend/app/api/routes/learning.py). */
+export type PatternStatus = "suggested" | "approved" | "rejected";

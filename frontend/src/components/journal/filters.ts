@@ -1,6 +1,6 @@
 import type { PeriodValue } from "@/lib/period";
 
-/** Körjournalens filterläge. Synkas delvis med URL:en (q, needs_review, category, favorite). */
+/** Körjournalens filterläge. Synkas delvis med URL:en (q, needs_review, category, favorite, journey). */
 export interface JournalFilters {
   period: PeriodValue;
   q: string;
@@ -9,6 +9,8 @@ export interface JournalFilters {
   source: string[];
   favorite: boolean;
   needs_review: boolean;
+  /** Tjänsteresa (journey_id) – från länken "Visa alla resor" i resedetaljen. */
+  journey: string;
 }
 
 export const EMPTY_FILTERS: JournalFilters = {
@@ -19,6 +21,7 @@ export const EMPTY_FILTERS: JournalFilters = {
   source: [],
   favorite: false,
   needs_review: false,
+  journey: "",
 };
 
 export function activeFilterCount(f: JournalFilters): number {
@@ -28,6 +31,7 @@ export function activeFilterCount(f: JournalFilters): number {
     f.review_status.length +
     f.source.length +
     (f.favorite ? 1 : 0) +
-    (f.needs_review ? 1 : 0)
+    (f.needs_review ? 1 : 0) +
+    (f.journey ? 1 : 0)
   );
 }

@@ -73,8 +73,8 @@ export function attentionItems(preview: ExportPreview, checks: ExportChecks | un
       tone: "action",
       text: (
         <>
-          {plural(undecided.count, "resa är", "resor är")} inte avgjorda som arbete eller privat och tas inte med
-          <span className="text-fg-muted"> ({formatKm(undecided.km)})</span>
+          {plural(undecided.count, "resa är inte avgjord", "resor är inte avgjorda")} – arbete eller privat?
+          <span className="text-fg-muted"> ({formatKm(undecided.km)}, tas inte med)</span>
         </>
       ),
       action: { label: "Granska", href: "/review" },

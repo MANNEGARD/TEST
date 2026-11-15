@@ -76,3 +76,10 @@ export function isValidRange(from: string, to: string): boolean {
 export function inSentence(label: string): string {
   return /^[A-ZÅÄÖ][a-zåäö]+ \d{4}$/.test(label) ? label.charAt(0).toLowerCase() + label.slice(1) : label;
 }
+
+/**
+ * "Exportera valda" i körjournalen: id:na sparas i sessionStorage under den här nyckeln och
+ * exportsidan öppnas med ?selected=1 (urvalsläge i stället för månad/period).
+ */
+export const EXPORT_SELECTION_KEY = "drivelog.export.selected";
+export const SELECTION_PARAM = "selected";

@@ -11,6 +11,7 @@ import {
   FileSpreadsheet,
   History,
   Layers,
+  PenLine,
   Route,
   Scissors,
   Split,
@@ -20,9 +21,11 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ConfirmInline } from "@/components/ui/confirm-inline";
 import { CollapsibleSection } from "@/components/ui/collapsible-section";
 import { DescriptionItem, DescriptionList } from "@/components/ui/dl";
 import { ErrorState } from "@/components/ui/error-state";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TripMap } from "@/components/map/trip-map";
 import { CategoryPill } from "@/components/trips/category-pill";
@@ -55,9 +58,11 @@ import {
   QUALITY_FLAG_LABELS,
   TRIP_SOURCE_LABELS,
 } from "@/lib/labels";
+import { useUndoMergeOperation, useUndoSplit } from "@/lib/queries/review";
 import {
   useCalendarMatchChoice,
   useClearAllocation,
+  useDeleteJourney,
   useSplitTrip,
   useTripDetail,
   useUndoFeedback,
@@ -262,6 +267,7 @@ function Reasoning({ d }: { d: TripDetail }) {
 
 function RawTrips({ d, onAllocate }: { d: TripDetail; onAllocate: (raw: RawTrip) => void }) {
   const split = useSplitTrip();
+  const undoSplit = useUndoSplit();
   const clear = useClearAllocation();
   const router = useRouter();
   const merged = d.raw_trips.length > 1;
@@ -328,6 +334,26 @@ function RawTrips({ d, onAllocate }: { d: TripDetail; onAllocate: (raw: RawTrip)
                     <dt className="text-fg-muted">Ursprunglig kategori</dt>
                     <dd>{r.original_category ?? "–"}</dd>
                   </div>
+                  <div>
+                    <dt className="text-fg-muted">Mätarställning</dt>
+                    <dd className="num">
+                      {r.odometer_start != null || r.odometer_end != null ? (
+                        <>
+                          {r.odometer_start != null ? formatOdometer(r.odometer_start) : "–"} – {r.odometer_end != null ? formatOdometer(r.odometer_end) : "–"}
+                        </>
+                      ) : (
+                        <span className="text-fg-subtle">Saknas</span>
+                      )}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-fg-muted">Bensin / el</dt>
+                    <dd className="num">
+                      <QualityValue value={r.fuel_liters != null ? formatLiters(r.fuel_liters) : null} quality={r.fuel_quality} explanation={energyExplanation("fuel", r.fuel_quality)} />
+                      <span className="mx-1 text-fg-subtle">/</span>
+                      <QualityValue value={r.energy_kwh != null ? formatKwh(r.energy_kwh) : null} quality={r.energy_quality} explanation={energyExplanation("el", r.energy_quality)} />
+                    </dd>
+                  </div>
                   <div className="col-span-2">
                     <dt className="text-fg-muted">Originalanteckning</dt>
                     <dd className="break-words">{r.original_notes || r.original_title || <span className="text-fg-subtle">Ingen</span>}</dd>
@@ -353,7 +379,22 @@ function RawTrips({ d, onAllocate }: { d: TripDetail; onAllocate: (raw: RawTrip)
                         { id: d.trip.id, afterIndex: i },
                         {
                           onSuccess: (res) => {
-                            toast.success("Resan är delad i två.");
+                            toast.success("Resan är delad i två.", {
+                              action: {
+                                label: "Ångra",
+                                onClick: () =>
+                                  undoSplit.mutate(
+                                    res.map((x) => x.id),
+                                    {
+                                      onSuccess: (back) => {
+                                        toast.success("Uppdelningen är ångrad.");
+                                        if (back[0]) router.replace(`/journal/${back[0].id}`);
+                                      },
+                                      onError: (e) => toast.error(errorMessage(e)),
+                                    },
+                                  ),
+                              },
+                            });
                             if (res[0]) router.replace(`/journal/${res[0].id}`);
                           },
                           onError: (e) => toast.error(errorMessage(e)),
@@ -443,6 +484,7 @@ function HistorySection({ d }: { d: TripDetail }) {
 
 function MergeSection({ d }: { d: TripDetail }) {
   const unmerge = useUnmerge();
+  const undoOp = useUndoMergeOperation();
   const router = useRouter();
   const t = d.trip;
   if (t.segment_count <= 1 && !d.merged_from.length && !d.merge_operations.length) return null;
@@ -474,9 +516,29 @@ function MergeSection({ d }: { d: TripDetail }) {
         {d.merge_operations.length ? (
           <ul className="space-y-1 text-xs text-fg-muted">
             {d.merge_operations.map((op) => (
-              <li key={op.id}>
+              <li key={op.id} className="flex min-h-7 flex-wrap items-center gap-x-1">
                 <span className="num">{formatDateTime(op.created_at)}</span> · {label(MERGE_OPERATION_LABELS, op.operation)}
-                {op.undone_at ? " (ångrad)" : ""}
+                {op.undone_at ? " (ångrad)" : (
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    className="ml-1 text-fg-muted"
+                    loading={undoOp.isPending && undoOp.variables === op.id}
+                    disabled={undoOp.isPending}
+                    aria-label={`Ångra ${label(MERGE_OPERATION_LABELS, op.operation).toLowerCase()} ${formatDateTime(op.created_at)}`}
+                    onClick={() =>
+                      undoOp.mutate(op.id, {
+                        onSuccess: (res) => {
+                          toast.success("Åtgärden är ångrad.");
+                          if (res[0] && !res.some((x) => x.id === t.id)) router.replace(`/journal/${res[0].id}`);
+                        },
+                        onError: (e) => toast.error(errorMessage(e)),
+                      })
+                    }
+                  >
+                    <Undo2 aria-hidden /> Ångra
+                  </Button>
+                )}
               </li>
             ))}
           </ul>
@@ -488,8 +550,20 @@ function MergeSection({ d }: { d: TripDetail }) {
 
 function JourneySection({ d }: { d: TripDetail }) {
   const update = useUpdateJourney();
+  const dissolve = useDeleteJourney();
+  const [renaming, setRenaming] = React.useState(false);
+  const [name, setName] = React.useState("");
   const j = d.journey;
   if (!j) return null;
+  const saveName = (e: React.FormEvent) => {
+    e.preventDefault();
+    const next = name.trim();
+    if (!next || next === j.name) return setRenaming(false);
+    update.mutate(
+      { id: j.id, name: next },
+      { onSuccess: () => { toast.success("Namnet är ändrat."); setRenaming(false); }, onError: (err) => toast.error(errorMessage(err)) },
+    );
+  };
   return (
     <Card>
       <CardHeader className="pb-2">
@@ -499,21 +573,55 @@ function JourneySection({ d }: { d: TripDetail }) {
         <Badge tone={j.status === "confirmed" ? "ok" : "accent"}>{j.status === "confirmed" ? "Bekräftad" : "Förslag"}</Badge>
       </CardHeader>
       <CardContent className="space-y-2 text-sm">
-        <p className="font-medium">{j.name}</p>
+        {renaming ? (
+          <form onSubmit={saveName} className="flex flex-wrap items-center gap-2">
+            <Input
+              aria-label="Tjänsteresans namn"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              maxLength={200}
+              autoFocus
+              className="h-8 min-w-0 flex-1 basis-48"
+              onKeyDown={(e) => e.key === "Escape" && setRenaming(false)}
+            />
+            <Button type="submit" size="sm" variant="primary" loading={update.isPending} disabled={!name.trim()}>
+              Spara
+            </Button>
+            <Button type="button" size="sm" variant="ghost" onClick={() => setRenaming(false)}>
+              Avbryt
+            </Button>
+          </form>
+        ) : (
+          <p className="flex items-center gap-1 font-medium">
+            <span className="min-w-0 break-words">{j.name}</span>
+            <Button size="icon-xs" variant="ghost" className="text-fg-subtle" aria-label="Byt namn på tjänsteresan" title="Byt namn" onClick={() => { setName(j.name); setRenaming(true); }}>
+              <PenLine aria-hidden />
+            </Button>
+          </p>
+        )}
         {j.purpose ? <p className="text-fg-muted">{j.purpose}</p> : null}
         <p className="num text-xs text-fg-muted">
           {formatDate(j.started_at)} – {formatDate(j.ended_at)}
         </p>
-        <div className="flex gap-2 pt-1">
+        <div className="flex flex-wrap gap-2 pt-1">
           <Button size="sm" variant="ghost" asChild>
             <Link href={`/journal?journey=${j.id}`}>Visa alla resor</Link>
           </Button>
           {j.status !== "confirmed" ? (
-            <Button size="sm" variant="secondary" loading={update.isPending} onClick={() => update.mutate({ id: j.id, confirm: true }, { onSuccess: () => toast.success("Tjänsteresan är bekräftad."), onError: (e) => toast.error(errorMessage(e)) })}>
+            <Button size="sm" variant="secondary" loading={update.isPending && !renaming} onClick={() => update.mutate({ id: j.id, confirm: true }, { onSuccess: () => toast.success("Tjänsteresan är bekräftad."), onError: (e) => toast.error(errorMessage(e)) })}>
               Bekräfta
             </Button>
           ) : null}
         </div>
+        <ConfirmInline
+          label="Inte en tjänsteresa"
+          confirmLabel="Lös upp"
+          size="xs"
+          triggerClassName="-ml-2 text-fg-muted"
+          description="Grupperingen tas bort. Körningarna och deras klassning påverkas inte."
+          loading={dissolve.isPending}
+          onConfirm={() => dissolve.mutate(j.id, { onSuccess: () => toast.success("Tjänsteresan är upplöst."), onError: (e) => toast.error(errorMessage(e)) })}
+        />
       </CardContent>
     </Card>
   );

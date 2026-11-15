@@ -100,8 +100,17 @@ export function FilterButton({ filters, onChange }: { filters: JournalFilters; o
 }
 
 /** Aktiva filter som borttagbara chips. */
-export function ActiveFilterChips({ filters, onChange }: { filters: JournalFilters; onChange: (f: JournalFilters) => void }) {
+export function ActiveFilterChips({
+  filters,
+  onChange,
+  journeyName,
+}: {
+  filters: JournalFilters;
+  onChange: (f: JournalFilters) => void;
+  journeyName?: string;
+}) {
   const chips: { key: string; label: string; remove: () => void }[] = [];
+  if (filters.journey) chips.push({ key: "journey", label: `Tjänsteresa: ${journeyName ?? "vald"}`, remove: () => onChange({ ...filters, journey: "" }) });
   if (filters.period.key !== "all") {
     const text = filters.period.key === "custom" ? `${formatDate(filters.period.from)} – ${formatDate(filters.period.to)}` : periodLabel(filters.period.key);
     chips.push({ key: "period", label: text, remove: () => onChange({ ...filters, period: { key: "all" } }) });

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Any
 
 from sqlalchemy import select
@@ -46,6 +47,8 @@ _REVIEW_ORDER = {
 _EXACT = {TimeQuality.EXACT, TimeQuality.REPORTED}
 # Starttid som bara är en gräns (t.ex. endast datum i en import): räkna med gränserna.
 _UNCERTAIN_START = {TimeQuality.BOUNDED, TimeQuality.UNKNOWN}
+# Ett startintervall så brett som (ungefär) ett dygn säger ingenting om stilleståndet.
+_DAY_LEVEL_SPAN = timedelta(hours=12)
 
 
 @dataclass(frozen=True)
@@ -77,7 +80,9 @@ def stop_gap(prev: RawTrip, nxt: RawTrip) -> StopGap:
     odo_gap = None
     if prev.odometer_end is not None and nxt.odometer_start is not None:
         odo_gap = nxt.odometer_start - prev.odometer_end
-    if prev.ended_at is None:
+    if prev.ended_at is None or prev.end_time_quality in _UNCERTAIN_START:
+        # Sluttiden är bara en gräns (t.ex. endast datum i en import): underlaget säger
+        # ingenting om stilleståndet – varken automatisk sammanslagning eller fråga.
         return StopGap(None, None, False, odo_gap)
     if nxt.started_at is not None and nxt.start_time_quality not in _UNCERTAIN_START:
         minutes = (nxt.started_at - prev.ended_at).total_seconds() / 60
@@ -89,6 +94,9 @@ def stop_gap(prev: RawTrip, nxt: RawTrip) -> StopGap:
     # Faktisk starttid saknas: använd endast kända gränser, hitta inte på något.
     lo, hi = nxt.start_earliest, nxt.start_latest
     if lo is None and hi is None:
+        return StopGap(None, None, False, odo_gap)
+    if lo is not None and hi is not None and hi - lo >= _DAY_LEVEL_SPAN:
+        # Starttiden är bara känd till dygnet: stilleståndet är i praktiken okänt.
         return StopGap(None, None, False, odo_gap)
     low = max(0.0, (lo - prev.ended_at).total_seconds() / 60) if lo else 0.0
     high = max(0.0, (hi - prev.ended_at).total_seconds() / 60) if hi else None

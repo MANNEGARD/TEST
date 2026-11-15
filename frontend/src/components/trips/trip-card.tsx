@@ -16,7 +16,7 @@ import { ReviewStatusBadge } from "./review-status-badge";
 import { SourceBadge } from "./source-badge";
 import type { TripRowHandlers } from "./trip-table";
 import { distanceQualityNote } from "./trip-table";
-import { TripTime } from "./trip-time";
+import { listStartBounds, TripTime } from "./trip-time";
 
 /** Resa som kort (mobilvy av körjournalen). */
 export function TripCard({
@@ -42,7 +42,7 @@ export function TripCard({
           <span className="text-fg-subtle">{formatWeekday(when, true)}</span>
           <span className="font-medium text-fg num">{formatDate(when)}</span>
           <span className="truncate text-fg-muted num">
-            <TripTime at={t.started_at} quality={t.start_time_quality} />–<TripTime at={t.ended_at} quality={t.end_time_quality} />
+            <TripTime at={t.started_at} quality={t.start_time_quality} {...listStartBounds(t)} />–<TripTime at={t.ended_at} quality={t.end_time_quality} />
           </span>
         </Link>
         <span className="shrink-0 num text-[15px] font-semibold">

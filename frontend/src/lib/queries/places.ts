@@ -2,7 +2,7 @@
 
 import { useMutation, useQueries, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { api } from "../api";
-import type { Pattern, Place, PlaceInput, PlaceSuggestions, RuleInput } from "../places-types";
+import type { Pattern, PatternStatus, Place, PlaceInput, PlaceSuggestions, RuleInput } from "../places-types";
 import type { Feedback, Trip, TripDetail } from "../types";
 import { useVehicle } from "../vehicle";
 import { invalidateJournalData, qk } from "./keys";
@@ -13,6 +13,7 @@ import { invalidateJournalData, qk } from "./keys";
  *                                         PATCH/DELETE /locations/{id}, …/accept-suggestion,
  *                                         …/reject-suggestion, …/merge, …/aliases
  *   backend/app/api/routes/learning.py    GET /learning/patterns, POST /learning/rules,
+ *                                         PATCH /learning/patterns/{id} (status),
  *                                         DELETE /learning/patterns/{id}/rule,
  *                                         GET /learning/feedback, POST …/{id}/undo
  *
@@ -132,6 +133,15 @@ export function useCreateRule() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: RuleInput) => api.post<Pattern>("/learning/rules", body),
+    onSuccess: () => invalidatePlaces(qc),
+  });
+}
+
+/** Godkänn/avvisa ett inlärt mönster. Avvisade mönster används inte vid klassningen. */
+export function useSetPatternStatus() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, status }: { id: string; status: PatternStatus }) => api.patch<Pattern>(`/learning/patterns/${id}`, { status }),
     onSuccess: () => invalidatePlaces(qc),
   });
 }

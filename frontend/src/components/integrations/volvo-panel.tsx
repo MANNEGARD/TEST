@@ -29,6 +29,7 @@ import {
   useVolvoSync,
   useVolvoTestToken,
 } from "@/lib/queries/integrations";
+import { useSaveSettings, useSettingsPage } from "@/lib/queries/settings-page";
 import { useVehicle } from "@/lib/vehicle";
 import { ConfirmButton, CopyField, DemoBlock, DemoVehicleSwitch, Field, Note, notifyError, Section, SecretField, StatusNote, TimeAgo } from "./shared";
 
@@ -437,6 +438,85 @@ function VolvoDemo({ status }: { status: VolvoStatus }) {
   );
 }
 
+// ----------------------------------------------------------------------------- insamlingsintervall
+
+/** Gränser enligt backend/app/services/settings.py (volvo.poll_interval_seconds, min_poll_interval_seconds). */
+const POLL_MIN_MINUTES = 2;
+const POLL_MAX_MINUTES = 24 * 60;
+const POLL_DEFAULT_SECONDS = 300;
+
+/** "Hämta data var … minut" – sparas i volvo.poll_interval_seconds (PATCH /settings/volvo). */
+function PollInterval() {
+  const settings = useSettingsPage();
+  const save = useSaveSettings();
+  const volvo = settings.data?.settings.volvo as Record<string, unknown> | undefined;
+  const raw = volvo?.poll_interval_seconds;
+  const seconds = typeof raw === "number" ? raw : POLL_DEFAULT_SECONDS;
+  const floor = typeof volvo?.min_poll_interval_seconds === "number" ? volvo.min_poll_interval_seconds : 0;
+  const current = Math.round(Math.max(seconds, floor) / 60);
+  const [draft, setDraft] = React.useState<string | null>(null);
+  const value = draft ?? String(current);
+  const minutes = Number(value.replace(",", "."));
+  const invalid = !/^\d+$/.test(value.trim()) || minutes < POLL_MIN_MINUTES || minutes > POLL_MAX_MINUTES;
+  const dirty = draft !== null && !invalid && minutes !== current;
+
+  if (!settings.data) return null;
+
+  const store = (next: number, undo?: number) =>
+    save.mutate(
+      { volvo: { poll_interval_seconds: next * 60 } },
+      {
+        onSuccess: () => {
+          setDraft(null);
+          if (undo == null) return void toast.success("Ändringen är ångrad.");
+          toast.success(`DriveLog hämtar data från bilen var ${plural(next, "minut", "minuter")}.`, {
+            action: { label: "Ångra", onClick: () => store(undo) },
+          });
+        },
+        onError: notifyError,
+      },
+    );
+
+  return (
+    <form
+      className="flex flex-wrap items-end gap-x-3 gap-y-2 border-t border-border pt-3"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (dirty) store(minutes, current);
+      }}
+    >
+      <div className="space-y-1.5">
+        <Label htmlFor="volvo-poll">Hämta data var</Label>
+        <div className="flex items-center gap-2">
+          <Input
+            id="volvo-poll"
+            value={value}
+            onChange={(e) => setDraft(e.target.value)}
+            inputMode="numeric"
+            className="w-20 text-right"
+            aria-invalid={invalid || undefined}
+            aria-describedby="volvo-poll-hint"
+            autoComplete="off"
+          />
+          <span className="text-sm text-fg-muted">{minutes === 1 ? "minut" : "minuter"}</span>
+        </div>
+      </div>
+      {dirty ? (
+        <Button type="submit" size="sm" variant="secondary" loading={save.isPending}>
+          Spara
+        </Button>
+      ) : null}
+      {invalid ? (
+        <FieldError className="basis-full">{`Ange ett heltal mellan ${POLL_MIN_MINUTES} och ${POLL_MAX_MINUTES} minuter.`}</FieldError>
+      ) : (
+        <FieldHint id="volvo-poll-hint" className="basis-full">
+          {`Hur ofta bilens mätarställning och position hämtas. Kortast ${POLL_MIN_MINUTES} minuter, standard ${POLL_DEFAULT_SECONDS / 60}.`}
+        </FieldHint>
+      )}
+    </form>
+  );
+}
+
 // ----------------------------------------------------------------------------- panel
 
 export function VolvoPanel({ status }: { status: VolvoStatus }) {
@@ -555,6 +635,7 @@ export function VolvoPanel({ status }: { status: VolvoStatus }) {
           }
         >
           <CapabilityTable vehicle={linked} endpoints={status.endpoints} />
+          <PollInterval />
         </Section>
       ) : null}
 

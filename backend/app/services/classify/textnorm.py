@@ -86,6 +86,16 @@ def purpose_type(text: str | None) -> str:
     return Subcategory.OTHER
 
 
+def purpose_types(text: str | None) -> set[str]:
+    """Alla ärendetyper som texten anger (``purpose_type`` ger bara den första)."""
+    s = " " + fold(text) + " "
+    found = {kind for keywords, kind in _TYPE_RULES if any(k in s for k in keywords)}
+    # "kund", "kunden", "kunder" … påstår ett kundärende även utan ordet "kundbesök".
+    if any(fold(t).startswith("kund") for t in tokens(text)):
+        found.add(Subcategory.CUSTOMER_VISIT)
+    return found
+
+
 def named_tokens(text: str | None) -> list[str]:
     """Egennamnsliknande ord: versal inne i meningen, versalord, ord med siffror.
 

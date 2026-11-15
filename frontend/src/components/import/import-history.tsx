@@ -130,7 +130,9 @@ function BatchRow({
   const status = statusBadge(batch);
   const n = tripCount(batch);
   const isPreview = batch.status === "preview";
-  const downloadable = files.filter((f) => f.status !== "error");
+  // "stored" saknas i äldre backend – då visas filen och ett 404 förklaras vid hämtningen.
+  const downloadable = files.filter((f) => f.status !== "error" && f.stored !== false);
+  const hasActions = downloadable.length > 0 || isPreview || batch.status === "committed";
   const fileNames = files.map((f) => f.filename).join(", ");
 
   return (
@@ -160,47 +162,51 @@ function BatchRow({
           <Play aria-hidden /> Fortsätt
         </Button>
       ) : null}
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button size="icon-sm" variant="ghost" aria-label={`Åtgärder för importen ${formatDate(batch.committed_at ?? batch.created_at)}`} className="shrink-0" loading={discarding}>
-            {discarding ? null : <MoreHorizontal aria-hidden />}
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="max-w-[min(20rem,calc(100vw-2rem))]">
-          {downloadable.length ? (
-            <>
-              <DropdownMenuLabel>{downloadable.length === 1 ? "Hämta originalfil" : "Hämta originalfiler"}</DropdownMenuLabel>
-              {downloadable.map((f) => (
-                <DropdownMenuItem
-                  key={f.id}
-                  onSelect={() => {
-                    downloadImportFile(batch.id, f.id, f.filename).catch((e) =>
-                      toast.error(e instanceof ApiError && e.status === 404 ? "Originalfilen finns inte längre – den har raderats." : errorMessage(e)),
-                    );
-                  }}
-                >
-                  <Download aria-hidden /> <span className="truncate">{f.filename}</span>
-                </DropdownMenuItem>
-              ))}
-              <DropdownMenuSeparator />
-            </>
-          ) : null}
-          {isPreview ? (
-            <DropdownMenuItem onSelect={onDiscard} destructive>
-              <Trash2 aria-hidden /> Släng förhandsgranskningen
-            </DropdownMenuItem>
-          ) : (
-            <DropdownMenuItem onSelect={onDeleteFiles}>
-              <FileX2 aria-hidden /> Radera originalfiler
-            </DropdownMenuItem>
-          )}
-          {batch.status === "committed" ? (
-            <DropdownMenuItem onSelect={onUndo} destructive data-testid="import-undo">
-              <Undo2 aria-hidden /> Ångra import
-            </DropdownMenuItem>
-          ) : null}
-        </DropdownMenuContent>
-      </DropdownMenu>
+      {/* Inget att göra (t.ex. ångrad import utan sparade filer): platshållare håller kolumnerna i linje. */}
+      {!hasActions ? <span className="size-8 shrink-0" aria-hidden /> : null}
+      {hasActions ? (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button size="icon-sm" variant="ghost" aria-label={`Åtgärder för importen ${formatDate(batch.committed_at ?? batch.created_at)}`} className="shrink-0" loading={discarding}>
+              {discarding ? null : <MoreHorizontal aria-hidden />}
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="max-w-[min(20rem,calc(100vw-2rem))]">
+            {downloadable.length ? (
+              <>
+                <DropdownMenuLabel>{downloadable.length === 1 ? "Hämta originalfil" : "Hämta originalfiler"}</DropdownMenuLabel>
+                {downloadable.map((f) => (
+                  <DropdownMenuItem
+                    key={f.id}
+                    onSelect={() => {
+                      downloadImportFile(batch.id, f.id, f.filename).catch((e) =>
+                        toast.error(e instanceof ApiError && e.status === 404 ? "Originalfilen finns inte längre – den har raderats." : errorMessage(e)),
+                      );
+                    }}
+                  >
+                    <Download aria-hidden /> <span className="truncate">{f.filename}</span>
+                  </DropdownMenuItem>
+                ))}
+                <DropdownMenuSeparator />
+              </>
+            ) : null}
+            {isPreview ? (
+              <DropdownMenuItem onSelect={onDiscard} destructive>
+                <Trash2 aria-hidden /> Släng förhandsgranskningen
+              </DropdownMenuItem>
+            ) : downloadable.length ? (
+              <DropdownMenuItem onSelect={onDeleteFiles}>
+                <FileX2 aria-hidden /> Radera originalfiler
+              </DropdownMenuItem>
+            ) : null}
+            {batch.status === "committed" ? (
+              <DropdownMenuItem onSelect={onUndo} destructive data-testid="import-undo">
+                <Undo2 aria-hidden /> Ångra import
+              </DropdownMenuItem>
+            ) : null}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      ) : null}
     </li>
   );
 }

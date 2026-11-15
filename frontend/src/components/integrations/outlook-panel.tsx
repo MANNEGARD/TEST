@@ -150,13 +150,14 @@ export function OutlookPanel({ status }: { status: MicrosoftStatus }) {
   const demo = useMicrosoftDemo();
   const sync = useMicrosoftSyncAction();
   const [redirecting, setRedirecting] = React.useState(false);
+  const [forgetApp, setForgetApp] = React.useState(false);
 
   const hasApp = !!status.config.client_id && !!status.has_secrets.client_secret;
   const [editing, setEditing] = React.useState(!hasApp);
   const connected = status.status === "connected";
   const hasAccount = connected || status.status === "error";
   const isDemo = status.status === "demo";
-  // Bortkoppling raderar tokens och kalenderhändelser; appens uppgifter behålls av backend.
+  // Bortkoppling raderar tokens och kalenderhändelser; appens uppgifter behålls om inte "Glöm även appuppgifterna" väljs.
   const canDisconnect = hasAccount || status.status === "needs_reauth";
 
   const startConnect = () =>
@@ -262,6 +263,20 @@ export function OutlookPanel({ status }: { status: MicrosoftStatus }) {
             {status.stores_body_preview ? " samt en kort förhandsvisning av brödtexten" : ""} – kalendern är en ledtråd, aldrig ett facit.
           </p>
         </Note>
+        {!isDemo && (status.demo_events ?? 0) > 0 ? (
+          <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-fg-muted" data-testid="outlook-demo-leftovers">
+            {plural(status.demo_events ?? 0, "påhittat demomöte finns", "påhittade demomöten finns")} kvar från demoläget.
+            <Button
+              size="xs"
+              variant="ghost"
+              className="-ml-1"
+              loading={demo.isPending}
+              onClick={() => demo.mutate(false, { onSuccess: () => toast.success("Demomötena är borttagna."), onError: notifyError })}
+            >
+              Ta bort dem
+            </Button>
+          </p>
+        ) : null}
       </Section>
 
       <DemoBlock
@@ -296,13 +311,37 @@ export function OutlookPanel({ status }: { status: MicrosoftStatus }) {
             icon={<Unplug aria-hidden />}
             label="Koppla bort Outlook"
             confirmLabel="Ja, koppla bort"
-            description="Tokens och alla sparade kalenderhändelser raderas, och kalenderträffarna på resorna försvinner. Resorna finns kvar, och appens uppgifter i steg 1 behålls så att du kan ansluta igen."
+            description={
+              <>
+                Tokens och alla sparade kalenderhändelser raderas, och kalenderträffarna på resorna försvinner. Resorna finns kvar
+                {forgetApp ? "." : ", och appens uppgifter i steg 1 behålls så att du kan ansluta igen."}
+                {hasApp ? (
+                  <span className="mt-2.5 flex items-center gap-2">
+                    <Checkbox id="outlook-forget-app" checked={forgetApp} onCheckedChange={(v) => setForgetApp(v === true)} />
+                    <label htmlFor="outlook-forget-app" className="text-[13px] text-fg">
+                      Glöm även appuppgifterna (applikations-ID och klienthemlighet)
+                    </label>
+                  </span>
+                ) : null}
+              </>
+            }
             loading={disconnect.isPending}
             onConfirm={() =>
-              disconnect.mutate(undefined, {
-                onSuccess: () => toast.success("Outlook är bortkopplat. Tokens och kalenderhändelser är raderade."),
-                onError: notifyError,
-              })
+              disconnect.mutate(
+                { forgetApp },
+                {
+                  onSuccess: () => {
+                    if (forgetApp) setEditing(true);
+                    setForgetApp(false);
+                    toast.success(
+                      forgetApp
+                        ? "Outlook är bortkopplat. Tokens, kalenderhändelser och appens uppgifter är raderade."
+                        : "Outlook är bortkopplat. Tokens och kalenderhändelser är raderade.",
+                    );
+                  },
+                  onError: notifyError,
+                },
+              )
             }
           />
         </Section>

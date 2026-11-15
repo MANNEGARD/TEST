@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Briefcase, Home } from "lucide-react";
+import { Briefcase, CircleHelp, Home } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -15,17 +15,17 @@ import { useCreateRule } from "@/lib/queries/places";
 export interface RulePreset {
   originId?: string | null;
   destinationId?: string;
-  category?: "work" | "private" | null;
+  category?: "work" | "private" | "undecided" | null;
   purpose?: string | null;
 }
 
-type CategoryChoice = "work" | "private" | "none";
+type CategoryChoice = "work" | "private" | "undecided" | "none";
 const ANY = "any";
 
 /**
  * Skapar en manuell regel (POST /learning/rules): resor till en plats – eller en
- * rutt, om "endast från" väljs – klassas alltid som Arbete/Privat och/eller får ett
- * standardsyfte. En befintlig regel för samma plats/rutt ersätts.
+ * rutt, om "endast från" väljs – klassas alltid som Arbete/Privat, föreslås aldrig
+ * automatiskt ("Fråga mig alltid" = category "undecided") och/eller får ett standardsyfte. En befintlig regel för samma plats/rutt ersätts.
  */
 export function RuleDialog({
   open,
@@ -126,23 +126,32 @@ function RuleForm({ places, preset, onDone }: { places: Place[]; preset?: RulePr
       </div>
       <div className="space-y-1.5">
         <p id="rule-category-label" className="text-[13px] font-medium">
-          Klassa alltid som
+          Kategori för resorna
         </p>
         <SegmentedControl<CategoryChoice>
-          ariaLabel="Klassa alltid som"
+          ariaLabel="Kategori för resorna"
           size="lg"
-          className="w-full [&>button]:flex-1"
+          className="grid w-full grid-cols-2"
           value={category}
           onChange={(v) => {
             setCategory(v);
             setError(null);
           }}
           options={[
-            { value: "work", label: "Arbete", icon: <Briefcase aria-hidden />, activeClassName: "data-[state=on]:bg-work-soft data-[state=on]:text-work-ink" },
-            { value: "private", label: "Privat", icon: <Home aria-hidden />, activeClassName: "data-[state=on]:bg-private-soft data-[state=on]:text-private-ink" },
-            { value: "none", label: "Ingen", title: "Regeln sätter bara ett standardsyfte" },
+            { value: "work", label: "Alltid arbete", icon: <Briefcase aria-hidden />, activeClassName: "data-[state=on]:bg-work-soft data-[state=on]:text-work-ink" },
+            { value: "private", label: "Alltid privat", icon: <Home aria-hidden />, activeClassName: "data-[state=on]:bg-private-soft data-[state=on]:text-private-ink" },
+            {
+              value: "undecided",
+              label: "Fråga mig alltid",
+              icon: <CircleHelp aria-hidden />,
+              activeClassName: "data-[state=on]:bg-undecided-soft data-[state=on]:text-undecided-ink",
+            },
+            { value: "none", label: "Ingen kategori", title: "Regeln sätter bara ett standardsyfte" },
           ]}
         />
+        {category === "undecided" ? (
+          <FieldHint>Resorna klassas aldrig automatiskt – du får alltid frågan om arbete eller privat.</FieldHint>
+        ) : null}
       </div>
       <div className="space-y-1.5">
         <Label htmlFor="rule-purpose">

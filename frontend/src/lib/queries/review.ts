@@ -77,3 +77,24 @@ export function useUndoMergeOperation() {
     onSuccess: () => invalidateJournalData(qc),
   });
 }
+
+/**
+ * Ångra en uppdelning ("Dela resan här") direkt från kvittot. Split-svaret innehåller inte
+ * operationens id, så det slås upp i loggen (GET /merges) via de två nya resornas id:n.
+ */
+export function useUndoSplit() {
+  const qc = useQueryClient();
+  const { vehicleId } = useVehicle();
+  return useMutation({
+    mutationFn: async (resultTripIds: string[]) => {
+      const ops = await api.get<{ id: string; operation: string; result_trip_ids: string[] | null; undone_at: string | null }[]>(
+        "/merges",
+        { query: { vehicle_id: vehicleId, limit: 20 } },
+      );
+      const op = ops.find((o) => o.operation === "split" && !o.undone_at && resultTripIds.every((id) => o.result_trip_ids?.includes(id)));
+      if (!op) throw new Error("Uppdelningen hittades inte i loggen.");
+      return api.post<Trip[]>(`/merges/${op.id}/undo`);
+    },
+    onSuccess: () => invalidateJournalData(qc),
+  });
+}

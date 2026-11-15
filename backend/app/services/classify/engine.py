@@ -519,13 +519,16 @@ def _assess(
                 )
             requires_review = requires_review or (data["requires_review"] and rules.category == Category.UNDECIDED)
 
-            # Genererat syfte: endast om alla namn är belagda i underlaget.
+            # Genererat syfte: endast om alla namn är belagda i underlaget och ärendetypen
+            # (kundbesök, möte, personalärende …) har stöd i underlaget.
             if category == Category.WORK and data["purpose"]:
                 keep_rule = proposal is not None and not (
                     proposal.based_on.get("insufficient") or proposal.based_on.get("calendar_event_id")
                 )
                 if not keep_rule:
-                    ok, missing = purpose_mod.validate_generated(data["purpose"], ctx)
+                    ok, missing = purpose_mod.validate_generated(
+                        data["purpose"], ctx, rules=rules, rule_proposal=proposal
+                    )
                     if ok:
                         proposal = PurposeProposal(
                             text=textnorm.sentence(data["purpose"]),

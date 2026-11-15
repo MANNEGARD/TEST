@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { ArrowRight, Brain, Plus, Trash2, Undo2 } from "lucide-react";
+import { ArrowRight, Ban, Brain, CircleHelp, Plus, RotateCcw, Trash2, Undo2 } from "lucide-react";
 import { toast } from "sonner";
 import { CategoryPill } from "@/components/trips/category-pill";
 import { Badge } from "@/components/ui/badge";
@@ -14,8 +14,8 @@ import { SegmentedControl } from "@/components/ui/segmented-control";
 import { SkeletonBlock } from "@/components/ui/skeleton";
 import { errorMessage } from "@/lib/api";
 import { formatDate, formatNumber, formatRelative, plural } from "@/lib/format";
-import type { Pattern, Place } from "@/lib/places-types";
-import { useCorrections, useCreateRule, useDeleteRule, usePatterns, useTripsById, useUndoCorrection } from "@/lib/queries/places";
+import type { Pattern, PatternStatus, Place } from "@/lib/places-types";
+import { useCorrections, useCreateRule, useDeleteRule, usePatterns, useSetPatternStatus, useTripsById, useUndoCorrection } from "@/lib/queries/places";
 import type { Feedback, Trip } from "@/lib/types";
 import { RuleDialog, type RulePreset } from "./rule-dialog";
 import { useReturnFocus } from "./use-return-focus";
@@ -86,8 +86,32 @@ function PatternsCard({ query, onRule }: { query: ReturnType<typeof usePatterns>
   const [kind, setKind] = React.useState<"destination" | "route">("destination");
   const [showAll, setShowAll] = React.useState(false);
   const all = React.useMemo(() => (query.data ?? []).filter((p) => p.confirmed_work + p.confirmed_private + p.imported_work + p.imported_private > 0), [query.data]);
-  const rows = all.filter((p) => (kind === "route" ? p.pattern_type === "route" : p.pattern_type !== "route"));
-  const visible = showAll ? rows : rows.slice(0, INITIAL_PATTERNS);
+  // Avvisade mönster sist (stabil sortering behåller backendens ordning i övrigt).
+  const rows = all
+    .filter((p) => (kind === "route" ? p.pattern_type === "route" : p.pattern_type !== "route"))
+    .sort((a, b) => Number(a.status === "rejected") - Number(b.status === "rejected"));
+  const active = rows.filter((p) => p.status !== "rejected").length;
+  // Avvisade mönster visas bara under "Visa alla".
+  const visible = showAll ? rows : rows.slice(0, Math.min(INITIAL_PATTERNS, active));
+  const setStatus = useSetPatternStatus();
+  const changeStatus = (p: Pattern, status: PatternStatus) => {
+    const before = p.status as PatternStatus;
+    const name = patternName(p);
+    void setStatus.mutateAsync({ id: p.id, status }).then(
+      () =>
+        toast.success(status === "rejected" ? `Mönstret för ${name} används inte längre.` : `Mönstret för ${name} används igen.`, {
+          action: {
+            label: "Ångra",
+            onClick: () =>
+              void setStatus.mutateAsync({ id: p.id, status: before }).then(
+                () => toast.success("Ändringen är ångrad."),
+                (e) => toast.error(errorMessage(e)),
+              ),
+          },
+        }),
+      (e) => toast.error(errorMessage(e)),
+    );
+  };
 
   return (
     <Card className="overflow-hidden" data-testid="patterns-card">
@@ -135,13 +159,21 @@ function PatternsCard({ query, onRule }: { query: ReturnType<typeof usePatterns>
         <>
           <ul className="divide-y divide-border border-t border-border">
             {visible.map((p) => (
-              <PatternRow key={p.id} pattern={p} onRule={onRule} />
+              <PatternRow
+                key={p.id}
+                pattern={p}
+                onRule={onRule}
+                onStatus={(status) => changeStatus(p, status)}
+                busy={setStatus.isPending && setStatus.variables?.id === p.id}
+              />
             ))}
           </ul>
-          {rows.length > INITIAL_PATTERNS ? (
+          {rows.length > visible.length || showAll ? (
             <div className="border-t border-border px-4 py-2 sm:px-5">
               <Button variant="ghost" size="sm" className="-ml-2" onClick={() => setShowAll(!showAll)} aria-expanded={showAll}>
-                {showAll ? "Visa färre" : `Visa alla ${formatNumber(rows.length, 0)}`}
+                {showAll
+                  ? "Visa färre"
+                  : `Visa alla ${formatNumber(rows.length, 0)}${rows.length > active ? ` (${formatNumber(rows.length - active, 0)} används inte)` : ""}`}
               </Button>
             </div>
           ) : null}
@@ -151,7 +183,18 @@ function PatternsCard({ query, onRule }: { query: ReturnType<typeof usePatterns>
   );
 }
 
-function PatternRow({ pattern: p, onRule }: { pattern: Pattern; onRule: (preset: RulePreset) => void }) {
+function PatternRow({
+  pattern: p,
+  onRule,
+  onStatus,
+  busy,
+}: {
+  pattern: Pattern;
+  onRule: (preset: RulePreset) => void;
+  onStatus: (status: PatternStatus) => void;
+  busy: boolean;
+}) {
+  const rejected = p.status === "rejected";
   const work = p.confirmed_work + p.imported_work;
   const priv = p.confirmed_private + p.imported_private;
   const confirmed = p.confirmed_work + p.confirmed_private;
@@ -166,9 +209,20 @@ function PatternRow({ pattern: p, onRule }: { pattern: Pattern; onRule: (preset:
   const purposes = p.purposes.slice(0, 3);
 
   return (
-    <li className="flex flex-col gap-2 px-4 py-3.5 sm:flex-row sm:items-start sm:gap-4 sm:px-5" data-testid="pattern-row">
-      <div className="min-w-0 flex-1">
-        <p className="text-sm font-medium break-words">{patternTitle(p)}</p>
+    <li className="flex flex-col gap-2 px-4 py-3.5 sm:flex-row sm:items-start sm:gap-4 sm:px-5" data-testid="pattern-row" data-status={p.status}>
+      <div className={rejected ? "min-w-0 flex-1 opacity-60" : "min-w-0 flex-1"}>
+        <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-medium break-words">
+          <span className="min-w-0">{patternTitle(p)}</span>
+          {rejected ? (
+            <Badge tone="neutral" size="sm">
+              Används inte
+            </Badge>
+          ) : p.status === "approved" && !p.is_manual_rule ? (
+            <Badge tone="ok" size="sm">
+              Godkänt
+            </Badge>
+          ) : null}
+        </p>
         <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-fg-muted num">
           <Badge tone={work ? "work" : "outline"} size="sm">
             Arbete {formatNumber(work, 0)}
@@ -186,27 +240,43 @@ function PatternRow({ pattern: p, onRule }: { pattern: Pattern; onRule: (preset:
           </p>
         ) : null}
       </div>
-      {p.is_manual_rule ? (
-        <Badge tone="accent" className="self-start">
-          Har regel
-        </Badge>
-      ) : (
-        <Button
-          size="xs"
-          variant="ghost"
-          className="-ml-2 self-start sm:ml-0"
-          onClick={() =>
-            onRule({
-              destinationId: p.destination_location_id,
-              originId: p.pattern_type === "route" ? p.origin_location_id : null,
-              category: priv > work ? "private" : "work",
-            })
-          }
-          aria-label={`Skapa regel för ${patternName(p)}`}
-        >
-          <Plus aria-hidden /> Regel
-        </Button>
-      )}
+      <div className="-ml-2 flex shrink-0 items-center gap-1 self-start sm:ml-0">
+        {p.is_manual_rule ? (
+          <Badge tone="accent">Har regel</Badge>
+        ) : rejected ? (
+          <Button size="xs" variant="ghost" onClick={() => onStatus("approved")} disabled={busy} aria-label={`Använd mönstret för ${patternName(p)} igen`}>
+            <RotateCcw aria-hidden /> Använd igen
+          </Button>
+        ) : (
+          <>
+            <Button
+              size="xs"
+              variant="ghost"
+              onClick={() =>
+                onRule({
+                  destinationId: p.destination_location_id,
+                  originId: p.pattern_type === "route" ? p.origin_location_id : null,
+                  category: priv > work ? "private" : "work",
+                })
+              }
+              aria-label={`Skapa regel för ${patternName(p)}`}
+            >
+              <Plus aria-hidden /> Regel
+            </Button>
+            <Button
+              size="xs"
+              variant="ghost"
+              className="text-fg-muted"
+              onClick={() => onStatus("rejected")}
+              disabled={busy}
+              title="Mönstret används inte längre för att föreslå kategori och syfte"
+              aria-label={`Använd inte mönstret för ${patternName(p)}`}
+            >
+              <Ban aria-hidden /> Använd inte
+            </Button>
+          </>
+        )}
+      </div>
     </li>
   );
 }
@@ -230,7 +300,8 @@ function RulesCard({ query, onNew, canCreate }: { query: ReturnType<typeof usePa
                 .mutateAsync({
                   destination_location_id: p.destination_location_id,
                   origin_location_id: p.pattern_type === "route" ? p.origin_location_id : null,
-                  category: p.manual_category === "work" || p.manual_category === "private" ? p.manual_category : null,
+                  category:
+                    p.manual_category === "work" || p.manual_category === "private" || p.manual_category === "undecided" ? p.manual_category : null,
                   purpose: p.manual_purpose,
                 })
                 .then(
@@ -268,7 +339,11 @@ function RulesCard({ query, onNew, canCreate }: { query: ReturnType<typeof usePa
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-medium break-words">{p.pattern_type === "route" ? patternTitle(p) : <>Till {p.destination_name ?? "okänd plats"}</>}</p>
                 <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-fg-muted">
-                  {p.manual_category ? (
+                  {p.manual_category === "undecided" ? (
+                    <Badge tone="undecided" size="sm">
+                      <CircleHelp aria-hidden /> Fråga mig alltid
+                    </Badge>
+                  ) : p.manual_category ? (
                     <>
                       alltid <CategoryPill category={p.manual_category} size="sm" />
                     </>
