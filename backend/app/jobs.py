@@ -1,15 +1,27 @@
 """Tunn abstraktion över bakgrundskön (Celery).
 
-Tjänstekod anropar ``enqueue("namn", **kwargs)``. I test/utveckling utan Redis
-(DRIVELOG_JOBS_EAGER=true) körs jobbet direkt i processen efter aktuell transaktion.
-Jobbfunktionerna registreras i ``app.worker.tasks``.
+Tjänstekod anropar ``enqueue("namn", **kwargs)``. Jobbfunktionerna registreras i
+``app.worker.tasks``.
+
+* Compose-driften: jobbet skickas till Celery via Redis.
+* Testsviten: jobbet körs direkt i anropet.
+* Enprocessläget (DRIVELOG_JOBS_EAGER=true, t.ex. Home Assistant-tillägget): jobbet körs i
+  den tråd som begär det. Har tråden en databassession med en öppen skrivtransaktion skjuts
+  jobbet upp tills den transaktionen är avslutad – annars skulle jobbets egen session vänta
+  på ett skrivlås som den anropande tråden själv håller ("database is locked" med SQLite).
 """
 
 from __future__ import annotations
 
 import logging
+import threading
+import weakref
 from collections.abc import Callable
 from typing import Any
+
+from sqlalchemy import event
+from sqlalchemy.engine import Connection
+from sqlalchemy.orm import Session, SessionTransaction
 
 from app.config import get_config
 
@@ -17,6 +29,8 @@ logger = logging.getLogger(__name__)
 
 _registry: dict[str, Callable[..., Any]] = {}
 _test_queue: list[tuple[str, dict[str, Any]]] | None = None
+
+_DEFERRED_KEY = "drivelog_deferred_jobs"
 
 
 def register(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
@@ -38,23 +52,87 @@ def capture_for_tests(enable: bool = True) -> list[tuple[str, dict[str, Any]]]:
     return _test_queue if _test_queue is not None else []
 
 
+# --------------------------------------------------------------------------- sessionsbevakning
+# Varje tråd håller reda på sina sessioner som har en databasanslutning i en pågående
+# transaktion, så att enqueue() kan avgöra om tråden själv håller ett skrivlås.
+
+_local = threading.local()
+
+
+def _thread_sessions() -> weakref.WeakKeyDictionary[Session, Connection]:
+    conns = getattr(_local, "conns", None)
+    if conns is None:
+        conns = weakref.WeakKeyDictionary()
+        _local.conns = conns
+    return conns
+
+
+@event.listens_for(Session, "after_begin")
+def _track_begin(session: Session, transaction: SessionTransaction, connection: Connection) -> None:
+    _thread_sessions()[session] = connection
+
+
+@event.listens_for(Session, "after_transaction_end")
+def _track_end(session: Session, transaction: SessionTransaction) -> None:
+    if transaction.parent is not None:  # SAVEPOINT eller inre transaktion
+        return
+    _thread_sessions().pop(session, None)
+    pending = session.info.pop(_DEFERRED_KEY, None)
+    for name, kwargs in pending or ():
+        _run_now(name, kwargs)
+
+
+def _holds_write_lock(connection: Connection) -> bool:
+    """Har anslutningen en öppen skrivtransaktion i databasen?"""
+    try:
+        if connection.closed or connection.invalidated:
+            return False
+        dbapi = connection.connection.dbapi_connection
+    except Exception:
+        return False
+    # sqlite3 inleder transaktionen först vid första ändringen: in_transaction är då sant.
+    return bool(getattr(dbapi, "in_transaction", False))
+
+
+def _session_with_write_lock() -> Session | None:
+    for session, connection in list(_thread_sessions().items()):
+        if connection.dialect.name == "sqlite" and _holds_write_lock(connection):
+            return session
+    return None
+
+
+# --------------------------------------------------------------------------- körning
+
+
+def _run_now(name: str, kwargs: dict[str, Any]) -> None:
+    import app.worker.tasks  # noqa: F401 - registrerar jobben
+
+    fn = _registry.get(name)
+    if fn is None:
+        logger.warning("Okänt jobb: %s", name)
+        return
+    try:
+        fn(**kwargs)
+    except Exception:
+        logger.exception("Jobbet %s misslyckades", name)
+
+
 def enqueue(name: str, *, countdown: int | None = None, **kwargs: Any) -> None:
     """Köar ett bakgrundsjobb. Fel vid köläggning får aldrig fälla anropet."""
     if _test_queue is not None:
         _test_queue.append((name, kwargs))
         return
     cfg = get_config()
-    if cfg.jobs_eager or cfg.environment == "test":
-        import app.worker.tasks  # noqa: F401 - registrerar jobben
-
-        fn = _registry.get(name)
-        if fn is None:
-            logger.warning("Okänt jobb: %s", name)
+    if cfg.jobs_eager:
+        owner = _session_with_write_lock()
+        if owner is not None:
+            # Körs när den anropande transaktionen är klar (commit, rollback eller close).
+            owner.info.setdefault(_DEFERRED_KEY, []).append((name, kwargs))
             return
-        try:
-            fn(**kwargs)
-        except Exception:
-            logger.exception("Jobbet %s misslyckades", name)
+        _run_now(name, kwargs)
+        return
+    if cfg.environment == "test":
+        _run_now(name, kwargs)
         return
     try:
         from app.worker.celery_app import celery

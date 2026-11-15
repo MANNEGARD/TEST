@@ -28,10 +28,22 @@ def init_schema() -> None:
     Base.metadata.create_all(get_engine())
 
 
+class BootstrapError(RuntimeError):
+    """DRIVELOG_FIRST_ADMIN_* är ogiltiga; API:t startar inte (installationen lämnas inte öppen)."""
+
+
 def bootstrap_admin() -> None:
-    """Skapar första administratören från miljövariabler, om angivet och inga konton finns."""
+    """Skapar första administratören från miljövariabler, om angivet och inga konton finns.
+
+    Körs vid uppstart innan API:t tar emot anrop. Finns redan ett konto görs ingenting.
+    Är uppgifterna ogiltiga (t.ex. för svagt lösenord) avbryts uppstarten med ett tydligt
+    fel i loggen – annars skulle installationen stå öppen för vem som helst att ta över
+    via förstagångsinställningen. Lösenordet skrivs aldrig ut.
+    """
     cfg = get_config()
-    if not (cfg.first_admin_email and cfg.first_admin_password):
+    email_raw = (cfg.first_admin_email or "").strip()
+    password = cfg.first_admin_password or ""
+    if not email_raw and not password:
         return
     from app.models import User
     from app.security import passwords
@@ -40,10 +52,21 @@ def bootstrap_admin() -> None:
     with session_scope() as db:
         if (db.scalar(select(func.count()).select_from(User)) or 0) > 0:
             return
+        if not email_raw or not password:
+            raise BootstrapError(
+                "Både DRIVELOG_FIRST_ADMIN_EMAIL och DRIVELOG_FIRST_ADMIN_PASSWORD måste anges för att skapa "
+                "första kontot."
+            )
+        email = email_raw.lower()
+        if "@" not in email or email.startswith("@") or email.endswith("@") or " " in email:
+            raise BootstrapError("DRIVELOG_FIRST_ADMIN_EMAIL är inte en giltig e-postadress.")
+        problem = passwords.validate_password_strength(password)
+        if problem:
+            raise BootstrapError(f"DRIVELOG_FIRST_ADMIN_PASSWORD duger inte: {problem}")
         user = User(
-            email=cfg.first_admin_email.strip().lower(),
-            display_name=cfg.first_admin_email.split("@")[0],
-            password_hash=passwords.hash_password(cfg.first_admin_password),
+            email=email,
+            display_name=email.split("@")[0],
+            password_hash=passwords.hash_password(password),
             is_admin=True,
         )
         db.add(user)
@@ -53,39 +76,27 @@ def bootstrap_admin() -> None:
         logger.info("Första administratörskontot skapades från miljövariabler.")
 
 
-def _start_dev_ticker():
-    """Utvecklingsläge utan Redis (DRIVELOG_JOBS_EAGER=true): kör de schemalagda jobben i en
-    bakgrundstråd så att insamling, demoläge och notiser fungerar även utan worker och beat.
-    I drift sköts detta av Celery beat – tråden startas aldrig där."""
-    import threading
+def start_scheduler():
+    """Enprocessläget: startar schemaläggaren i API-processen (se app.scheduler).
 
-    cfg = get_config()
-    if not cfg.jobs_eager or cfg.environment in ("test", "production"):
+    I Compose-driften sköter Celery beat schemat och i testsviten styrs jobben av testerna –
+    där startas ingen tråd.
+    """
+    if not get_config().single_process:
         return None
-    stop = threading.Event()
+    from app import scheduler
 
-    def loop() -> None:
-        from app.worker import tasks
+    sched = scheduler.from_config()
+    sched.start()
+    return sched
 
-        minutes = 0
-        while not stop.wait(60):
-            minutes += 1
-            try:
-                tasks.tick()
-                if minutes % 15 == 0:
-                    tasks.calendar_sync_due()
-                if minutes % (24 * 60) == 0:
-                    tasks.maintenance()
-            except Exception:
-                logger.exception("Schemalagt jobb misslyckades")
 
-    threading.Thread(target=loop, name="drivelog-dev-ticker", daemon=True).start()
-    logger.info("Utvecklingsläge: schemalagda jobb körs i API-processen.")
-    return stop
+_scheduler = None
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    global _scheduler
     cfg = get_config()
     configure_logging()
     problems = cfg.validate_for_production()
@@ -93,15 +104,23 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         for p in problems:
             logger.error("Konfigurationsfel: %s", p)
         raise RuntimeError("Osäker produktionskonfiguration: " + " ".join(problems))
+    logger.info("%s.", cfg.mode_description())
     for d in (cfg.data_dir, cfg.uploads_dir, cfg.exports_dir, cfg.backups_dir):
         d.mkdir(parents=True, exist_ok=True)
     if not cfg.is_production:
         init_schema()
-    bootstrap_admin()
-    stop = _start_dev_ticker()
-    yield
-    if stop is not None:
-        stop.set()
+    try:
+        bootstrap_admin()
+    except BootstrapError as exc:
+        logger.error("Första kontot kunde inte skapas: %s API:t startas inte.", exc)
+        raise
+    _scheduler = start_scheduler()
+    try:
+        yield
+    finally:
+        if _scheduler is not None:
+            _scheduler.stop()
+            _scheduler = None
 
 
 def create_app() -> FastAPI:
@@ -162,7 +181,10 @@ def create_app() -> FastAPI:
         except Exception:
             checks["database"] = "error"
         if cfg.jobs_eager or cfg.environment == "test":
+            # Enprocessläget: ingen kö att fråga (Redis används inte).
             checks["queue"] = "eager"
+            if cfg.single_process:
+                checks["scheduler"] = "ok" if _scheduler is not None and _scheduler.running else "error"
         else:
             try:
                 import redis
@@ -171,7 +193,7 @@ def create_app() -> FastAPI:
                 checks["queue"] = "ok"
             except Exception:
                 checks["queue"] = "error"
-        ok = checks["database"] == "ok" and checks["queue"] != "error"
+        ok = checks["database"] == "ok" and "error" not in (checks["queue"], checks.get("scheduler"))
         if not ok:
             response.status_code = 503
         return {"status": "ok" if ok else "degraded", "checks": checks}

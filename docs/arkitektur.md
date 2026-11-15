@@ -163,3 +163,33 @@ moduler utan att kärnan ändras.
 
 37 tabeller, versionshanterade med Alembic (`backend/alembic/versions`). JSON-fält lagras
 som JSONB i PostgreSQL. Migrationerna körs automatiskt när API-containern startar.
+
+## Enprocessläge
+
+Används när DriveLog körs i **en enda container**: Home Assistant-tillägget (och lokalt
+`scripts/dev.sh`). Det slås på med `DRIVELOG_JOBS_EAGER=true` och kombineras i drift med
+en SQLite-fil och tom `DRIVELOG_REDIS_URL`.
+
+Skillnader mot Compose-driften:
+
+| | Compose (egen server) | Enprocessläge (tillägget) |
+| --- | --- | --- |
+| Databas | PostgreSQL | SQLite-fil (WAL, `busy_timeout` 30 s, `foreign_keys=ON`, `synchronous=NORMAL`) |
+| Bakgrundsjobb | Celery worker via Redis | Körs direkt i API-processen, i den tråd som begär dem |
+| Schema (tick varje minut, kalender var 15:e minut, underhåll 02:17) | Celery beat | Bakgrundstråd i API-processen (`app/scheduler.py`) |
+| Inloggningsspärr | Redis | Minnet |
+| Säkerhetskopia av databasen | `pg_dump` (`deploy/backup.sh`) | `python -m app.cli sqlite-backup <målfil>` |
+
+Migrationerna (`alembic upgrade head`) gäller i båda lägena; `init_schema` körs aldrig i
+produktion. Ett jobb som köas medan den anropande tråden har en öppen skrivtransaktion
+skjuts upp tills transaktionen är avslutad (`app/jobs.py`), så att det aldrig väntar på ett
+lås som tråden själv håller. Det nattliga underhållet styrs av klockslaget och tas igen
+strax efter start om det inte körts på mer än ett dygn. Vid start loggas läget
+("Enprocessläge: SQLite, jobb och schemaläggare i API-processen") och
+`/api/v1/health/ready` visar `queue: eager` och schemaläggarens status – Redis krävs inte.
+
+Begränsningar: **exakt en API-process** (uvicorn utan `--workers`; schemaläggaren och
+inloggningsspärren finns bara i den processen) och SQLite tillåter en skrivare åt gången.
+Det räcker gott för en användare med en eller ett par bilar, men läget är inte avsett för
+många samtidiga användare. Långa jobb (t.ex. AI-klassificering) körs i anropet och gör att
+just det anropet tar längre tid.

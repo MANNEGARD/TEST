@@ -1,5 +1,7 @@
 #!/bin/sh
 # Startar API, worker eller schemaläggare. API-rollen kör databasmigrationerna.
+# Enprocessläget (DRIVELOG_JOBS_EAGER=true, t.ex. Home Assistant-tillägget) använder bara
+# rollen "api": jobben och schemat körs då i API-processen – starta aldrig fler än en.
 set -eu
 
 case "${1:-api}" in

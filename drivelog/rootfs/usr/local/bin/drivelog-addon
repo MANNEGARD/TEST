@@ -1,0 +1,10 @@
+#!/usr/local/bin/python3 -I
+"""Startprogram för Home Assistant-tillägget SMGD DriveLog (se drivelog_addon/startprogram.py)."""
+
+import sys
+
+sys.path.insert(0, "/opt/drivelog-addon")
+
+from drivelog_addon.startprogram import main  # noqa: E402
+
+sys.exit(main())

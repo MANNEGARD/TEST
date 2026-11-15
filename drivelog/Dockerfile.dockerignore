@@ -1,0 +1,25 @@
+# Gäller bara drivelog/Dockerfile (BuildKit läser <Dockerfile>.dockerignore bredvid filen).
+# Byggkontexten är repots rot; skicka bara det som behövs och aldrig lokala data eller hemligheter.
+**/node_modules
+**/.next
+**/.venv
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.ruff_cache
+**/*.tsbuildinfo
+.git
+.github
+.env
+.env.*
+**/data
+**/backups
+**/*.sqlite
+**/*.sqlite3
+**/*.db
+frontend/e2e
+frontend/coverage
+backend/tests
+drivelog/tests
+custom_components
+docs

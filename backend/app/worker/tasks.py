@@ -131,6 +131,10 @@ def maintenance() -> dict[str, Any]:
 
 def _bind_celery() -> None:
     """Exponerar de registrerade jobben som Celery-uppgifter (drivelog.<namn>)."""
+    from app.config import get_config
+
+    if get_config().jobs_eager:  # enprocessläget: ingen Celery, ingen kö att ansluta till
+        return
     try:
         from app.worker.celery_app import celery
     except Exception:  # Celery/Redis behövs inte i test eller eager-läge

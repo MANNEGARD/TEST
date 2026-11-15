@@ -1,0 +1,374 @@
+# Home Assistant-tillägget (drivelog/): tester, bygge för amd64 och aarch64, provstart som
+# Supervisor skulle göra – och på standardgrenen publicering av avbilden till GHCR.
+name: Home Assistant-tillägg
+
+on:
+  push:
+    paths:
+      - "drivelog/**"
+      - "repository.yaml"
+      - "backend/**"
+      - "frontend/**"
+      - "deploy/smoke-test.sh"
+      - ".github/workflows/addon.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: addon-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  tester:
+    name: Tillägget – tester och YAML
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Installera
+        run: python -m pip install pytest pyyaml cryptography
+      - name: Tester (startprogram, nycklar, Caddyfile, DynDNS, YAML)
+        run: python -m pytest drivelog/tests -q -p no:cacheprovider
+
+  amd64:
+    name: amd64 – bygg och provstarta som Supervisor
+    needs: tester
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Läs version ur drivelog/config.yaml
+        id: meta
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 - <<'EOF' >> "$GITHUB_OUTPUT"
+          import yaml
+          c = yaml.safe_load(open("drivelog/config.yaml", encoding="utf-8"))
+          print(f"version={c['version']}")
+          EOF
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Bygg avbilden (linux/amd64)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: drivelog/Dockerfile
+          platforms: linux/amd64
+          load: true
+          provenance: false
+          tags: drivelog-addon:test
+          build-args: BUILD_VERSION=${{ steps.meta.outputs.version }}
+          cache-from: type=gha,scope=addon-amd64
+          cache-to: type=gha,mode=max,scope=addon-amd64
+
+      - name: Etiketter som Supervisor läser
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          label() { docker inspect -f "{{ index .Config.Labels \"$1\" }}" drivelog-addon:test; }
+          test "$(label io.hass.type)" = addon
+          test "$(label io.hass.arch)" = amd64
+          test "$(label io.hass.version)" = "$VERSION"
+          test "$(label org.opencontainers.image.source)" = https://github.com/SMGD-MP/TEST
+
+      - name: Slumpa ett lösenord för testkontot
+        run: |
+          pw="$(openssl rand -hex 16)"
+          echo "::add-mask::$pw"
+          echo "CI_ADMIN_PASSWORD=$pw" >> "$GITHUB_ENV"
+
+      - name: Hjälpfunktioner
+        run: |
+          cat > "$RUNNER_TEMP/addon.sh" <<'EOF'
+          # Skriver options.json i volymen, som Supervisor gör före varje start.
+          skriv_options() { # volym, med_admin (1/0)
+            python3 - "$2" > "$RUNNER_TEMP/options.json" <<'PY'
+          import json, os, sys
+          o = {"domain": "localhost", "strato_dyndns": False, "log_level": "info"}
+          if sys.argv[1] == "1":
+              o.update(admin_email="ci@example.com", admin_password=os.environ["CI_ADMIN_PASSWORD"])
+          print(json.dumps(o))
+          PY
+            docker run --rm -v "$1:/data" -v "$RUNNER_TEMP/options.json:/in.json:ro" --entrypoint cp \
+              drivelog-addon:test /in.json /data/options.json
+            rm -f "$RUNNER_TEMP/options.json"
+          }
+          # Startar tillägget som Supervisor: egen init, /data som volym, 80/443 publicerade.
+          starta() { # namn, volym
+            docker run -d --name "$1" --init -e TZ=Europe/Stockholm -v "$2:/data" \
+              -p 80:80 -p 443:443 -p 443:443/udp drivelog-addon:test >/dev/null
+          }
+          vanta_pa_https() {
+            for _ in $(seq 1 150); do
+              curl -kfsS -o /dev/null https://localhost/api/v1/health/ready 2>/dev/null && return 0
+              sleep 2
+            done
+            echo "DriveLog svarade inte via https://localhost" >&2; return 1
+          }
+          vanta_pa_logg() { # namn, text
+            for _ in $(seq 1 150); do
+              docker logs "$1" 2>&1 | grep -F "$2" >/dev/null && return 0
+              [ "$(docker inspect -f '{{.State.Running}}' "$1")" = true ] || { echo "$1 har stannat" >&2; return 1; }
+              sleep 2
+            done
+            echo "Hittade inte '$2' i loggen" >&2; return 1
+          }
+          fingeravtryck() { docker exec "$1" sh -c 'cat /data/hemligheter/secret_key /data/hemligheter/encryption_keys | sha256sum'; }
+          EOF
+
+      - name: Första start med administratörsuppgifter
+        run: |
+          . "$RUNNER_TEMP/addon.sh"
+          docker volume create drivelog-data >/dev/null
+          skriv_options drivelog-data 1
+          starta drivelog drivelog-data
+          vanta_pa_https
+
+      - name: Röktest genom proxyn (HTTPS)
+        env:
+          SMOKE_EMAIL: ci@example.com
+          SMOKE_PASSWORD: ${{ env.CI_ADMIN_PASSWORD }}
+        run: deploy/smoke-test.sh https://localhost
+
+      - name: Nycklar, rättigheter, användare och portar
+        run: |
+          . "$RUNNER_TEMP/addon.sh"
+          # Nycklarna maskeras innan något kan skrivas ut, och får inte finnas i loggen.
+          for f in secret_key encryption_keys; do
+            v="$(docker exec drivelog cat "/data/hemligheter/$f")"
+            echo "::add-mask::$v"
+            if docker logs drivelog 2>&1 | grep -F "$v" >/dev/null; then echo "$f finns i loggen" >&2; exit 1; fi
+          done
+          if docker logs drivelog 2>&1 | grep -F "$CI_ADMIN_PASSWORD" >/dev/null; then echo "Lösenordet finns i loggen" >&2; exit 1; fi
+          docker exec drivelog stat -c '%a %U %n' /data/hemligheter /data/hemligheter/secret_key /data/hemligheter/encryption_keys /data/options.json
+          test "$(docker exec drivelog stat -c '%a %U' /data/hemligheter/secret_key)" = "600 root"
+          test "$(docker exec drivelog stat -c '%a %U' /data/hemligheter/encryption_keys)" = "600 root"
+          test "$(docker exec drivelog stat -c '%a %U' /data/options.json)" = "600 root"
+          # API, webbapp och Caddy körs som icke-root.
+          docker exec drivelog python3 - <<'EOF'
+          import os
+          hittade = {}
+          for pid in filter(str.isdigit, os.listdir("/proc")):
+              try:
+                  cmd = open(f"/proc/{pid}/cmdline", "rb").read().replace(b"\0", b" ").decode()
+                  uid = next(l.split()[1] for l in open(f"/proc/{pid}/status") if l.startswith("Uid:"))
+              except OSError:
+                  continue
+              for namn in ("uvicorn", "server.js", "caddy run"):
+                  if namn in cmd:
+                      hittade[namn] = uid
+          print(hittade)
+          assert set(hittade) == {"uvicorn", "server.js", "caddy run"}, hittade
+          assert all(uid != "0" for uid in hittade.values()), hittade
+          EOF
+          # API:t (8000) publiceras inte på värden men nås på containerns nät (som från Home Assistant).
+          if curl -fsS --max-time 3 http://127.0.0.1:8000/api/v1/health 2>/dev/null; then echo "8000 är publicerad" >&2; exit 1; fi
+          ip="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' drivelog)"
+          curl -fsS --max-time 5 "http://$ip:8000/api/v1/health/ready"; echo
+          # Webbappen lyssnar bara på 127.0.0.1 i containern.
+          if curl -fsS --max-time 3 "http://$ip:3000/api/healthz" 2>/dev/null; then echo "Webbappen nås utanför containern" >&2; exit 1; fi
+          fingeravtryck drivelog > "$RUNNER_TEMP/nycklar-1"
+
+      - name: Omstart med samma /data behåller konto och nycklar
+        env:
+          SMOKE_EMAIL: ci@example.com
+          SMOKE_PASSWORD: ${{ env.CI_ADMIN_PASSWORD }}
+        run: |
+          . "$RUNNER_TEMP/addon.sh"
+          docker stop -t 30 drivelog >/dev/null
+          test "$(docker inspect -f '{{.State.ExitCode}}' drivelog)" = 0 || { echo "Nedstängningen gav inte kod 0" >&2; exit 1; }
+          docker rm drivelog >/dev/null
+          # Utan administratörsuppgifter: webbappen startar bara om kontot finns kvar i databasen.
+          skriv_options drivelog-data 0
+          starta drivelog drivelog-data
+          vanta_pa_https
+          fingeravtryck drivelog > "$RUNNER_TEMP/nycklar-2"
+          cmp -s "$RUNNER_TEMP/nycklar-1" "$RUNNER_TEMP/nycklar-2" || { echo "Nycklarna ändrades vid omstart" >&2; exit 1; }
+          if docker logs drivelog 2>&1 | grep -F "skapades och sparades" >/dev/null; then echo "Nycklar skapades på nytt" >&2; exit 1; fi
+          deploy/smoke-test.sh https://localhost
+
+      - name: Utan konto och utan uppgifter öppnas inte port 443
+        run: |
+          . "$RUNNER_TEMP/addon.sh"
+          docker rm -f drivelog >/dev/null
+          docker volume create drivelog-tom >/dev/null
+          skriv_options drivelog-tom 0
+          starta drivelog-tom drivelog-tom
+          vanta_pa_logg drivelog-tom "Det finns inget konto"
+          sleep 5
+          test "$(docker inspect -f '{{.State.Running}}' drivelog-tom)" = true
+          if curl -ksS --max-time 5 -o /dev/null https://localhost/ 2>/dev/null; then echo "Port 443 svarar utan konto" >&2; exit 1; fi
+          if curl -sS --max-time 5 -o /dev/null http://localhost/ 2>/dev/null; then echo "Port 80 svarar utan konto" >&2; exit 1; fi
+          ip="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' drivelog-tom)"
+          curl -fsS --max-time 5 "http://$ip:8000/api/v1/auth/setup-status"; echo
+          docker stop -t 30 drivelog-tom >/dev/null
+          test "$(docker inspect -f '{{.State.ExitCode}}' drivelog-tom)" = 0
+
+      - name: Loggar vid fel
+        if: failure()
+        run: |
+          for c in drivelog drivelog-tom; do
+            docker inspect -f '{{.Name}} {{.State.Status}} kod={{.State.ExitCode}}' "$c" 2>/dev/null || continue
+            docker logs --tail 300 "$c" 2>&1
+          done
+
+      - name: Städa
+        if: always()
+        run: |
+          docker rm -f drivelog drivelog-tom >/dev/null 2>&1 || true
+          docker volume rm drivelog-data drivelog-tom >/dev/null 2>&1 || true
+          rm -f "$RUNNER_TEMP/options.json" "$RUNNER_TEMP"/nycklar-*
+
+  aarch64:
+    name: aarch64 – bygg under emulering och provstarta
+    needs: tester
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Läs version ur drivelog/config.yaml
+        id: meta
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 - <<'EOF' >> "$GITHUB_OUTPUT"
+          import yaml
+          c = yaml.safe_load(open("drivelog/config.yaml", encoding="utf-8"))
+          print(f"version={c['version']}")
+          EOF
+
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Bygg avbilden (linux/arm64)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: drivelog/Dockerfile
+          platforms: linux/arm64
+          load: true
+          provenance: false
+          tags: drivelog-addon:arm64
+          build-args: BUILD_VERSION=${{ steps.meta.outputs.version }}
+          cache-from: type=gha,scope=addon-arm64
+          cache-to: type=gha,mode=max,scope=addon-arm64
+
+      - name: Etiketter och körtidsmiljöer under emulering
+        run: |
+          test "$(docker inspect -f '{{ index .Config.Labels "io.hass.arch" }}' drivelog-addon:arm64)" = aarch64
+          test "$(docker inspect -f '{{.Architecture}}' drivelog-addon:arm64)" = arm64
+          docker run --rm --platform linux/arm64 --entrypoint sh drivelog-addon:arm64 -c \
+            'set -e; test "$(uname -m)" = aarch64; uname -m; python --version; node --version; caddy version; setpriv --version'
+
+      - name: Tillägget startar (API:t blir redo, spärren håller utan konto)
+        run: |
+          docker volume create drivelog-arm >/dev/null
+          echo '{"domain":"localhost","strato_dyndns":false,"log_level":"info"}' > "$RUNNER_TEMP/options.json"
+          docker run --rm --platform linux/arm64 -v drivelog-arm:/data -v "$RUNNER_TEMP/options.json:/in.json:ro" \
+            --entrypoint cp drivelog-addon:arm64 /in.json /data/options.json
+          docker run -d --name drivelog-arm --platform linux/arm64 --init -v drivelog-arm:/data drivelog-addon:arm64 >/dev/null
+          for _ in $(seq 1 300); do
+            docker logs drivelog-arm 2>&1 | grep -F "Det finns inget konto" >/dev/null && break
+            [ "$(docker inspect -f '{{.State.Running}}' drivelog-arm)" = true ] || { echo "Containern stannade" >&2; exit 1; }
+            sleep 2
+          done
+          docker logs drivelog-arm 2>&1 | grep -F "Det finns inget konto" >/dev/null
+          docker exec drivelog-arm python3 -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/ready', timeout=10).read().decode())"
+          docker stop -t 30 drivelog-arm >/dev/null
+          test "$(docker inspect -f '{{.State.ExitCode}}' drivelog-arm)" = 0
+
+      - name: Loggar vid fel
+        if: failure()
+        run: docker logs --tail 300 drivelog-arm 2>&1 || true
+
+      - name: Städa
+        if: always()
+        run: |
+          docker rm -f drivelog-arm >/dev/null 2>&1 || true
+          docker volume rm drivelog-arm >/dev/null 2>&1 || true
+
+  publicera:
+    name: Publicera avbilden till GHCR
+    needs: [tester, amd64, aarch64]
+    if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Läs version och avbild ur drivelog/config.yaml
+        id: meta
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 - <<'EOF' >> "$GITHUB_OUTPUT"
+          import os, yaml
+          c = yaml.safe_load(open("drivelog/config.yaml", encoding="utf-8"))
+          bild = c["image"]
+          agare = os.environ["GITHUB_REPOSITORY_OWNER"].lower()
+          assert bild == bild.lower() and bild.startswith(f"ghcr.io/{agare}/"), (
+              f"image i config.yaml ({bild}) måste ligga under ghcr.io/{agare}/ och vara gemener")
+          assert "{arch}" not in bild, "avbilden publiceras för flera arkitekturer under ett namn"
+          print(f"version={c['version']}")
+          print(f"image={bild}")
+          EOF
+
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Finns versionen redan?
+        id: finns
+        env:
+          IMAGE: ${{ steps.meta.outputs.image }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          # En publicerad tagg skrivs aldrig över (Home Assistant-installationer hämtar den).
+          if docker buildx imagetools inspect "$IMAGE:$VERSION" >/dev/null 2>&1; then
+            echo "::notice::$IMAGE:$VERSION finns redan – höj version i drivelog/config.yaml (och CHANGELOG.md) för att publicera en ny."
+            echo "finns=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "finns=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Bygg och publicera (amd64 + arm64)
+        if: steps.finns.outputs.finns == 'false'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: drivelog/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: false
+          tags: |
+            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}
+            ${{ steps.meta.outputs.image }}:latest
+          build-args: BUILD_VERSION=${{ steps.meta.outputs.version }}
+          cache-from: |
+            type=gha,scope=addon-amd64
+            type=gha,scope=addon-arm64
+
+      - name: Kontrollera den publicerade avbilden
+        if: steps.finns.outputs.finns == 'false'
+        env:
+          IMAGE: ${{ steps.meta.outputs.image }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: docker buildx imagetools inspect "$IMAGE:$VERSION"

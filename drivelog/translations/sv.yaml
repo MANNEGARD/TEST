@@ -1,0 +1,26 @@
+configuration:
+  domain:
+    name: "Domän"
+    description: "Adressen DriveLog ska nås på, t.ex. drivelog.smgd.se. Domänen måste peka på hemmets publika IP-adress."
+  admin_email:
+    name: "Administratörens e-post"
+    description: "Första kontot. Behövs bara tills kontot finns – utan konto öppnas ingenting mot internet."
+  admin_password:
+    name: "Administratörens lösenord"
+    description: "Minst 12 tecken. Används bara när kontot skapas; töm fältet när kontot finns och byt lösenord i DriveLog."
+  strato_dyndns:
+    name: "STRATO DynDNS"
+    description: "Låt tillägget hålla domänens adress hos STRATO uppdaterad. Stäng av om routern redan sköter DynDNS."
+  strato_dyndns_user:
+    name: "STRATO-användarnamn"
+    description: "Domänen i ditt STRATO-paket, t.ex. smgd.se."
+  strato_dyndns_password:
+    name: "STRATO DynDNS-lösenord"
+    description: "DynDNS-lösenordet du satt hos STRATO (Sicherheit → Passwörter festlegen)."
+  log_level:
+    name: "Loggnivå"
+    description: "Hur mycket tilläggets startprogram och API:t skriver i loggen."
+network:
+  80/tcp: "HTTP – certifikatkontroll och vidarekoppling till HTTPS"
+  443/tcp: "HTTPS – DriveLog"
+  443/udp: "HTTP/3 (QUIC)"

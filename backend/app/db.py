@@ -6,6 +6,7 @@ import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import JSON, DateTime, MetaData, create_engine, event
@@ -71,36 +72,85 @@ _engine: Engine | None = None
 _SessionLocal: sessionmaker[Session] | None = None
 
 
+# Hur länge en anslutning väntar på SQLite-låset innan den ger upp ("database is locked").
+SQLITE_BUSY_TIMEOUT_SECONDS = 30
+
+
+def _is_sqlite_memory(url: str) -> bool:
+    return ":memory:" in url or url.rstrip("/") in ("sqlite:", "sqlite+pysqlite:") or "mode=memory" in url
+
+
 def _build_engine(url: str) -> Engine:
     kwargs: dict[str, Any] = {"future": True}
-    if url.startswith("sqlite"):
-        kwargs["connect_args"] = {"check_same_thread": False}
-        if ":memory:" in url or url.endswith("sqlite://"):
+    sqlite = url.startswith("sqlite")
+    memory = sqlite and _is_sqlite_memory(url)
+    if sqlite:
+        # check_same_thread=False: uvicorns trådpool och schemaläggartråden delar poolen
+        # (varje anslutning används av en tråd i taget). timeout = väntetid på skrivlåset.
+        kwargs["connect_args"] = {"check_same_thread": False, "timeout": SQLITE_BUSY_TIMEOUT_SECONDS}
+        if memory:
             kwargs["poolclass"] = StaticPool
+        else:
+            kwargs["pool_size"] = 10
+            kwargs["max_overflow"] = 10
+            kwargs["pool_timeout"] = 60
     else:
         kwargs["pool_pre_ping"] = True
         kwargs["pool_size"] = 10
         kwargs["max_overflow"] = 10
     engine = create_engine(url, **kwargs)
 
-    if url.startswith("sqlite"):
+    if sqlite:
 
         @event.listens_for(engine, "connect")
         def _sqlite_pragmas(dbapi_conn: Any, _: Any) -> None:
             cur = dbapi_conn.cursor()
             cur.execute("PRAGMA foreign_keys=ON")
-            cur.execute("PRAGMA journal_mode=WAL")
+            cur.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_SECONDS * 1000}")
+            if not memory:
+                # WAL: läsare blockerar inte skrivare (och tvärtom); NORMAL är säkert med WAL
+                # och skonsamt mot SD-kort.
+                cur.execute("PRAGMA journal_mode=WAL")
+                cur.execute("PRAGMA synchronous=NORMAL")
             cur.close()
 
     return engine
+
+
+def sqlite_file_path(url: str) -> Path | None:
+    """Sökvägen till databasfilen för en filbaserad SQLite-URL, annars None."""
+    if not url.startswith("sqlite") or _is_sqlite_memory(url):
+        return None
+    from sqlalchemy.engine import make_url
+
+    database = make_url(url).database
+    return Path(database) if database else None
+
+
+def secure_sqlite_file(path: Path) -> None:
+    """Databasfilen ska bara kunna läsas av appens användare (600). SQLite ger WAL- och
+    shm-filerna samma rättigheter som databasfilen."""
+    import os
+
+    try:
+        if not path.exists():
+            os.close(os.open(path, os.O_WRONLY | os.O_CREAT, 0o600))
+        for f in (path, path.with_name(path.name + "-wal"), path.with_name(path.name + "-shm")):
+            if f.exists() and f.stat().st_mode & 0o077:
+                f.chmod(0o600)
+    except OSError:  # t.ex. en fil som ägs av någon annan: SQLite rapporterar det själv
+        pass
 
 
 def get_engine() -> Engine:
     global _engine, _SessionLocal
     if _engine is None:
         cfg = get_config()
-        if cfg.database_url.startswith("sqlite:///") and ":memory:" not in cfg.database_url:
+        db_file = sqlite_file_path(cfg.database_url)
+        if db_file is not None:
             cfg.data_dir.mkdir(parents=True, exist_ok=True)
+            db_file.parent.mkdir(parents=True, exist_ok=True)
+            secure_sqlite_file(db_file)
         _engine = _build_engine(cfg.database_url)
         _SessionLocal = sessionmaker(bind=_engine, expire_on_commit=False, autoflush=False)
     return _engine

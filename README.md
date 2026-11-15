@@ -25,9 +25,20 @@ integrationer som kan slås på var för sig; allt fungerar även utan dem.
 | Webbapp (PWA) | [`frontend/`](frontend/) | Next.js, TypeScript, Tailwind CSS, Recharts, MapLibre GL |
 | Home Assistant-integration | [`custom_components/smgd_drivelog/`](custom_components/smgd_drivelog/) | Custom integration, installeras via HACS |
 | Drift | [`docker-compose.yml`](docker-compose.yml), [`deploy/`](deploy/) | Docker Compose, Caddy (HTTPS), backup-skript |
+| Home Assistant-tillägg | [`drivelog/`](drivelog/), [`repository.yaml`](repository.yaml) | En container: API, webbapp och Caddy; SQLite; avbilder för amd64/aarch64 |
 | Dokumentation | [`docs/`](docs/) | Svenska guider |
 
-## Snabbstart
+## Två sätt att köra DriveLog
+
+| Sätt | Passar när | Guide |
+| --- | --- | --- |
+| **Home Assistant-tillägg** | Du har Home Assistant OS/Supervised och vill slippa en egen server. Allt körs i ett tillägg (SQLite, automatisk HTTPS, valfri STRATO DynDNS). | [docs/home-assistant-tillagg.md](docs/home-assistant-tillagg.md) |
+| **Egen server med Docker Compose** | Du har en Linux-server eller VPS. PostgreSQL, Redis och separata bakgrundsprocesser. | [docs/installation.md](docs/installation.md) |
+
+Tillägget läggs till i Home Assistant via förrådet `https://github.com/SMGD-MP/TEST`
+(**Inställningar → Tillägg → Tilläggsbutik → ⋮ → Förråd**).
+
+## Snabbstart (egen server)
 
 ```bash
 cp .env.example .env
@@ -47,6 +58,7 @@ docker compose up -d --build
 
 | Guide | Innehåll |
 | --- | --- |
+| [Home Assistant-tillägg](docs/home-assistant-tillagg.md) | DriveLog direkt på Home Assistant-maskinen: STRATO, router, installation, säkerhetskopior |
 | [Installation och drift](docs/installation.md) | Krav, miljövariabler, start, uppgradering, felsökning |
 | [Användning](docs/anvandning.md) | Import, körjournal, granskning, platser, export – steg för steg |
 | [Arkitektur och tekniska beslut](docs/arkitektur.md) | Datamodell, resenivåer, sammanslagning, klassificering, inlärning |

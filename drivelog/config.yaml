@@ -1,0 +1,46 @@
+# Home Assistant-tillägget SMGD DriveLog. Nycklarna följer Home Assistants referens för
+# tilläggets konfiguration (contributors.home-assistant.io/apps/reference/configuration).
+name: "SMGD DriveLog"
+version: "1.0.0"
+slug: "drivelog"
+description: "Självhostad körjournal för tjänsteresor – nås på din egen domän med automatisk HTTPS."
+url: "https://github.com/SMGD-MP/TEST"
+arch:
+  - aarch64
+  - amd64
+# Färdig avbild för flera arkitekturer (byggs av .github/workflows/addon.yml). Supervisor hämtar
+# taggen som är lika med "version" ovan – ingenting byggs på Home Assistant-maskinen.
+image: "ghcr.io/smgd-mp/drivelog"
+startup: application
+boot: auto
+init: true
+# Tid för en ren nedstängning (proxy, webbapp, API) innan containern avbryts.
+timeout: 30
+# Home Assistant startar om tillägget om API:t slutar svara. Svaret är 200 även innan ett konto
+# finns (då är bara API:t igång på det interna nätet), så spärren ger ingen omstartsslinga.
+watchdog: "http://[HOST]:[PORT:8000]/api/v1/health/ready"
+# Tillägget stoppas medan säkerhetskopian tas: då är SQLite-databasen garanterat konsekvent
+# (ingen halvskriven transaktion eller WAL-fil). En kopia tar normalt några sekunder.
+backup: cold
+# 80 och 443 publiceras på värden och skickas vidare från routern. API:t (8000) publiceras inte:
+# det nås bara på Home Assistants interna nät, av integrationen, på http://<värdnamn>:8000.
+ports:
+  80/tcp: 80
+  443/tcp: 443
+  443/udp: 443
+ports_description:
+  80/tcp: "HTTP – certifikatkontroll (Let's Encrypt) och vidarekoppling till HTTPS"
+  443/tcp: "HTTPS – DriveLog"
+  443/udp: "HTTP/3 (QUIC) – snabbare HTTPS för moderna webbläsare"
+options:
+  domain: "drivelog.smgd.se"
+  strato_dyndns: false
+  log_level: info
+schema:
+  domain: str
+  admin_email: "email?"
+  admin_password: "password?"
+  strato_dyndns: bool
+  strato_dyndns_user: "str?"
+  strato_dyndns_password: "password?"
+  log_level: "list(debug|info|warning|error)"

@@ -1,4 +1,8 @@
-"""Enkel rate limiting med Redis (glidande fönster) och minnesfallback."""
+"""Enkel rate limiting med Redis (glidande fönster) och minnesfallback.
+
+Utan Redis (tom DRIVELOG_REDIS_URL, enprocessläget) används minnet direkt: det räcker
+eftersom hela appen då körs i en enda process.
+"""
 
 from __future__ import annotations
 
@@ -17,7 +21,8 @@ _redis_failed_at = 0.0
 def _redis():
     global _redis_client, _redis_failed_at
     cfg = get_config()
-    if cfg.environment == "test":
+    # Testsviten och enprocessläget (tom DRIVELOG_REDIS_URL) använder bara minnet direkt.
+    if cfg.environment == "test" or not cfg.redis_enabled:
         return None
     if _redis_client is not None:
         return _redis_client

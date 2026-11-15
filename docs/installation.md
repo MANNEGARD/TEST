@@ -4,6 +4,11 @@ DriveLog körs som en uppsättning containrar med Docker Compose: PostgreSQL, Re
 bakgrundsarbetare (worker), schemaläggare (beat), webbapp och en omvänd proxy (Caddy) som
 sköter HTTPS.
 
+> **Två sätt att köra DriveLog.** Den här guiden gäller en egen server med Docker Compose.
+> Har du Home Assistant OS eller Supervised kan hela DriveLog i stället köras som ett
+> Home Assistant-tillägg – utan separat server, med SQLite, automatisk HTTPS och valfri
+> STRATO DynDNS. Se [home-assistant-tillagg.md](home-assistant-tillagg.md).
+
 ## Krav
 
 - En server med Docker Engine 24+ och Docker Compose v2. Driften klarar sig på 2 GB RAM, men

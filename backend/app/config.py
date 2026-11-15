@@ -22,6 +22,7 @@ class AppConfig(BaseSettings):
 
     environment: str = Field(default="development", description="development | production | test")
     database_url: str = "sqlite:///./data/drivelog.sqlite3"
+    # Tom sträng = ingen Redis (enprocessläget): inga anslutningsförsök alls.
     redis_url: str = "redis://localhost:6379/0"
 
     # Publik bas-URL, används för OAuth-redirects och länkar i notiser.
@@ -54,7 +55,9 @@ class AppConfig(BaseSettings):
 
     cors_origins: str = ""
     log_level: str = "INFO"
-    # Kör bakgrundsjobb synkront i processen (test/utveckling utan Redis).
+    # Enprocessläget: bakgrundsjobb körs direkt i API-processen och schemat (tick, kalender,
+    # nattligt underhåll) i en bakgrundstråd – ingen Redis, ingen Celery. Används av
+    # Home Assistant-tillägget och scripts/dev.sh. I Compose-driften är det avstängt.
     jobs_eager: bool = False
 
     @field_validator("database_url")
@@ -69,6 +72,33 @@ class AppConfig(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.environment == "production"
+
+    @property
+    def redis_enabled(self) -> bool:
+        return bool(self.redis_url.strip())
+
+    @property
+    def is_sqlite(self) -> bool:
+        return self.database_url.startswith("sqlite")
+
+    @property
+    def sqlite_in_memory(self) -> bool:
+        url = self.database_url
+        return self.is_sqlite and (":memory:" in url or "mode=memory" in url or url.rstrip("/") in ("sqlite:", "sqlite+pysqlite:"))
+
+    @property
+    def single_process(self) -> bool:
+        """Enprocessläget: jobb och schemaläggare i API-processen (inte i testsviten)."""
+        return self.jobs_eager and self.environment != "test"
+
+    def mode_description(self) -> str:
+        """Beskrivning av driftläget för loggen vid start."""
+        if self.single_process:
+            db = "SQLite" if self.is_sqlite else self.database_url.split(":", 1)[0]
+            return f"Enprocessläge: {db}, jobb och schemaläggare i API-processen"
+        if self.environment == "test":
+            return "Testläge: jobb körs direkt, ingen schemaläggare"
+        return "Compose-läge: bakgrundsjobb och schema i Celery (Redis-kö)"
 
     @property
     def use_secure_cookies(self) -> bool:
@@ -98,6 +128,18 @@ class AppConfig(BaseSettings):
                 problems.append("DRIVELOG_ENCRYPTION_KEYS måste innehålla minst en Fernet-nyckel.")
             if not self.base_url.startswith("https://"):
                 problems.append("DRIVELOG_BASE_URL måste använda https i produktion.")
+            if self.sqlite_in_memory:
+                problems.append("DRIVELOG_DATABASE_URL får inte vara en minnesdatabas i produktion.")
+            if not self.jobs_eager and not self.redis_enabled:
+                problems.append(
+                    "DRIVELOG_REDIS_URL saknas: Compose-läget kräver Redis. "
+                    "Sätt DRIVELOG_JOBS_EAGER=true för enprocessläget."
+                )
+            if self.is_sqlite and not self.jobs_eager:
+                problems.append(
+                    "SQLite i produktion kräver enprocessläget (DRIVELOG_JOBS_EAGER=true); "
+                    "Celery-processer kan inte dela en SQLite-fil säkert."
+                )
         return problems
 
 

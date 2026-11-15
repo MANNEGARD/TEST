@@ -57,6 +57,18 @@ def cmd_backup(_: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_sqlite_backup(args: argparse.Namespace) -> int:
+    from app.services import backup
+
+    try:
+        path = backup.sqlite_file_backup(Path(args.target))
+    except backup.BackupError as exc:
+        print(f"Säkerhetskopieringen misslyckades: {exc}", file=sys.stderr)
+        return 1
+    print(path)
+    return 0
+
+
 def cmd_restore(args: argparse.Namespace) -> int:
     from app.services import backup
 
@@ -98,6 +110,11 @@ def main(argv: list[str] | None = None) -> int:
     p.set_defaults(func=cmd_create_admin)
     sub.add_parser("generate-key", help="Skapa en krypteringsnyckel (DRIVELOG_ENCRYPTION_KEYS)").set_defaults(func=cmd_generate_key)
     sub.add_parser("backup", help="Skapa en säkerhetskopia (zip)").set_defaults(func=cmd_backup)
+    p = sub.add_parser(
+        "sqlite-backup", help="Konsekvent kopia av SQLite-databasfilen medan appen kör (enprocessläget)"
+    )
+    p.add_argument("target", help="Målfil, t.ex. /data/backups/drivelog-db.sqlite3")
+    p.set_defaults(func=cmd_sqlite_backup)
     p = sub.add_parser("restore", help="Återställ från en säkerhetskopia")
     p.add_argument("file")
     p.add_argument("--force", action="store_true", help="Ersätt befintliga data")

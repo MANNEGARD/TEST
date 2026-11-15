@@ -1,0 +1,26 @@
+configuration:
+  domain:
+    name: "Domain"
+    description: "The address DriveLog is served on, e.g. drivelog.example.com. It must point to your home's public IP address."
+  admin_email:
+    name: "Administrator e-mail"
+    description: "The first account. Only needed until the account exists – without an account nothing is exposed to the internet."
+  admin_password:
+    name: "Administrator password"
+    description: "At least 12 characters. Only used when the account is created; clear the field afterwards."
+  strato_dyndns:
+    name: "STRATO DynDNS"
+    description: "Keep the domain's address up to date at STRATO. Turn off if your router already handles DynDNS."
+  strato_dyndns_user:
+    name: "STRATO user name"
+    description: "The domain in your STRATO package, e.g. example.com."
+  strato_dyndns_password:
+    name: "STRATO DynDNS password"
+    description: "The DynDNS password set at STRATO."
+  log_level:
+    name: "Log level"
+    description: "How much the add-on's start program and the API write to the log."
+network:
+  80/tcp: "HTTP – certificate validation and redirect to HTTPS"
+  443/tcp: "HTTPS – DriveLog"
+  443/udp: "HTTP/3 (QUIC)"
