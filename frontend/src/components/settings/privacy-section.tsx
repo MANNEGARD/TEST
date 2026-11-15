@@ -39,6 +39,7 @@ const FIELDS: FieldSpecs = {
   "privacy.geocoding_enabled": { type: "bool" },
   "privacy.geocoder_url": { type: "text", name: "Geokodarens adress", maxLength: 500, validate: validUrl },
   "privacy.observation_retention_days": { type: "number", name: "Gallring av rådata", min: 0, max: 3650, integer: true },
+  "import.keep_original_files": { type: "bool" },
 };
 
 const SCOPES: { value: DeleteHistoryScope; title: string; description: string; perVehicle?: boolean }[] = [
@@ -232,6 +233,13 @@ export function PrivacySection({ data }: { data: SettingsPayload }) {
               </Field>
             </div>
           ) : null}
+          <BoolRow
+            form={form}
+            path="import.keep_original_files"
+            id="priv-keep-originals"
+            label="Spara originalfilerna vid import"
+            hint="Importerade filer (t.ex. Volvos reseexport) sparas på servern så att du kan hämta dem igen. Avstängt sparas bara resorna."
+          />
           <Advanced summary="gallring av rådata" hasError={!!form.error("privacy.observation_retention_days")}>
             <NumberRow
               form={form}

@@ -16,12 +16,14 @@ import { formatDate } from "@/lib/format";
 import { useAddWorkplace, useDeleteWorkplace, useLocationOptions, useWorkplaces } from "@/lib/queries/settings-page";
 import type { SettingsPayload, Workplace, WorkplaceInput } from "@/lib/settings-page-types";
 import { useReportDirty } from "./dirty-context";
-import { BoolRow, FormCard, Note, SectionIntro, SettingsSaveBar } from "./form-parts";
+import { Advanced, BoolRow, FormCard, Note, SectionIntro, SettingsSaveBar } from "./form-parts";
 import { useSectionSave, useSettingsForm, type FieldSpecs } from "./use-settings-form";
 
 const FIELDS: FieldSpecs = {
   "tax.home_is_workplace": { type: "bool" },
   "tax.commute_rule_enabled": { type: "bool" },
+  "tax.car_benefit": { type: "bool" },
+  "tax.require_approval_when_uncertain": { type: "bool" },
 };
 
 function period(wp: Workplace): string {
@@ -228,6 +230,24 @@ export function WorkplaceSection({ data }: { data: SettingsPayload }) {
             label="Föreslå resor till och från tjänstestället som privata"
             hint="Skatteverkets regel för resor mellan bostad och arbete. Du kan alltid ändra en enskild resa."
           />
+          {form.has("tax.car_benefit") || form.has("tax.require_approval_when_uncertain") ? (
+            <Advanced summary="förmånsbil och osäkra fall">
+              <BoolRow
+                form={form}
+                path="tax.car_benefit"
+                id="tax-car-benefit"
+                label="Förmånsbil (bilen ägs av arbetsgivaren)"
+                hint="Med förmånsbil ska all körning redovisas – välj då även ”Fullständig körjournal” under Milersättning och export."
+              />
+              <BoolRow
+                form={form}
+                path="tax.require_approval_when_uncertain"
+                id="tax-require-approval"
+                label="Kräv alltid mitt godkännande vid skattemässig osäkerhet"
+                hint="Resor där skattereglerna inte ger ett tydligt svar föreslås aldrig automatiskt utan väntar på ditt beslut."
+              />
+            </Advanced>
+          ) : null}
           <SettingsSaveBar form={form} save={save} defaults />
         </FormCard>
       </div>

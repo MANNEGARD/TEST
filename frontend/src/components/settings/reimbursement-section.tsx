@@ -68,7 +68,7 @@ export function ReimbursementSection({ data }: { data: SettingsPayload }) {
                 value: "simple",
                 title: "Enkel",
                 isDefault: defaultLayout === "simple",
-                description: "Ett blad med periodens tjänsteresor: datum, sträcka, från, till och syfte. Det arbetsgivaren behöver för milersättningen.",
+                description: "Ett blad med periodens tjänsteresor: datum, tid, från, till, ärende, mätarställning och km. Det arbetsgivaren behöver för milersättningen.",
               },
               {
                 value: "detailed",

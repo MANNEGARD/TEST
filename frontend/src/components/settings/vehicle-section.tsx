@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SkeletonBlock } from "@/components/ui/skeleton";
 import { errorMessage } from "@/lib/api";
 import { useMe } from "@/lib/queries/auth";
@@ -15,7 +16,7 @@ import type { Vehicle } from "@/lib/types";
 import { useVehicle } from "@/lib/vehicle";
 import { Car } from "lucide-react";
 import { useReportDirty } from "./dirty-context";
-import { Field, FormCard, GroupHeading, SaveBar, SectionIntro } from "./form-parts";
+import { Advanced, Field, FormCard, GroupHeading, SaveBar, SectionIntro, SettingRow } from "./form-parts";
 import { OdometerReadings } from "./odometer-readings";
 import { useSettingsForm } from "./use-settings-form";
 
@@ -65,9 +66,22 @@ function toPatch(fields: VehicleField[], values: Record<VehicleField, string>): 
   return patch;
 }
 
+/** Vanliga IANA-tidszoner. Backend (settings.py) validerar mot hela tz-databasen. */
+const TIMEZONES: readonly { value: string; label: string }[] = [
+  { value: "Europe/Stockholm", label: "Sverige (Europe/Stockholm)" },
+  { value: "Europe/Helsinki", label: "Finland (Europe/Helsinki)" },
+  { value: "Europe/Oslo", label: "Norge (Europe/Oslo)" },
+  { value: "Europe/Copenhagen", label: "Danmark (Europe/Copenhagen)" },
+  { value: "Europe/Berlin", label: "Tyskland (Europe/Berlin)" },
+  { value: "Europe/London", label: "Storbritannien (Europe/London)" },
+  { value: "Europe/Madrid", label: "Spanien (Europe/Madrid)" },
+  { value: "UTC", label: "UTC" },
+];
+
 const GENERAL_FIELDS = {
   "general.driver_name": { type: "text", name: "Förarens namn", maxLength: 200 },
   "general.employer_name": { type: "text", name: "Arbetsgivarens namn", maxLength: 200 },
+  "general.timezone": { type: "text", name: "Tidszonen", validate: (v: string) => (v ? null : "Välj en tidszon.") },
 } as const;
 
 function VehicleForm({ vehicle, data }: { vehicle: Vehicle; data: SettingsPayload }) {
@@ -208,6 +222,39 @@ function VehicleForm({ vehicle, data }: { vehicle: Vehicle; data: SettingsPayloa
           />
         </Field>
       </div>
+
+      {form.has("general.timezone") ? (
+        <Advanced summary="tidszon" hasError={!!form.error("general.timezone")}>
+          <SettingRow
+            label="Tidszon"
+            htmlFor="gen-timezone"
+            hint="Styr hur klockslag visas och exporteras. Standard är svensk tid."
+            error={form.error("general.timezone")}
+          >
+            <Select
+              value={form.text("general.timezone")}
+              onValueChange={(v) => {
+                setFailure(null);
+                form.set("general.timezone", v);
+              }}
+            >
+              <SelectTrigger id="gen-timezone" className="w-full sm:w-64" aria-describedby="gen-timezone-hint">
+                <SelectValue placeholder="Välj tidszon" />
+              </SelectTrigger>
+              <SelectContent>
+                {(TIMEZONES.some((z) => z.value === form.text("general.timezone")) || !form.text("general.timezone")
+                  ? TIMEZONES
+                  : [{ value: form.text("general.timezone"), label: form.text("general.timezone") }, ...TIMEZONES]
+                ).map((z) => (
+                  <SelectItem key={z.value} value={z.value}>
+                    {z.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </SettingRow>
+        </Advanced>
+      ) : null}
 
       <SaveBar
         dirty={dirty}

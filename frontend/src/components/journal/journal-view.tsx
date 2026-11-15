@@ -225,7 +225,7 @@ export function JournalView() {
       </div>
       <ActiveFilterChips filters={{ ...filters, category: quick ? [] : filters.category, needs_review: quick ? false : filters.needs_review }} onChange={setFilters} />
 
-      <Card className="mt-3 overflow-hidden">
+      <Card className="mt-3 overflow-clip">
         <BulkBar
           count={selected.size}
           busy={actions.isPending || mergeFlow.isPending}

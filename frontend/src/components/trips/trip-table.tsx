@@ -71,10 +71,10 @@ export function TripTable({
       case "end_time":
         return <span className="text-[13px]"><TripTime at={t.ended_at} quality={t.end_time_quality} /></span>;
       case "start_address":
-        return <AddressCell address={t.start_address} location={t.start_location} className="block max-w-[170px] truncate text-[13px]" />;
+        return <AddressCell address={t.start_address} location={t.start_location} className="block max-w-[150px] truncate text-[13px]" />;
       case "end_address":
         return (
-          <span className="flex max-w-[190px] items-center gap-1.5 text-[13px]">
+          <span className="flex max-w-[160px] items-center gap-1.5 text-[13px]">
             <AddressCell address={t.end_address} location={t.end_location} className="truncate" />
             {t.segment_count > 1 ? (
               <Tooltip content={`Sammanslagen av ${t.segment_count} delresor`}>
@@ -113,7 +113,7 @@ export function TripTable({
         );
       case "purpose":
         return (
-          <span className="flex max-w-[220px] items-center gap-1.5">
+          <span className="flex max-w-[200px] items-center gap-1.5">
             <InlinePurpose value={t.purpose} confirmed={t.purpose_confirmed} onSave={(text) => handlers.onPurpose(t, text)} />
             {t.has_calendar_match ? (
               <Tooltip content="Matchar ett möte i kalendern">
@@ -149,9 +149,9 @@ export function TripTable({
           </TH>
           {cols.map((c) =>
             c.sort ? (
-              <SortableTH key={c.id} label={c.label} field={c.sort} sort={sort} order={order} onSort={onSort} align={c.align} />
+              <SortableTH key={c.id} label={c.label} field={c.sort} sort={sort} order={order} onSort={onSort} align={c.align} className="px-2.5" />
             ) : (
-              <TH key={c.id} className={cn(c.align === "right" && "text-right")}>
+              <TH key={c.id} className={cn("px-2.5", c.align === "right" && "text-right")}>
                 {c.label}
               </TH>
             ),
@@ -179,7 +179,7 @@ export function TripTable({
                 <FavoriteStar active={t.is_favorite} onToggle={() => handlers.onFavorite(t)} />
               </TD>
               {cols.map((c) => (
-                <TD key={c.id} className={cn(c.align === "right" && "text-right", c.id === "date" && "py-2.5")}>
+                <TD key={c.id} className={cn("px-2.5", c.align === "right" && "text-right", c.id === "date" && "py-2.5")}>
                   {c.id === "date" ? (
                     <a href={`/journal/${t.id}`} onClick={(e) => { e.preventDefault(); router.push(`/journal/${t.id}`); }} className="rounded-sm hover:underline focus-visible:outline-2 focus-visible:outline-ring">
                       {cell(t, c.id)}

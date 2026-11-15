@@ -17,7 +17,11 @@ export interface BulkHandlers {
   onClear: () => void;
 }
 
-/** Massåtgärder för markerade resor. Visas ovanför tabellen när något är markerat. */
+/**
+ * Massåtgärder för markerade resor. Visas ovanför tabellen när något är markerat.
+ * Klistras under sidhuvudet (top-14) när sidan rullas – omgivande kort måste använda
+ * `overflow-clip` (inte `overflow-hidden`) så att raden inte hamnar över tabellhuvudet.
+ */
 export function BulkBar({ count, busy, handlers }: { count: number; busy?: boolean; handlers: BulkHandlers }) {
   const [purpose, setPurpose] = React.useState("");
   const [open, setOpen] = React.useState(false);
@@ -26,7 +30,7 @@ export function BulkBar({ count, busy, handlers }: { count: number; busy?: boole
     <div
       role="toolbar"
       aria-label="Åtgärder för markerade resor"
-      className="sticky top-14 z-10 flex flex-wrap items-center gap-1.5 border-b border-border bg-accent-soft/70 px-3 py-2 backdrop-blur animate-fade-in"
+      className="sticky top-14 z-[15] flex flex-wrap items-center gap-1.5 border-b border-border bg-accent-soft/70 px-3 py-2 backdrop-blur animate-fade-in"
     >
       <span className="mr-1 text-sm font-semibold text-accent-ink num">{plural(count, "vald", "valda")}</span>
       <Button size="sm" variant="secondary" onClick={() => handlers.onCategory("work")} disabled={busy}>
