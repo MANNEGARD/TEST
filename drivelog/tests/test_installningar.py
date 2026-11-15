@@ -43,10 +43,17 @@ def test_adminuppgifter_och_losenordslangd():
     inst = tolka({**GRUND, "admin_email": "Agare@Example.se", "admin_password": "x" * 16})
     assert inst.har_adminuppgifter
     assert inst.admin_email == "agare@example.se"
-    with pytest.raises(OgiltigaInstallningar, match="minst 12"):
-        tolka({**GRUND, "admin_email": "a@example.se", "admin_password": "kort"})
-    with pytest.raises(OgiltigaInstallningar, match="e-postadress"):
-        tolka({**GRUND, "admin_email": "inte-epost", "admin_password": "x" * 16})
+    # Ogiltiga uppgifter stoppar inte starten (finns ett konto ska DriveLog starta som vanligt),
+    # men de används inte och problemet följer med till loggen.
+    kort = tolka({**GRUND, "admin_email": "a@example.se", "admin_password": "x" * 11})
+    assert not kort.har_adminuppgifter and "minst 12" in kort.adminproblem
+    assert "x" * 11 not in kort.adminproblem
+    tolv = tolka({**GRUND, "admin_email": "a@example.se", "admin_password": "x" * 12})
+    assert tolv.har_adminuppgifter and tolv.adminproblem is None
+    fel = tolka({**GRUND, "admin_email": "inte-epost", "admin_password": "x" * 16})
+    assert not fel.har_adminuppgifter and "e-postadress" in fel.adminproblem
+    nul = tolka({**GRUND, "admin_email": "a@example.se", "admin_password": "x" * 12 + "\x00"})
+    assert not nul.har_adminuppgifter and nul.adminproblem
 
 
 def test_bara_ena_adminuppgiften_ger_varning():

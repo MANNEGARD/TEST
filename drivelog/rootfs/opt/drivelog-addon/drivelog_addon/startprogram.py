@@ -5,13 +5,15 @@ Ordning:
 1. Inställningarna läses och kontrolleras, nycklarna skapas eller läses in.
 2. API:t startas (databasmigrering, sedan uvicorn på port 8000) och startprogrammet väntar
    på hälsokontrollen.
-3. ``/api/v1/auth/setup-status`` avgör om ett konto finns. Finns inget – och kunde inget skapas
+3. Administratörens uppgifter i inställningarna tillämpas om de har ändrats sedan de senast
+   tillämpades (se nedan) – innan något blir nåbart från internet.
+4. ``/api/v1/auth/setup-status`` avgör om ett konto finns. Finns inget – och kunde inget skapas
    från inställningarna – startas varken webbapp eller proxy: ingenting blir då nåbart från
    internet utan konto. API:t fortsätter att gå (bara på Home Assistants interna nät) så att
    tillägget inte startas om i en slinga; loggen säger vad ägaren ska fylla i.
-4. Webbappen (bara på 127.0.0.1) och sedan Caddy (80/443, automatisk HTTPS) startas, och
+5. Webbappen (bara på 127.0.0.1) och sedan Caddy (80/443, automatisk HTTPS) startas, och
    DynDNS-uppdateraren om den är påslagen (annars en engångskontroll av AAAA-posten).
-5. Dör någon av processerna avslutas allt med felkod så att Supervisor startar om tillägget.
+6. Dör någon av processerna avslutas allt med felkod så att Supervisor startar om tillägget.
    SIGTERM ger en ren nedstängning i omvänd ordning.
 
 Processerna körs som var sin icke-root-användare. Caddy får bara förmågan att binda port
@@ -25,9 +27,29 @@ Lagringen i /data (kontraktet, se docs/home-assistant-tillagg.md):
     /data/app/            drivelog  700   API:ts databas (drivelog.sqlite3) och dess kataloger
     /data/caddy/          caddy     700   certifikat och ACME-konto
 
-Första kontot skapas i tillägget alltid ur inställningarna (DRIVELOG_FIRST_ADMIN_*): API:t får
-DRIVELOG_WEB_SETUP=false, så att inget annat tillägg på Home Assistants interna nät kan skapa
-kontot via /api/v1/auth/setup medan tillägget väntar.
+Kontot skapas i tillägget bara ur inställningarna: API:t får DRIVELOG_WEB_SETUP=false, så att
+inget annat tillägg på Home Assistants interna nät kan skapa kontot via /api/v1/auth/setup medan
+tillägget väntar.
+
+Administratörens uppgifter ("Administratörens e-post"/"Administratörens lösenord") tillämpas när de
+har ÄNDRATS sedan de senast tillämpades. Märket över senast tillämpade uppgifter är en nyckelad hash
+i /data/hemligheter (hemligheter.py) – aldrig lösenordet. När API:t är redo:
+
+- fälten tomma (eller bara det ena ifyllt) → ingenting görs;
+- uppgifterna ogiltiga (adressen, eller lösenordet kortare än 12 tecken) → tydligt fel i loggen,
+  ingenting ändras;
+- märket stämmer → ingenting görs: ett lösenord som har bytts inne i DriveLog skrivs inte över
+  av ett som har lämnats kvar i fältet;
+- märket skiljer sig, eller saknas och det finns inget konto alls (första starten) → lösenordet
+  sätts med ``python -m app.cli create-admin <adress>`` (kontot skapas som administratör om det
+  saknas, kontots inloggade sessioner avslutas) och märket sparas;
+- märket saknas eller är trasigt men det finns konton (t.ex. första starten efter uppdatering
+  från 1.0.1 med lösenordet kvar i fältet) → för säkerhets skull ändras ingenting; märket sparas
+  för de nuvarande uppgifterna och loggen förklarar att ett NYTT lösenord ska skrivas in för att
+  återställa. Annars skulle ett gammalt kvarglömt lösenord kunna skriva över ett nyare.
+
+Kommandot körs som API-användaren med API:ts miljö (samma databas). Lösenordet får det i
+miljövariabeln DRIVELOG_ADMIN_PASSWORD – aldrig på kommandoraden – och det skrivs aldrig i loggen.
 """
 
 from __future__ import annotations
@@ -71,6 +93,7 @@ class Sokvagar:
     api_start: tuple[str, ...] = ("/usr/local/bin/docker-entrypoint.sh", "api")
     node: str = "/usr/local/bin/node"
     caddy: str = "/usr/local/bin/caddy"
+    python: str = "/opt/venv/bin/python"
     path: str = "/opt/venv/bin:/usr/local/bin:/usr/bin:/bin"
 
     @property
@@ -101,6 +124,7 @@ class Process(Protocol):
 
 
 Starta = Callable[..., Process]
+KorKommando = Callable[..., tuple[int, str]]
 HamtaJson = Callable[[str, float], tuple[int, dict | None]]
 
 
@@ -126,16 +150,8 @@ def lagsta_oprivilegierade_port(path: Path = Path("/proc/sys/net/ipv4/ip_unprivi
         return 1024
 
 
-def starta_process(
-    namn: str,
-    kommando: list[str],
-    *,
-    miljo: dict[str, str],
-    katalog: Path | None,
-    anvandare: str | None,
-    lag_portar: bool = False,
-) -> Process:
-    """Startar en process; som root byts användare med setpriv (util-linux)."""
+def _som_anvandare(kommando: list[str], anvandare: str | None, lag_portar: bool = False) -> list[str]:
+    """Som root: kommandot körs som ``anvandare`` via setpriv (util-linux), utan nya privilegier."""
     if anvandare and os.geteuid() == 0:
         prefix = [
             "setpriv",
@@ -152,10 +168,54 @@ def starta_process(
                 "Caddy kommer inte att kunna starta."
             )
         kommando = [*prefix, "--", *kommando]
+    return kommando
+
+
+def starta_process(
+    namn: str,
+    kommando: list[str],
+    *,
+    miljo: dict[str, str],
+    katalog: Path | None,
+    anvandare: str | None,
+    lag_portar: bool = False,
+) -> Process:
+    """Startar en process; som root byts användare med setpriv (util-linux)."""
+    kommando = _som_anvandare(kommando, anvandare, lag_portar)
     logger.debug("Startar %s", namn)
     return subprocess.Popen(  # noqa: S603 - fasta kommandon, ingen skalinterpretation
         kommando, env=miljo, cwd=str(katalog) if katalog else None, umask=0o027
     )
+
+
+def kor_kommando(
+    kommando: list[str],
+    *,
+    miljo: dict[str, str],
+    katalog: Path | None,
+    anvandare: str | None,
+    tidsgrans: float,
+) -> tuple[int, str]:
+    """Kör ett kort kommando till slut och returnerar (kod, utskrift). -1 om tidsgränsen passerades."""
+    kommando = _som_anvandare(kommando, anvandare)
+    try:
+        resultat = subprocess.run(  # noqa: S603 - fasta kommandon, ingen skalinterpretation
+            kommando,
+            env=miljo,
+            cwd=str(katalog) if katalog else None,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=tidsgrans,
+            umask=0o027,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return -1, f"kommandot blev inte klart inom {tidsgrans:.0f} sekunder"
+    except OSError as exc:
+        return -1, f"kommandot kunde inte startas ({exc.strerror})"
+    return resultat.returncode, (resultat.stdout + resultat.stderr).strip()
 
 
 def hamta_json(url: str, timeout: float) -> tuple[int, dict | None]:
@@ -180,11 +240,13 @@ class Startprogram:
     nycklar: hemligheter.Hemligheter
     sokvagar: Sokvagar = field(default_factory=Sokvagar)
     starta: Starta = starta_process
+    kor_kommando: KorKommando = kor_kommando
     hamta: HamtaJson = hamta_json
     byt_anvandare: bool = True
     intervall: float = 2.0
     api_tidsgrans: float = 600.0
     webb_tidsgrans: float = 180.0
+    kommando_tidsgrans: float = 300.0
     stopp_tidsgrans: float = 8.0
     tidszon: str = field(default_factory=lambda: os.environ.get("TZ") or "Europe/Stockholm")
     version: str = field(default_factory=lambda: os.environ.get("DRIVELOG_ADDON_VERSION", "okänd"))
@@ -225,13 +287,12 @@ class Startprogram:
                 "DRIVELOG_TIMEZONE": self.tidszon,
                 "DRIVELOG_LOG_LEVEL": self.inst.log_level.upper(),
                 "FORWARDED_ALLOW_IPS": "127.0.0.1",
-                # Första kontot skapas bara ur inställningarna, aldrig via /auth/setup.
+                # Kontot skapas bara ur inställningarna (av startprogrammet), aldrig via /auth/setup.
                 "DRIVELOG_WEB_SETUP": "false",
             }
         )
-        if self.inst.har_adminuppgifter:
-            miljo["DRIVELOG_FIRST_ADMIN_EMAIL"] = self.inst.admin_email or ""
-            miljo["DRIVELOG_FIRST_ADMIN_PASSWORD"] = self.inst.admin_password or ""
+        # Administratörens lösenord ges aldrig till API-processen; det används bara av
+        # kommandot i tillampa_adminuppgifter().
         return miljo
 
     def miljo_webb(self) -> dict[str, str]:
@@ -341,6 +402,95 @@ class Startprogram:
         self._dyndns_trad = threading.Thread(target=uppdaterare.kor, args=(stopp,), name="dyndns", daemon=True)
         self._dyndns_trad.start()
 
+    # Administratörens uppgifter ----------------------------------------------------------------
+
+    def tillampa_adminuppgifter(self, behover_konto: bool) -> None:
+        """Sätter administratörens lösenord om uppgifterna har ändrats sedan de senast tillämpades.
+
+        Se modulens beskrivning för alla fall. Lösenordet loggas aldrig."""
+        inst = self.inst
+        if not (inst.admin_email and inst.admin_password):
+            return
+        epost, losenord = inst.admin_email, inst.admin_password
+        if inst.adminproblem:
+            if behover_konto:
+                logger.error("%s Kontot kan inte skapas – rätta fältet och starta om appen.", inst.adminproblem)
+            else:
+                logger.error(
+                    "%s Lösenordet ändrades inte – DriveLog startar som vanligt med det tidigare lösenordet.",
+                    inst.adminproblem,
+                )
+            return
+        data = self.sokvagar.data
+        sparat = hemligheter.las_admin_marke(data)
+        if hemligheter.stammer_admin_marke(sparat, self.nycklar.secret_key, epost, losenord):
+            logger.info(
+                "'Administratörens lösenord' är oförändrat sedan det senast tillämpades – lösenordet i "
+                "DriveLog lämnas som det är. Fältet kan tömmas; skriv ett nytt lösenord där bara om du "
+                "behöver återställa det."
+            )
+            return
+        marke = hemligheter.admin_marke(self.nycklar.secret_key, epost, losenord)
+        if sparat in (hemligheter.SAKNAS, hemligheter.TRASIGT) and not behover_konto:
+            orsak = (
+                "märkesfilen över senast tillämpade lösenord var trasig"
+                if sparat == hemligheter.TRASIGT
+                else "det finns inget märke över när det senast tillämpades (t.ex. första starten efter en "
+                "uppdatering från 1.0.1)"
+            )
+            self._spara_marke(marke)
+            logger.warning(
+                "'Administratörens lösenord' är ifyllt, men %s. För säkerhets skull ändrades inget lösenord "
+                "och inget konto skapades – ett kvarglömt lösenord i inställningarna ska aldrig skriva över "
+                "ett som har bytts inne i DriveLog. Behöver du återställa lösenordet: skriv ett NYTT lösenord "
+                "i fältet, spara och starta om appen.",
+                orsak,
+            )
+            return
+        miljo = self.miljo_api()
+        miljo["DRIVELOG_ADMIN_PASSWORD"] = losenord
+        kod, utskrift = self.kor_kommando(
+            [self.sokvagar.python, "-m", "app.cli", "create-admin", epost],
+            miljo=miljo,
+            katalog=self.sokvagar.app,
+            anvandare=ANVANDARE_API if self.byt_anvandare else None,
+            tidsgrans=self.kommando_tidsgrans,
+        )
+        utskrift = utskrift.replace(losenord, "********")  # för säkerhets skull – kommandot skriver det inte
+        if kod != 0:
+            logger.error(
+                "Lösenordet för %s kunde inte sättas från appens inställningar (kod %d): %s%s",
+                epost,
+                kod,
+                utskrift or "inget meddelande",
+                "" if behover_konto else " – DriveLog startar som vanligt med det tidigare lösenordet.",
+            )
+            return
+        self._spara_marke(marke)
+        if "skapades" in utskrift:
+            if behover_konto:
+                logger.info("Administratörskontot %s skapades.", epost)
+            else:
+                logger.warning(
+                    "Det fanns inget konto med adressen %s, så det skapades nu som administratör. Var det "
+                    "inte meningen: kontrollera adressen i 'Administratörens e-post'.",
+                    epost,
+                )
+        else:
+            logger.info("Alla inloggade sessioner för %s avslutades.", epost)
+        logger.info("Lösenordet för %s sattes från appens inställningar.", epost)
+        logger.info(
+            "Fältet 'Administratörens lösenord' kan nu tömmas – det tillämpas inte igen förrän du skriver "
+            "ett nytt lösenord där."
+        )
+
+    def _spara_marke(self, marke: str) -> None:
+        try:
+            hemligheter.spara_admin_marke(self.sokvagar.data, marke)
+        except (OSError, hemligheter.TrasigaHemligheter) as exc:
+            # Utan märke tillämpas samma uppgifter inte igen (märke saknas + konto finns = ingen ändring).
+            logger.warning("Märket för administratörens lösenord kunde inte sparas: %s", exc)
+
     # Huvudflödet --------------------------------------------------------------------------------
 
     def kor(self, stopp: threading.Event) -> int:
@@ -373,12 +523,19 @@ class Startprogram:
         if behov is None:
             logger.error("API:t svarade inte som väntat på /api/v1/auth/setup-status.")
             return 1
+        if self.inst.admin_email and self.inst.admin_password:
+            self.tillampa_adminuppgifter(behov)
+            if behov:
+                behov = self.behover_konto()
+                if behov is None:
+                    logger.error("API:t svarade inte som väntat på /api/v1/auth/setup-status.")
+                    return 1
         if behov:
             self.lage = "sparrad"
-            if self.inst.har_adminuppgifter:
+            if self.inst.admin_email and self.inst.admin_password:
                 logger.error(
-                    "Kontot kunde inte skapas från inställningarna – se API:ts logg ovan. "
-                    "Webbappen och proxyn startas inte."
+                    "Kontot kunde inte skapas från inställningarna – se loggen ovan. Webbappen och proxyn "
+                    "startas inte; rätta 'Administratörens e-post'/'Administratörens lösenord' och starta om."
                 )
             else:
                 logger.warning(
@@ -388,12 +545,6 @@ class Startprogram:
                     "internet, och kontot kan inte skapas på något annat sätt."
                 )
         else:
-            if self.inst.admin_password:
-                logger.info(
-                    "Det finns ett konto i DriveLog, så 'Administratörens lösenord' används inte längre – töm "
-                    "fältet i fliken Konfiguration. (Saknas ett konto med adressen i 'Administratörens e-post' "
-                    "varnar API:t ovan.)"
-                )
             self._starta(
                 "webbappen",
                 [self.sokvagar.node, "server.js"],

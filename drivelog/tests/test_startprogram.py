@@ -37,8 +37,14 @@ class LatsasProcess:
 class Varld:
     """Låtsasvärld: håller reda på startade processer och svarar på HTTP-anrop."""
 
-    def __init__(self, behover_konto=False, api_svarar=True):
+    def __init__(self, behover_konto=False, api_svarar=True, konton=None):
         self.logg = []
+        # Låtsasdatabas: adress -> lösenord. behover_konto=False utan konton ger ett okänt konto.
+        self.konton = dict(konton or {})
+        if not behover_konto and not self.konton:
+            self.konton["nagon@example.se"] = "okant-losenord-123"
+        self.kommandon = []
+        self.kommando_svar = None  # (kod, utskrift) för att låtsas att kommandot misslyckas
         self.processer = {}
         self.behover_konto = behover_konto
         self.api_svarar = api_svarar
@@ -62,22 +68,34 @@ class Varld:
             if url.endswith("/health/ready"):
                 return 200, {"status": "ok"}
             if url.endswith("/auth/setup-status"):
-                return 200, {"needs_setup": self.behover_konto}
+                return 200, {"needs_setup": not self.konton}
         if ":3000/" in url and "webbappen" in self.processer:
             return 200, {"status": "ok"}
         return 0, None
+
+    def kor_kommando(self, kommando, *, miljo, katalog, anvandare, tidsgrans):
+        """Som ``python -m app.cli create-admin <adress>``: lösenordet ur DRIVELOG_ADMIN_PASSWORD."""
+        self.logg.append(("kommando", kommando[-1]))
+        self.kommandon.append({"argv": kommando, "miljo": miljo, "katalog": katalog, "anvandare": anvandare})
+        if self.kommando_svar:
+            return self.kommando_svar
+        epost = kommando[-1]
+        skapad = epost not in self.konton
+        self.konton[epost] = miljo["DRIVELOG_ADMIN_PASSWORD"]
+        return 0, f"Kontot {epost} skapades." if skapad else f"Lösenordet för {epost} är återställt."
 
 
 def _program(tmp_path, varld, **inst):
     data = {"domain": "drivelog.example.se", "strato_dyndns": False, "log_level": "info", **inst}
     sok = Sokvagar(data=tmp_path / "data", runtime=tmp_path / "run")
-    sok.data.mkdir()
+    sok.data.mkdir(exist_ok=True)  # en ny start med samma /data återanvänder nycklar och märke
     return Startprogram(
         installningar.tolka(data),
         hemligheter.las_eller_skapa(sok.data),
         sokvagar=sok,
         starta=varld.starta,
         hamta=varld.hamta,
+        kor_kommando=varld.kor_kommando,
         byt_anvandare=False,
         intervall=0.01,
         api_tidsgrans=2,
@@ -141,17 +159,24 @@ def test_utan_konto_och_utan_uppgifter_startas_inte_webb_eller_proxy(tmp_path, c
     assert "admin_email" in caplog.text and "admin_password" in caplog.text
 
 
-def test_adminuppgifter_skickas_till_api_men_loggas_aldrig(tmp_path, caplog):
+def test_adminuppgifter_ges_bara_till_kommandot_och_loggas_aldrig(tmp_path, caplog):
     caplog.set_level(logging.DEBUG)
-    varld = Varld(behover_konto=False)
+    varld = Varld(behover_konto=True)
     program = _program(tmp_path, varld, admin_email="agare@example.se", admin_password=ADMIN_LOSEN)
     stopp, trad, _ = _kor_i_bakgrunden(program)
     assert _vanta_tills(lambda: program.lage == "igang")
     stopp.set()
     trad.join(5)
-    miljo = varld.miljoer["API"]
-    assert miljo["DRIVELOG_FIRST_ADMIN_EMAIL"] == "agare@example.se"
-    assert miljo["DRIVELOG_FIRST_ADMIN_PASSWORD"] == ADMIN_LOSEN
+    # API-processen får aldrig lösenordet; kommandot får det i miljön, aldrig i argv.
+    assert not any(ADMIN_LOSEN in v for v in varld.miljoer["API"].values())
+    assert not any(k.startswith("DRIVELOG_FIRST_ADMIN") for k in varld.miljoer["API"])
+    (kommando,) = varld.kommandon
+    assert kommando["argv"][-4:] == ["-m", "app.cli", "create-admin", "agare@example.se"]
+    assert all(ADMIN_LOSEN not in a for a in kommando["argv"])
+    assert kommando["miljo"]["DRIVELOG_ADMIN_PASSWORD"] == ADMIN_LOSEN
+    # Samma miljö (databas, nycklar) som API:t.
+    for nyckel in ("DRIVELOG_DATABASE_URL", "DRIVELOG_DATA_DIR", "DRIVELOG_SECRET_KEY", "DRIVELOG_ENCRYPTION_KEYS"):
+        assert kommando["miljo"][nyckel] == varld.miljoer["API"][nyckel]
     assert ADMIN_LOSEN not in caplog.text
     assert program.nycklar.secret_key not in caplog.text
     assert program.nycklar.encryption_keys not in caplog.text
@@ -330,7 +355,7 @@ def test_sparrlaget_sager_att_kontot_bara_skapas_ur_installningarna(tmp_path, ca
     assert varld.miljoer["API"]["DRIVELOG_WEB_SETUP"] == "false"
 
 
-def test_med_konto_paminns_om_att_tomma_losenordet_utan_att_paasta_vems_kontot_ar(tmp_path, caplog):
+def test_med_konto_och_utan_marke_andras_ingenting_och_inget_pastas_om_vems_kontot_ar(tmp_path, caplog):
     caplog.set_level(logging.INFO)
     varld = Varld(behover_konto=False)
     program = _program(tmp_path, varld, admin_email="agare@example.se", admin_password=ADMIN_LOSEN)
@@ -339,7 +364,8 @@ def test_med_konto_paminns_om_att_tomma_losenordet_utan_att_paasta_vems_kontot_a
     stopp.set()
     trad.join(5)
     assert "Kontot finns" not in caplog.text
-    assert "töm" in caplog.text
+    assert varld.kommandon == []
+    assert "inget konto skapades" in caplog.text and "NYTT lösenord" in caplog.text
 
 
 def test_main_avbryter_nar_nyckeln_saknas_men_databasen_finns(tmp_path, capsys, monkeypatch):
