@@ -80,10 +80,10 @@ function MergeQuestion({ item, onAnswer, busy }: { item: ReviewItem; onAnswer: (
       <p className="text-sm text-fg-muted">Var det samma resa med ett kort stopp (t.ex. ett ärende på vägen), eller två separata resor?</p>
       <div className="grid gap-2 sm:grid-cols-2">
         <Button size="xl" variant="primary" onClick={() => onAnswer(true)} disabled={busy} data-testid="merge-yes">
-          <Merge aria-hidden /> Ja, slå samman <Kbd className="ml-auto hidden sm:inline-flex hidden sm:inline-flex border-white/30 bg-white/10 text-current">J</Kbd>
+          <Merge aria-hidden /> Ja, slå samman <Kbd className="ml-auto hidden sm:inline-flex border-white/30 bg-white/10 text-current">J</Kbd>
         </Button>
         <Button size="xl" variant="secondary" onClick={() => onAnswer(false)} disabled={busy} data-testid="merge-no">
-          <X aria-hidden /> Nej, två resor <Kbd className="ml-auto hidden sm:inline-flex hidden sm:inline-flex">N</Kbd>
+          <X aria-hidden /> Nej, två resor <Kbd className="ml-auto hidden sm:inline-flex">N</Kbd>
         </Button>
       </div>
     </div>
@@ -132,14 +132,14 @@ function TripDecision({
       ) : null}
       <div className={cn("grid gap-2", proposal ? "sm:grid-cols-3" : "sm:grid-cols-2")}>
         <Button size="xl" variant="secondary" onClick={() => onCategory("work")} disabled={busy} className="border-work/40 hover:bg-work-soft" data-testid="decide-work">
-          <Briefcase className="text-work" aria-hidden /> Arbete <Kbd className="ml-auto hidden sm:inline-flex hidden sm:inline-flex">A</Kbd>
+          <Briefcase className="text-work" aria-hidden /> Arbete <Kbd className="ml-auto hidden sm:inline-flex">A</Kbd>
         </Button>
         <Button size="xl" variant="secondary" onClick={() => onCategory("private")} disabled={busy} className="border-private/40 hover:bg-private-soft" data-testid="decide-private">
-          <Home className="text-private" aria-hidden /> Privat <Kbd className="ml-auto hidden sm:inline-flex hidden sm:inline-flex">P</Kbd>
+          <Home className="text-private" aria-hidden /> Privat <Kbd className="ml-auto hidden sm:inline-flex">P</Kbd>
         </Button>
         {proposal ? (
           <Button size="xl" variant="primary" onClick={onApprove} disabled={busy} data-testid="decide-approve">
-            <BadgeCheck aria-hidden /> Godkänn förslag <Kbd className="ml-auto hidden sm:inline-flex hidden sm:inline-flex border-white/30 bg-white/10 text-current">G</Kbd>
+            <BadgeCheck aria-hidden /> Godkänn förslag <Kbd className="ml-auto hidden sm:inline-flex border-white/30 bg-white/10 text-current">G</Kbd>
           </Button>
         ) : null}
       </div>
