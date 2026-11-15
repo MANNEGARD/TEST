@@ -373,7 +373,7 @@ def test_med_dyndns_ingen_adressvakt_och_uppdateraren_som_forut(tmp_path, monkey
     monkeypatch.setattr(startprogram.Uppdaterare, "kor", lambda self, stopp: uppdaterare.append(self))
     varld = Varld(behover_konto=False)
     program = _program(
-        tmp_path, varld, strato_dyndns=True, strato_dyndns_user="example.se", strato_dyndns_password="p"
+        tmp_path, varld, strato_dyndns=True, strato_dyndns_user="example.se", strato_dyndns_password="p"  # noqa: S106 - låtsasvärde
     )
     stopp, trad, _ = _kor_i_bakgrunden(program)
     assert _vanta_tills(lambda: program.lage == "igang" and uppdaterare)
