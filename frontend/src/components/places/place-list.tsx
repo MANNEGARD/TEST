@@ -141,7 +141,7 @@ export function PlaceList({ places, onOpen, onNew }: { places: Place[]; onOpen: 
             >
               <CircleDashed className="size-4" aria-hidden />
               Obekräftade
-              <span className={cn("font-mono text-xs", activeUnconfirmed ? "opacity-80" : "text-fg-muted")}>{formatNumber(unconfirmed, 0)}</span>
+              <span className={cn("num text-xs", activeUnconfirmed ? "opacity-80" : "text-fg-muted")}>{formatNumber(unconfirmed, 0)}</span>
             </button>
           ) : null}
           <Select value={activeType} onValueChange={setType}>
@@ -234,7 +234,7 @@ function PlaceRow({ place: p, onOpen }: { place: Place; onOpen: (id: string) => 
         </span>
 
         {/* md och uppåt: egna kolumner */}
-        <span className="hidden text-right font-mono text-sm md:block">
+        <span className="hidden text-right num text-sm md:block">
           {formatNumber(p.visit_count, 0)}
           <span className="sr-only"> besök</span>
         </span>

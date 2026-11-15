@@ -113,7 +113,7 @@ function ChargingForm({ record, onDone }: { record: ChargingRecord | null; onDon
       </div>
       {seconds != null ? (
         <FieldHint id="charge-end-hint" className="-mt-2">
-          Laddningen pågick <span className="font-mono">{formatDuration(seconds)}</span>
+          Laddningen pågick <span className="num">{formatDuration(seconds)}</span>
           {overnight ? " och slutade nästa dag." : "."}
         </FieldHint>
       ) : null}

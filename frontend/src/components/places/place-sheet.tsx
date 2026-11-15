@@ -228,15 +228,15 @@ function PlaceEditor({
               <dl className="grid grid-cols-3 gap-3">
                 <div>
                   <dt className="text-xs text-fg-muted">Besök</dt>
-                  <dd className="mt-0.5 font-mono font-medium">{formatNumber(place.visit_count, 0)}</dd>
+                  <dd className="mt-0.5 num font-medium">{formatNumber(place.visit_count, 0)}</dd>
                 </div>
                 <div>
                   <dt className="text-xs text-fg-muted">Körsträcka hit</dt>
-                  <dd className="mt-0.5 font-mono font-medium">{formatMil(stats.km)}</dd>
+                  <dd className="mt-0.5 num font-medium">{formatMil(stats.km)}</dd>
                 </div>
                 <div>
                   <dt className="text-xs text-fg-muted">Senast</dt>
-                  <dd className="mt-0.5 font-mono font-medium">{formatDate(place.last_visited_at)}</dd>
+                  <dd className="mt-0.5 num font-medium">{formatDate(place.last_visited_at)}</dd>
                 </div>
               </dl>
               {stats.most_common_category || purposes.length ? (
@@ -254,7 +254,7 @@ function PlaceEditor({
                       {purposes.slice(0, 3).map((p) => (
                         <li key={p.text} className="flex items-baseline justify-between gap-3">
                           <span className="min-w-0 truncate">{p.text}</span>
-                          <span className="shrink-0 font-mono text-xs text-fg-muted">{formatNumber(p.count, 0)}×</span>
+                          <span className="shrink-0 num text-xs text-fg-muted">{formatNumber(p.count, 0)}×</span>
                         </li>
                       ))}
                     </ul>
@@ -386,7 +386,7 @@ function PlaceEditor({
             <p className="flex items-center gap-1.5 text-xs text-fg-muted" aria-live="polite">
               {pos ? (
                 <>
-                  <span className="font-mono text-fg">
+                  <span className="num text-fg">
                     {formatNumber(pos.lat, 5, 5)}, {formatNumber(pos.lon, 5, 5)}
                   </span>
                   {patch.latitude === undefined && place.coordinate_source ? <span>· {COORDINATE_SOURCE[place.coordinate_source] ?? place.coordinate_source}</span> : null}

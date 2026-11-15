@@ -50,7 +50,9 @@ src/lib/labels.ts      svenska etiketter för alla enum-koder
   `invalidateJournalData(qc)`. Fordonsberoende hooks läser `useVehicle().vehicleId` och har det i nyckeln.
 - **Färger** endast via tema-tokens (`bg-surface`, `text-fg-muted`, `bg-work-soft`, `text-private-ink`, …)
   definierade i `src/app/globals.css` för ljust och mörkt tema. Kategori/status kombineras alltid med text eller ikon.
-- **Siffror** har `tabular-nums` globalt; nyckeltal och mätarställningar i `font-mono` (Geist Mono).
+- **Siffror** har `tabular-nums` globalt (klassen `num` där det behöver förtydligas) och visas i samma proportionella typsnitt
+  som texten – inte `font-mono`, som ger glapp runt decimalkommat. `font-mono` används bara för koder: tokens, ID:n, URL:er,
+  tjänstenamn och filnamn. Tal i tabeller högerställs.
 - **Tillgänglighet**: semantiska element, `aria-label` på ikonknappar, synlig fokus (`focus-visible:outline-ring`).
 - **Användningsfall**: milersättning för egen bil – tjänsteresor är huvudsaken. Luckor i mätarställningen
   är privat körning och visas inte som fel eller varningar.

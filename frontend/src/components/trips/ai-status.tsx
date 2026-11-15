@@ -25,7 +25,7 @@ export function AiStatus({ trip }: { trip: Trip }) {
       <span tabIndex={0} className="inline-flex cursor-help items-center gap-1 text-xs whitespace-nowrap text-fg-muted outline-none focus-visible:outline-2 focus-visible:outline-ring">
         <Icon className="size-3.5 text-fg-subtle" aria-hidden />
         {src === "import" ? "Import" : src === "user" ? "Du" : text}
-        {conf ? <span className="font-mono text-fg">{conf}</span> : null}
+        {conf ? <span className="num text-fg">{conf}</span> : null}
       </span>
     </Tooltip>
   );

@@ -20,7 +20,7 @@ export function DestinationsList({ items }: { items: DestinationRow[] }) {
               <span className="truncate" title={d.address ?? d.label}>
                 {d.label}
               </span>
-              <span className="shrink-0 font-mono text-[13px] text-fg">
+              <span className="shrink-0 num text-[13px] text-fg">
                 {formatMil(d.total_km)}
                 <span className="ml-1.5 font-sans text-xs text-fg-muted">{plural(d.trips, "resa", "resor")}</span>
               </span>

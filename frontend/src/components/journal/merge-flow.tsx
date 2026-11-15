@@ -56,7 +56,7 @@ export function useMergeFlow(onDone?: (trip: Trip) => void) {
         <div className="rounded-md border border-border bg-surface-2 p-3 text-sm text-fg-muted">
           {pending?.gapKm != null ? (
             <p>
-              <strong className="font-mono text-fg">{formatKm(pending.gapKm)}</strong> i mätarställningen saknar journalpost mellan resorna. Luckan
+              <strong className="num text-fg">{formatKm(pending.gapKm)}</strong> i mätarställningen saknar journalpost mellan resorna. Luckan
               finns kvar och redovisas som ej journalförd även efter sammanslagningen.
             </p>
           ) : (

@@ -211,19 +211,19 @@ export function TotalsLine({ total, totals, className }: { total: number; totals
     <div className={cn("flex flex-wrap items-center gap-x-5 gap-y-1 text-[13px]", className)}>
       <span className="text-fg-muted">
         Summa för {plural(total, "resa", "resor")}:{" "}
-        <strong className="font-mono font-semibold text-fg">{formatKm(totals.distance_km)}</strong>
+        <strong className="num font-semibold text-fg">{formatKm(totals.distance_km)}</strong>
       </span>
       <span className="inline-flex items-center gap-1.5">
         <span className="size-2 rounded-full bg-work" aria-hidden />
-        Arbete <span className="font-mono">{formatKm(totals.work_km)}</span>
+        Arbete <span className="num">{formatKm(totals.work_km)}</span>
       </span>
       <span className="inline-flex items-center gap-1.5">
         <span className="size-2 rounded-full bg-private" aria-hidden />
-        Privat <span className="font-mono">{formatKm(totals.private_km)}</span>
+        Privat <span className="num">{formatKm(totals.private_km)}</span>
       </span>
       <span className="inline-flex items-center gap-1.5">
         <span className="size-2 rounded-full bg-undecided" aria-hidden />
-        Ej avgjord <span className="font-mono">{formatKm(totals.undecided_km)}</span>
+        Ej avgjord <span className="num">{formatKm(totals.undecided_km)}</span>
       </span>
     </div>
   );

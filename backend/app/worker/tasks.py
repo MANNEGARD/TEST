@@ -9,6 +9,7 @@ from datetime import timedelta
 from typing import Any
 
 from sqlalchemy import delete, select
+from sqlalchemy.orm import Session
 
 from app import jobs
 from app.db import session_scope, utcnow
@@ -19,11 +20,18 @@ logger = logging.getLogger(__name__)
 
 
 def _safe(name: str, fn, *args: Any, **kwargs: Any) -> Any:
-    """Kör ett delsteg; ett fel i en integration får aldrig stoppa de övriga."""
+    """Kör ett delsteg; ett fel i en integration får aldrig stoppa de övriga.
+
+    Vid fel rullas delstegets session tillbaka, så att ``session_scope`` kan avsluta
+    (annars kastar commit ``PendingRollbackError`` och resten av ``tick()`` körs inte).
+    """
     try:
         return fn(*args, **kwargs)
     except Exception:
         logger.exception("Bakgrundssteget %s misslyckades", name)
+        for arg in (*args, *kwargs.values()):
+            if isinstance(arg, Session):
+                arg.rollback()
         return {"error": True}
 
 

@@ -14,7 +14,7 @@ import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall, callback
-from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
+from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_track_time_interval
@@ -74,13 +74,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: DriveLogConfigEntry) -> 
     except DriveLogAuthError as err:
         raise ConfigEntryAuthFailed(str(err)) from err
     except DriveLogError as err:
-        # Svar som köats före omstarten ligger kvar på disk och skickas när DriveLog nås.
-        raise ConfigEntryNotReady(str(err)) from err
+        # Uppsättningen fortsätter ändå: lyssnaren på knapptryck måste finnas även när
+        # DriveLog inte nås, annars tappas svar. De köas på disk och skickas senare.
+        _LOGGER.warning("SMGD DriveLog nås inte just nu (%s). Svar köas och skickas när anslutningen fungerar.", err)
 
     coordinator = DriveLogCoordinator(hass, entry, client)
     manager = DriveLogManager(hass, entry, client)
     await manager.async_load()
-    await coordinator.async_config_entry_first_refresh()
     entry.runtime_data = DriveLogData(client=client, coordinator=coordinator, manager=manager)
 
     @callback
@@ -94,6 +94,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: DriveLogConfigEntry) -> 
             event_filter=callback(lambda data: is_drivelog_action(data)),
         )
     )
+    # Sensorerna blir otillgängliga tills DriveLog nås; koordinatorn försöker igen enligt intervallet.
+    await coordinator.async_refresh()
 
     await manager.async_heartbeat()
     interval = timedelta(seconds=manager.poll_interval) if manager.poll_interval else DEFAULT_POLL_INTERVAL

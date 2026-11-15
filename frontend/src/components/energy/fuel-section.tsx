@@ -145,11 +145,11 @@ export function FuelSection({ period, onShowAll }: { period: PeriodValue; onShow
           <CardDescription>
             {rows.length ? (
               <>
-                {plural(rows.length, "tankning", "tankningar")} · <span className="font-mono">{formatLiters(liters)}</span>
+                {plural(rows.length, "tankning", "tankningar")} · <span className="num">{formatLiters(liters)}</span>
                 {cost != null ? (
                   <>
                     {" "}
-                    · <span className="font-mono">{formatCurrency(cost)}</span>
+                    · <span className="num">{formatCurrency(cost)}</span>
                   </>
                 ) : null}
                 {suggestions ? <> · {plural(suggestions, "förslag", "förslag")} att bekräfta</> : null}
@@ -202,7 +202,7 @@ export function FuelSection({ period, onShowAll }: { period: PeriodValue; onShow
               {rows.map((r) => (
                 <TR key={r.id} data-testid="fuel-row">
                   <TD className="pl-5 whitespace-nowrap">
-                    <span className="font-mono">{formatDate(r.at)}</span> <span className="font-mono text-xs text-fg-muted">{formatTime(r.at)}</span>
+                    <span className="num">{formatDate(r.at)}</span> <span className="num text-xs text-fg-muted">{formatTime(r.at)}</span>
                     {isSuggestion(r) ? <span className="ml-2 align-middle"><SuggestionBadge /></span> : null}
                   </TD>
                   <TD className="text-right">
@@ -232,16 +232,16 @@ export function FuelSection({ period, onShowAll }: { period: PeriodValue; onShow
               <li key={r.id} className="flex items-start gap-3 px-4 py-3" data-testid="fuel-row-mobile">
                 <div className="min-w-0 flex-1">
                   <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
-                    <span className="font-mono font-medium">{formatDate(r.at)}</span>
-                    <span className="font-mono text-xs text-fg-muted">{formatTime(r.at)}</span>
+                    <span className="num font-medium">{formatDate(r.at)}</span>
+                    <span className="num text-xs text-fg-muted">{formatTime(r.at)}</span>
                     {isSuggestion(r) ? <SuggestionBadge /> : null}
                   </p>
                   <p className="mt-1 flex flex-wrap items-baseline gap-x-2 text-sm">
                     <span className="font-medium">
                       <Liters r={r} />
                     </span>
-                    {r.total_cost != null ? <span className="font-mono text-fg-muted">{formatCurrency(r.total_cost)}</span> : null}
-                    {pricePerLiter(r) ? <span className="font-mono text-xs text-fg-muted">{pricePerLiter(r)}</span> : null}
+                    {r.total_cost != null ? <span className="num text-fg-muted">{formatCurrency(r.total_cost)}</span> : null}
+                    {pricePerLiter(r) ? <span className="num text-xs text-fg-muted">{pricePerLiter(r)}</span> : null}
                   </p>
                   {r.station || r.odometer_km != null || r.full_tank ? (
                     <p className="mt-0.5 truncate text-xs text-fg-muted">

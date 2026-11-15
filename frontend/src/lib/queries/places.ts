@@ -114,7 +114,8 @@ export function useDeletePlace() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => api.del(`/locations/${id}`),
-    onSuccess: () => invalidatePlaces(qc, { journal: false }),
+    // Resor som pekade på platsen visar adressen i stället – körjournalen läses om.
+    onSuccess: () => invalidatePlaces(qc),
   });
 }
 

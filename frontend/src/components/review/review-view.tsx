@@ -62,7 +62,7 @@ function MergeQuestion({ item, onAnswer, busy }: { item: ReviewItem; onAnswer: (
             <Clock className="mx-auto mb-0.5 size-3.5" aria-hidden />
             {minutes != null ? (
               <>
-                <span className="font-mono font-medium text-fg">{minutes === minutesHigh || minutesHigh == null ? minutes : `${minutes}–${minutesHigh}`} min</span>
+                <span className="num font-medium text-fg">{minutes === minutesHigh || minutesHigh == null ? minutes : `${minutes}–${minutesHigh}`} min</span>
                 <br />
                 stopp
               </>
@@ -382,7 +382,7 @@ export function ReviewView() {
                     )}
                   >
                     {k === "all" ? "Alla" : label(REVIEW_KIND_SHORT, k)}
-                    <span className={cn("font-mono text-xs", active ? "opacity-80" : "text-fg-subtle")}>{k === "all" ? total : counts[k]}</span>
+                    <span className={cn("num text-xs", active ? "opacity-80" : "text-fg-subtle")}>{k === "all" ? total : counts[k]}</span>
                   </button>
                 );
               })}
@@ -464,7 +464,7 @@ export function ReviewView() {
                       <p className="truncate">
                         {i.trip ? (
                           <>
-                            <span className="font-mono text-xs text-fg-muted">{formatDate(i.trip.started_at ?? i.trip.sort_time)}</span> {i.trip.end_address ?? i.title}
+                            <span className="num text-xs text-fg-muted">{formatDate(i.trip.started_at ?? i.trip.sort_time)}</span> {i.trip.end_address ?? i.title}
                           </>
                         ) : (
                           i.title

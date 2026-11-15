@@ -91,11 +91,11 @@ export function ChargingSection({ period, onShowAll }: { period: PeriodValue; on
           <CardDescription>
             {rows.length ? (
               <>
-                {plural(rows.length, "laddning", "laddningar")} · <span className="font-mono">{formatKwh(kwh)}</span>
+                {plural(rows.length, "laddning", "laddningar")} · <span className="num">{formatKwh(kwh)}</span>
                 {cost != null ? (
                   <>
                     {" "}
-                    · <span className="font-mono">{formatCurrency(cost)}</span>
+                    · <span className="num">{formatCurrency(cost)}</span>
                   </>
                 ) : null}
               </>
@@ -139,7 +139,7 @@ export function ChargingSection({ period, onShowAll }: { period: PeriodValue; on
               {rows.map((r) => (
                 <TR key={r.id} data-testid="charging-row">
                   <TD className="pl-5 whitespace-nowrap">
-                    <span className="font-mono">{formatDate(r.started_at)}</span> <span className="font-mono text-xs text-fg-muted">{formatTime(r.started_at)}</span>
+                    <span className="num">{formatDate(r.started_at)}</span> <span className="num text-xs text-fg-muted">{formatTime(r.started_at)}</span>
                   </TD>
                   <TD className="whitespace-nowrap">
                     <QualityValue mono value={duration(r)} missingText="Ingen sluttid angiven" />
@@ -164,14 +164,14 @@ export function ChargingSection({ period, onShowAll }: { period: PeriodValue; on
               <li key={r.id} className="flex items-start gap-3 px-4 py-3" data-testid="charging-row-mobile">
                 <div className="min-w-0 flex-1">
                   <p className="flex flex-wrap items-center gap-x-2 text-sm">
-                    <span className="font-mono font-medium">{formatDate(r.started_at)}</span>
-                    <span className="font-mono text-xs text-fg-muted">{formatTime(r.started_at)}</span>
+                    <span className="num font-medium">{formatDate(r.started_at)}</span>
+                    <span className="num text-xs text-fg-muted">{formatTime(r.started_at)}</span>
                   </p>
                   <p className="mt-1 flex flex-wrap items-baseline gap-x-2 text-sm">
                     <span className="font-medium">
                       <Kwh r={r} />
                     </span>
-                    {r.total_cost != null ? <span className="font-mono text-fg-muted">{formatCurrency(r.total_cost)}</span> : null}
+                    {r.total_cost != null ? <span className="num text-fg-muted">{formatCurrency(r.total_cost)}</span> : null}
                   </p>
                   {r.location || duration(r) ? <p className="mt-0.5 truncate text-xs text-fg-muted">{[r.location, duration(r)].filter(Boolean).join(" · ")}</p> : null}
                 </div>

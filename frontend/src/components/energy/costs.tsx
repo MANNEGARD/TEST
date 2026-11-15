@@ -35,22 +35,22 @@ export function CostsCard({ summary: s }: { summary: EnergySummary }) {
         <DescriptionList className="sm:grid-cols-2 lg:grid-cols-4">
           {s.refuels.cost != null ? (
             <DescriptionItem label="Bensin, betalt">
-              <span className="font-mono text-base font-medium">{formatCurrency(s.refuels.cost)}</span>
+              <span className="num text-base font-medium">{formatCurrency(s.refuels.cost)}</span>
               <span className="mt-0.5 block text-xs text-fg-muted">
                 {plural(s.refuels.count, "tankning", "tankningar")}
-                {s.refuels.average_price_per_liter != null ? <> · snitt <span className="font-mono">{formatNumber(s.refuels.average_price_per_liter, 2, 2)} kr/l</span></> : null}
+                {s.refuels.average_price_per_liter != null ? <> · snitt <span className="num">{formatNumber(s.refuels.average_price_per_liter, 2, 2)} kr/l</span></> : null}
               </span>
             </DescriptionItem>
           ) : null}
           {s.charging.cost != null ? (
             <DescriptionItem label="Laddning, betalt">
-              <span className="font-mono text-base font-medium">{formatCurrency(s.charging.cost)}</span>
+              <span className="num text-base font-medium">{formatCurrency(s.charging.cost)}</span>
               <span className="mt-0.5 block text-xs text-fg-muted">{plural(s.charging.count, "laddning", "laddningar")}</span>
             </DescriptionItem>
           ) : null}
           {recorded != null && s.refuels.cost != null && s.charging.cost != null ? (
             <DescriptionItem label="Betalt totalt">
-              <span className="font-mono text-base font-medium">{formatCurrency(recorded)}</span>
+              <span className="num text-base font-medium">{formatCurrency(recorded)}</span>
             </DescriptionItem>
           ) : null}
           {est.fuel != null ? (

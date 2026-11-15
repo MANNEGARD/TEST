@@ -149,7 +149,7 @@ function BatchRow({
       </div>
       <div className="shrink-0 text-right">
         <p className={cn("text-sm whitespace-nowrap", batch.status === "undone" && "text-fg-muted line-through decoration-fg-subtle")}>
-          <span className="font-mono font-medium">{formatNumber(n, 0)}</span> {n === 1 ? "resa" : "resor"}
+          <span className="num font-medium">{formatNumber(n, 0)}</span> {n === 1 ? "resa" : "resor"}
         </p>
         {batch.summary.period_start ? (
           <p className="hidden text-xs text-fg-subtle num sm:block">{periodLabel(batch.summary.period_start, batch.summary.period_end)}</p>
@@ -274,7 +274,7 @@ export function ImportHistory({
 
   return (
     <section aria-labelledby="import-history-title" className="space-y-3">
-      <h2 id="import-history-title" className="px-1 text-sm font-semibold tracking-tight">
+      <h2 id="import-history-title" className="text-sm font-semibold tracking-tight">
         Tidigare importer
       </h2>
       <Card data-testid="import-history">{body}</Card>

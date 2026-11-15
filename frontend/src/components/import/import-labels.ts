@@ -7,7 +7,7 @@
  */
 
 import type { BadgeProps } from "@/components/ui/badge";
-import { formatDate, formatDuration, formatNumber, MISSING } from "@/lib/format";
+import { formatBytes, formatDate, formatDuration, formatNumber, MISSING } from "@/lib/format";
 import type { ImportFileStatusCode, ImportRawValue, ImportRowStatusCode } from "@/lib/imports-types";
 
 type Tone = NonNullable<BadgeProps["tone"]>;
@@ -37,12 +37,8 @@ export const IMPORT_ROW_STATUS_TONE: Record<ImportRowStatusCode, Tone> = {
   skipped: "neutral",
 };
 
-/** Filstorlek i klartext: 6,3 kB / 12,2 MB. */
-export function fileSizeLabel(bytes: number): string {
-  if (bytes >= 1024 * 1024) return `${formatNumber(bytes / (1024 * 1024), 1)} MB`;
-  if (bytes >= 1024) return `${formatNumber(bytes / 1024, bytes >= 10 * 1024 ? 0 : 1)} kB`;
-  return `${formatNumber(bytes, 0)} B`;
-}
+/** Filstorlek i klartext – se formatBytes i lib/format.ts. */
+export const fileSizeLabel = formatBytes;
 
 /** Period "2026-03-01 – 2026-03-20" (ett datum om start och slut är samma dag). */
 export function periodLabel(start: string | null | undefined, end: string | null | undefined): string {

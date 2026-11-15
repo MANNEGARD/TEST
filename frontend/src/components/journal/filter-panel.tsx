@@ -62,12 +62,12 @@ export function FilterButton({ filters, onChange }: { filters: JournalFilters; o
         ) : null}
       </Button>
       <Sheet open={open} onOpenChange={setOpen}>
-        <SheetContent side="right">
-          <SheetHeader>
+        <SheetContent side="right" className="gap-0 overflow-hidden p-0">
+          <SheetHeader className="shrink-0 border-b border-border px-5 py-4 pr-12">
             <SheetTitle>Filtrera resor</SheetTitle>
             <SheetDescription>Urvalet påverkar tabellen, summeringen och massåtgärderna.</SheetDescription>
           </SheetHeader>
-          <div className="space-y-6">
+          <div className="scrollbar-thin flex-1 space-y-6 overflow-y-auto px-5 py-5">
             <div className="space-y-3 rounded-lg border border-border p-3">
               <label className="flex items-center justify-between gap-3 text-sm">
                 <span>
@@ -85,7 +85,7 @@ export function FilterButton({ filters, onChange }: { filters: JournalFilters; o
             <CheckGroup legend="Granskningsstatus" options={REVIEW_STATUS_LABELS} value={filters.review_status} onChange={(review_status) => onChange({ ...filters, review_status })} />
             <CheckGroup legend="Datakälla" options={TRIP_SOURCE_LABELS} value={filters.source} onChange={(source) => onChange({ ...filters, source })} />
           </div>
-          <div className="mt-auto flex gap-2 border-t border-border pt-4">
+          <div className="flex shrink-0 gap-2 border-t border-border px-5 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
             <Button variant="ghost" onClick={() => onChange({ ...EMPTY_FILTERS, q: filters.q, period: filters.period })}>
               Rensa filter
             </Button>

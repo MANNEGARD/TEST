@@ -153,7 +153,7 @@ function ReadingRow({ reading, vehicleId }: { reading: OdometerSnapshot; vehicle
     <li className="flex items-center gap-3 py-2.5">
       <div className="min-w-0 flex-1">
         <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
-          <time dateTime={reading.at} className="font-mono text-[13px]">
+          <time dateTime={reading.at} className="num text-[13px]">
             {formatDateTime(reading.at)}
           </time>
           <Badge size="sm" tone={removable ? "accent" : "neutral"}>
@@ -162,7 +162,7 @@ function ReadingRow({ reading, vehicleId }: { reading: OdometerSnapshot; vehicle
         </p>
         {reading.note ? <p className="mt-0.5 truncate text-xs text-fg-muted">{reading.note}</p> : null}
       </div>
-      <span className="shrink-0 font-mono text-sm font-medium">{formatOdometer(reading.odometer_km)}</span>
+      <span className="shrink-0 num text-sm font-medium">{formatOdometer(reading.odometer_km)}</span>
       {removable ? (
         <Button
           variant="ghost"
@@ -195,7 +195,7 @@ export function OdometerReadings({ vehicle }: { vehicle: Vehicle }) {
       meta={
         readings.data ? (
           latest ? (
-            <span className="font-mono">{formatOdometer(latest.odometer_km)}</span>
+            <span className="num">{formatOdometer(latest.odometer_km)}</span>
           ) : (
             "Inga avläsningar"
           )

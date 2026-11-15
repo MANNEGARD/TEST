@@ -50,18 +50,30 @@ def disable(db: Session, user_id: uuid.UUID) -> dict[str, Any]:
     conn = state.conn
     if conn is None or conn.status != IntegrationStatus.DEMO:
         return {"status": conn.status if conn else IntegrationStatus.NOT_CONFIGURED}
+    real_vehicles = set(
+        db.execute(select(Vehicle.id).where(Vehicle.owner_user_id == user_id, Vehicle.is_demo.is_(False))).scalars()
+    )
     for req in db.execute(
         select(NotificationRequest).where(
             NotificationRequest.user_id == user_id, NotificationRequest.status.in_(notifier.OPEN_STATUSES)
         )
     ).scalars():
-        if req.channel in (None, CHANNEL_DEMO):
-            req.status = NotificationStatus.CANCELLED
-            notifier.set_context(req, cancel_reason="demo_disabled")
+        if req.channel not in (None, CHANNEL_DEMO):
+            continue
+        if req.vehicle_id in real_vehicles and req.kind != NotificationKind.TEST:
+            # Frågor om det riktiga fordonet avbryts aldrig av demoläget: en fråga som bara
+            # visats i den simulerade telefonen läggs tillbaka för leverans via riktig kanal.
+            if req.channel == CHANNEL_DEMO:
+                req.status, req.channel, req.sent_at = NotificationStatus.PENDING, None, None
+            continue
+        req.status = NotificationStatus.CANCELLED
+        notifier.set_context(req, cancel_reason="demo_disabled")
     # Återgå till ett sanningsenligt läge: aldrig "ansluten" utan ny verifiering.
     has_config = bool(state.base_url and state.token) or state.heartbeat_at() is not None
     conn.status = IntegrationStatus.CONFIGURED if has_config else IntegrationStatus.NOT_CONFIGURED
-    integrations.update_config(conn, {"demo_previous_status": None})
+    integrations.update_config(
+        conn, {"demo_previous_status": None, "last_test_sent_at": None, "last_test_confirmed_at": None}
+    )
     db.flush()
     return {"status": conn.status}
 

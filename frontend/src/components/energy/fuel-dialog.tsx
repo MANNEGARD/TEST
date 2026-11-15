@@ -141,7 +141,7 @@ function FuelForm({ record, onDone }: { record: FuelRecord | null; onDone: (save
       <FieldHint id="fuel-cost-hint" className="-mt-2">
         {perLiter != null ? (
           <>
-            Motsvarar <span className="font-mono">{formatNumber(perLiter, 2, 2)} kr/l</span>.
+            Motsvarar <span className="num">{formatNumber(perLiter, 2, 2)} kr/l</span>.
           </>
         ) : (
           "Med belopp visas kostnad och literpris."

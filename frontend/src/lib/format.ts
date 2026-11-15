@@ -206,6 +206,18 @@ export function formatCurrency(value: number | null | undefined, currency = "SEK
   return `${formatNumber(value, value >= 1000 ? 0 : 2, 0)} ${unit}`;
 }
 
+/** Filstorlek i klartext (binära enheter): 512 B / 6,3 kB / 48 kB / 12,2 MB / 1,4 GB. */
+export function formatBytes(bytes: number | null | undefined): string {
+  if (bytes == null || Number.isNaN(bytes)) return MISSING;
+  const KB = 1024;
+  const MB = KB * 1024;
+  const GB = MB * 1024;
+  if (bytes >= GB) return `${formatNumber(bytes / GB, 1, 1)} GB`;
+  if (bytes >= MB) return `${formatNumber(bytes / MB, 1, 1)} MB`;
+  if (bytes >= KB) return `${formatNumber(bytes / KB, bytes >= 10 * KB ? 0 : 1)} kB`;
+  return `${formatNumber(bytes, 0)} B`;
+}
+
 /** 0.874 → 87 % */
 export function formatPercent(fraction: number | null | undefined, decimals = 0): string {
   if (fraction == null || Number.isNaN(fraction)) return MISSING;

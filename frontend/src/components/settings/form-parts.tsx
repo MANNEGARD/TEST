@@ -185,7 +185,7 @@ export function ToggleRow({
 export const UnitInput = React.forwardRef<HTMLInputElement, React.InputHTMLAttributes<HTMLInputElement> & { unit?: string; wrapperClassName?: string }>(
   ({ unit, className, wrapperClassName, ...props }, ref) => (
     <div className={cn("relative w-full sm:w-36", wrapperClassName)}>
-      <Input ref={ref} className={cn("text-right font-mono", unit ? "pr-[4.25rem]" : undefined, className)} autoComplete="off" {...props} />
+      <Input ref={ref} className={cn("text-right num", unit ? "pr-[4.25rem]" : undefined, className)} autoComplete="off" {...props} />
       {unit ? (
         <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs text-fg-subtle" aria-hidden>
           {unit}

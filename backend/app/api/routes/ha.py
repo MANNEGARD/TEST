@@ -10,6 +10,7 @@ from __future__ import annotations
 import re
 from datetime import datetime
 from typing import Annotated, Any
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
@@ -32,6 +33,16 @@ router = APIRouter()
 HaPrincipal = Annotated[Principal, Depends(require_scope("ha"))]
 _SERVICE_RE = re.compile(r"^mobile_app_[a-z0-9_]{1,200}$")
 POLL_INTERVAL_SECONDS = 30
+DISCONNECTED_KEY = "disconnected"  # satt av "Koppla bort" tills konfigurationen sparas igen
+
+
+def _origin(url: str | None) -> str | None:
+    """Schema, värd och port för en adress (det som avgör vart token skickas)."""
+    if not url:
+        return None
+    parts = urlsplit(url)
+    port = parts.port or (443 if parts.scheme == "https" else 80)
+    return f"{parts.scheme}://{(parts.hostname or '').lower()}:{port}"
 
 
 # ----------------------------------------------------------------------------- scheman
@@ -146,6 +157,7 @@ def ha_outbox_ack(body: AckIn, principal: HaPrincipal, db: DbDep) -> dict[str, i
 def ha_heartbeat(body: HeartbeatIn, principal: HaPrincipal, db: DbDep) -> HeartbeatOut:
     now = utcnow()
     conn = connection.get_or_create(db, principal.user.id)
+    disconnected = bool((conn.config or {}).get(DISCONNECTED_KEY))
     services = sorted({s[len("notify.") :] if s.startswith("notify.") else s for s in body.notify_services})
     services = [s for s in services if _SERVICE_RE.match(s)][:50]
     integrations.update_config(
@@ -162,19 +174,22 @@ def ha_heartbeat(body: HeartbeatIn, principal: HaPrincipal, db: DbDep) -> Heartb
     )
     cfg = conn.config or {}
     # Integrationens eget val av enhet används om webben inte har valt någon.
-    if not cfg.get("notify_service") and body.notify_service:
+    if not disconnected and not cfg.get("notify_service") and body.notify_service:
         try:
             integrations.update_config(conn, {"notify_service": validate_notify_service(body.notify_service)})
         except ValueError:
             pass
     state = connection.load(db, principal.user.id)
-    if conn.status == IntegrationStatus.NOT_CONFIGURED:
-        conn.status = IntegrationStatus.CONFIGURED
-    if state.mode == "pull" and conn.status in (IntegrationStatus.CONFIGURED, IntegrationStatus.ERROR):
-        # Verifierad kontakt: Home Assistant nådde oss med en giltig token.
-        conn.status = IntegrationStatus.CONNECTED
-    if state.mode == "pull" and conn.status == IntegrationStatus.CONNECTED:
-        integrations.mark_success(conn, now)
+    # Har användaren kopplat bort Home Assistant i webben får ett livstecken inte återansluta;
+    # det sker först när konfigurationen sparas i webben igen.
+    if not disconnected:
+        if conn.status == IntegrationStatus.NOT_CONFIGURED:
+            conn.status = IntegrationStatus.CONFIGURED
+        if state.mode == "pull" and conn.status in (IntegrationStatus.CONFIGURED, IntegrationStatus.ERROR):
+            # Verifierad kontakt: Home Assistant nådde oss med en giltig token.
+            conn.status = IntegrationStatus.CONNECTED
+        if state.mode == "pull" and conn.status == IntegrationStatus.CONNECTED:
+            integrations.mark_success(conn, now)
     db.commit()
     return HeartbeatOut(
         delivery_mode=state.mode,
@@ -267,12 +282,16 @@ def ha_configure(body: ConfigIn, principal: WebPrincipalDep, db: DbDep) -> dict[
     conn = connection.get_or_create(db, user_id)
     if conn.status == IntegrationStatus.DEMO:
         raise conflict("Stäng av demoläget innan du ansluter en riktig Home Assistant.", "demo_active")
-    changes: dict[str, Any] = {}
-    connection_changed = False
+    changes: dict[str, Any] = {DISCONNECTED_KEY: None}  # att spara är en uttrycklig återanslutning
+    reconnecting = bool((conn.config or {}).get(DISCONNECTED_KEY))
+    connection_changed = reconnecting
+    old_url = (conn.config or {}).get("base_url")
+    url_moved = False
     try:
         if body.base_url is not None:
             new_url = validate_base_url(body.base_url)
-            connection_changed |= new_url != (conn.config or {}).get("base_url")
+            connection_changed |= new_url != old_url
+            url_moved = bool(old_url) and _origin(new_url) != _origin(old_url)
             changes["base_url"] = new_url
         if body.notify_service is not None:
             changes["notify_service"] = validate_notify_service(body.notify_service) if body.notify_service else None
@@ -281,25 +300,36 @@ def ha_configure(body: ConfigIn, principal: WebPrincipalDep, db: DbDep) -> dict[
     if body.token is not None and body.token.strip():
         integrations.set_secrets(conn, {"token": body.token.strip()})
         connection_changed = True
-    elif body.clear_token:
+    elif body.clear_token or (url_moved and integrations.secrets(conn).get("token")):
+        # Den sparade token skickas aldrig till en ny adress: byts värd, port eller schema
+        # utan att en ny token anges rensas den och måste anges på nytt.
         integrations.set_secrets(conn, {"token": None})
         connection_changed = True
-    if changes:
-        integrations.update_config(conn, changes)
+    integrations.update_config(conn, changes)
     if body.delivery_mode is not None:
         current = settings_svc.get_section(db, user_id, "notifications")["delivery_mode"]
         if current != body.delivery_mode:
             settings_svc.update_section(db, user_id, "notifications", {"delivery_mode": body.delivery_mode})
             connection_changed = True
     if conn.status == IntegrationStatus.NOT_CONFIGURED or connection_changed:
-        # Sparade uppgifter är inte detsamma som en verifierad anslutning.
-        conn.status = IntegrationStatus.CONFIGURED
+        # Sparade uppgifter är inte detsamma som en verifierad anslutning. I push-läget krävs
+        # adress och token; i pull-läget blir anslutningen klar först vid integrationens
+        # livstecken.
+        state = connection.load(db, user_id)
+        if state.mode == "push":
+            ready = bool(state.base_url and state.token)
+            conn.status = IntegrationStatus.CONFIGURED if ready else IntegrationStatus.NOT_CONFIGURED
+        else:
+            conn.status = IntegrationStatus.CONNECTED if state.heartbeat_fresh() else IntegrationStatus.NOT_CONFIGURED
         conn.last_error = None
-    audit.record(
-        db, principal.actor, "integration.ha_configured", "integration_connection", conn.id,
-        after={"fields": sorted(k for k, v in body.model_dump().items() if v not in (None, False) and k != "token"),
-               "token_changed": bool(body.token)},
-    )
+    after: dict[str, Any] = {
+        "fields": sorted(k for k, v in body.model_dump().items() if v not in (None, False) and k != "token"),
+        "token_changed": bool(body.token),
+    }
+    if url_moved:
+        after.update({"base_url_from": _origin(old_url), "base_url_to": _origin(changes["base_url"]),
+                      "token_cleared": not bool(body.token and body.token.strip())})
+    audit.record(db, principal.actor, "integration.ha_configured", "integration_connection", conn.id, after=after)
     db.commit()
     return connection.public_status(db, user_id)
 
@@ -309,7 +339,8 @@ def ha_test(principal: WebPrincipalDep, db: DbDep) -> dict[str, Any]:
     user_id = principal.user.id
     state = connection.load(db, user_id)
     conn = state.conn
-    if conn is None or state.status == IntegrationStatus.NOT_CONFIGURED:
+    disconnected = conn is not None and bool((conn.config or {}).get(DISCONNECTED_KEY))
+    if conn is None or disconnected or (state.status == IntegrationStatus.NOT_CONFIGURED and state.mode != "pull"):
         raise conflict("Home Assistant är inte konfigurerat ännu.", "not_configured")
     if state.is_demo:
         return {"ok": False, "status": state.status, "message": "Demoläge – ingen riktig anslutning testas."}
@@ -408,6 +439,7 @@ def ha_disconnect(principal: WebPrincipalDep, db: DbDep) -> dict[str, Any]:
     if conn is not None:
         notifier.cancel_all_open(db, user_id)
         integrations.disconnect(db, conn)
+        integrations.update_config(conn, {DISCONNECTED_KEY: True})
         audit.record(db, principal.actor, "integration.ha_disconnected", "integration_connection", conn.id)
     db.commit()
     return connection.public_status(db, user_id)

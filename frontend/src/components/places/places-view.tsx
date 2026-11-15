@@ -65,7 +65,7 @@ export function PlacesView() {
         <TabsList>
           <TabsTrigger value="platser">
             <MapPin className="size-4" aria-hidden /> Platser
-            {places.data ? <span className="font-mono text-xs text-fg-subtle">{formatNumber(places.data.length, 0)}</span> : null}
+            {places.data ? <span className="num text-xs text-fg-subtle">{formatNumber(places.data.length, 0)}</span> : null}
           </TabsTrigger>
           <TabsTrigger value="minne">
             <Brain className="size-4" aria-hidden /> AI-minne

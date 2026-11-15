@@ -777,8 +777,11 @@ def deliver_due(db: Session, now: datetime | None = None) -> dict[str, int]:
         ).all()
     }
     for user_id in user_ids:
+        # En sparpunkt per användare: ett databasfel för en användare rullar bara tillbaka
+        # dennes ändringar och lämnar sessionen användbar för övriga.
         try:
-            total.update(deliver_user(db, user_id, now))
+            with db.begin_nested():
+                total.update(deliver_user(db, user_id, now))
         except Exception:
             logger.exception("Notisleverans misslyckades för en användare")
             total["failed"] += 1

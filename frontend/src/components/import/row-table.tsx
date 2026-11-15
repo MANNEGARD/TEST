@@ -77,7 +77,7 @@ function Messages({ row, className }: { row: ImportRow; className?: string }) {
 function RowPosition({ row, multipleFiles }: { row: ImportRow; multipleFiles: boolean }) {
   return (
     <span className="whitespace-nowrap">
-      <span className="font-mono">Rad {row.row_number}</span>
+      <span className="num">Rad {row.row_number}</span>
       {multipleFiles && row.filename ? <span className="block max-w-40 truncate text-[11px] text-fg-subtle" title={row.filename}>{row.filename}</span> : null}
     </span>
   );
@@ -195,7 +195,7 @@ export function RowTable({ batchId, counts, multipleFiles }: { batchId: string; 
                 label: (
                   <>
                     {f.label}
-                    <span className="font-mono text-[11px] text-fg-subtle">{formatNumber(f.count(counts), 0)}</span>
+                    <span className="num text-[11px] text-fg-subtle">{formatNumber(f.count(counts), 0)}</span>
                   </>
                 ),
               }))}

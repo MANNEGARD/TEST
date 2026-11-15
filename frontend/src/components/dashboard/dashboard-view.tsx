@@ -68,9 +68,9 @@ function KpiRow({ s, loading }: { s: DashboardSummary | undefined; loading: bool
         unit="mil"
         sub={
           <>
-            <span className="font-mono">{formatKm(workKm)}</span>
-            {prelim > 0 ? <> · varav <span className="font-mono">{formatMil(prelim)}</span> preliminärt klassat</> : null}
-            {privateKm > 0 ? <span className="block text-fg-subtle">Privat: <span className="font-mono">{formatMil(privateKm)}</span></span> : null}
+            <span className="num">{formatKm(workKm)}</span>
+            {prelim > 0 ? <> · varav <span className="num">{formatMil(prelim)}</span> preliminärt klassat</> : null}
+            {privateKm > 0 ? <span className="block text-fg-subtle">Privat: <span className="num">{formatMil(privateKm)}</span></span> : null}
           </>
         }
       />
@@ -89,7 +89,7 @@ function KpiRow({ s, loading }: { s: DashboardSummary | undefined; loading: bool
           loading={loading}
           value={formatCurrency(r.amount, r.currency ?? "SEK").replace(/ kr$/, "")}
           unit="kr"
-          sub={r.mil != null && r.rate_per_mil != null ? <><span className="font-mono">{formatNumber(r.mil, 1)} mil</span> × {formatCurrency(r.rate_per_mil)}/mil</> : r.note}
+          sub={r.mil != null && r.rate_per_mil != null ? <><span className="num">{formatNumber(r.mil, 1)} mil</span> × {formatCurrency(r.rate_per_mil)}/mil</> : r.note}
         />
       ) : (
         <StatCard
@@ -107,7 +107,7 @@ function KpiRow({ s, loading }: { s: DashboardSummary | undefined; loading: bool
           <ClipboardCheck className="size-4 text-fg-subtle" aria-hidden />
         </div>
         <div className="mt-2 flex flex-wrap items-end justify-between gap-2">
-          <span className="font-mono text-[21px] leading-none font-medium num sm:text-[26px]">{reviewCount == null ? "–" : formatNumber(reviewCount, 0)}</span>
+          <span className="text-[21px] leading-none font-medium num sm:text-[26px]">{reviewCount == null ? "–" : formatNumber(reviewCount, 0)}</span>
           {reviewCount ? (
             <Button asChild size="sm" variant="primary">
               <Link href="/review">
@@ -285,9 +285,9 @@ function EnergyBlock({ kind, s, points, bucket }: { kind: "fuel" | "el"; s: Dash
           {kind === "fuel" ? "Bensin" : "El"}
         </h3>
         <p className="text-sm">
-          <span className="font-mono font-medium">{kind === "fuel" ? formatLiters(e.verified) : formatKwh(e.verified)}</span>
+          <span className="num font-medium">{kind === "fuel" ? formatLiters(e.verified) : formatKwh(e.verified)}</span>
           <Tooltip content={coverageNote}>
-            <span tabIndex={0} className="ml-2 cursor-help font-mono text-xs text-fg-muted">
+            <span tabIndex={0} className="ml-2 cursor-help num text-xs text-fg-muted">
               {e.per_100km != null ? formatPer100(e.per_100km, kind === "fuel" ? "l" : "kWh") : "–"}
             </span>
           </Tooltip>

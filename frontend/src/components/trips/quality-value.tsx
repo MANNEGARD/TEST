@@ -67,7 +67,7 @@ export function QualityValue({
       <Tooltip content={explanation ?? "Uppskattat värde – inte uppmätt av bilen."}>
         <span
           tabIndex={0}
-          className={cn("value-estimated cursor-help whitespace-nowrap outline-none focus-visible:outline-2 focus-visible:outline-ring", mono && "font-mono", className)}
+          className={cn("value-estimated cursor-help whitespace-nowrap outline-none focus-visible:outline-2 focus-visible:outline-ring", mono && "num", className)}
         >
           <span aria-hidden>≈</span>
           <span className="sr-only">ungefär </span>
@@ -76,5 +76,5 @@ export function QualityValue({
       </Tooltip>
     );
   }
-  return <span className={cn("whitespace-nowrap", mono && "font-mono", className)}>{value}</span>;
+  return <span className={cn("whitespace-nowrap", mono && "num", className)}>{value}</span>;
 }

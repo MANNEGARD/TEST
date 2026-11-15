@@ -5,9 +5,9 @@
 from __future__ import annotations
 
 import uuid
+from datetime import timedelta
 
 import pytest
-
 from sqlalchemy import select
 
 import app.models as M
@@ -16,7 +16,7 @@ from app.services import settings as settings_svc
 from app.services.trips import merge, pipeline
 from app.services.trips import segments as seg
 from app.services.volvo import detection
-from tests.test_ha_api import API, bearer, ha_token, live_question  # noqa: F401
+from tests.test_ha_api import API, bearer, ha_token  # noqa: F401
 from tests.test_ha_support import HA_TOKEN, HA_URL, SERVICE, fake_ha  # noqa: F401
 
 A, B, C, D = "A-gatan 1, Stad", "B-gatan 2, Stad", "C-gatan 3, Stad", "D-gatan 4, Stad"
@@ -417,3 +417,126 @@ def test_new_base_url_with_new_token_is_accepted(client):
     body = client.put(f"{API}/integrations/home-assistant", json={
         "base_url": "http://ha2.local:8123", "token": "NY-TOKEN"}).json()
     assert body["has_token"] is True and body["base_url"] == "http://ha2.local:8123"
+
+
+# ------------------------------------------------- inte-9: databasfel i ett delsteg av tick()
+
+
+def test_db_error_in_one_tick_step_does_not_stop_the_rest(db, user, monkeypatch):
+    from app.services.ha import notifier
+    from app.services.volvo import demo as volvo_demo
+    from app.worker import tasks
+
+    db.commit()
+    called = []
+
+    def broken_demo_tick(session, now=None):
+        for _ in range(2):  # andra raden krockar med uq_integration_user_provider
+            session.add(M.IntegrationConnection(user_id=user.id, provider="volvo", status="not_configured"))
+            session.flush()
+
+    monkeypatch.setattr(volvo_demo, "tick", broken_demo_tick)
+    monkeypatch.setattr(notifier, "deliver_due", lambda session, now=None: called.append("deliver_due") or {})
+    monkeypatch.setattr(notifier, "run_scheduled", lambda session, now=None: called.append("run_scheduled") or {})
+    out = tasks.tick()
+    assert out["volvo_demo"] == {"error": True}
+    assert called == ["deliver_due", "run_scheduled"]
+
+
+def test_db_error_for_one_user_does_not_stop_delivery_to_others(db, user, monkeypatch):
+    from app.services.ha import notifier
+
+    other = M.User(email="annan@example.com", display_name="Annan", password_hash="x")
+    db.add(other)
+    db.flush()
+    for uid in (user.id, other.id):
+        db.add(M.NotificationRequest(
+            user_id=uid, kind="test", status="pending", dedupe_key=f"t:{uid}", public_id=uuid.uuid4().hex[:12],
+            title="Test", message="Test",
+        ))
+    db.flush()
+    delivered = []
+    first = sorted([user.id, other.id])[0]
+
+    def deliver_user(session, user_id, now):
+        if user_id == first and "fel" not in delivered:
+            delivered.append("fel")
+            for _ in range(2):
+                session.add(M.IntegrationConnection(user_id=user.id, provider="volvo", status="not_configured"))
+                session.flush()
+        delivered.append(user_id)
+        session.execute(select(M.User.id)).all()  # sessionen måste gå att använda
+        return {"sent": 1}
+
+    monkeypatch.setattr(notifier, "deliver_user", deliver_user)
+    stats = notifier.deliver_due(db)
+    assert stats["failed"] == 1 and stats["sent"] == 1
+    db.flush()  # sessionen är fortfarande användbar
+
+
+# ------------------------------------------------- inte-11 / api-4: HA-demoläget av/på
+
+
+def _real_question(db, user, vehicle, trips, now):
+    from app.models.enums import ReviewKind
+    from app.services.ha import notifier
+    from tests.test_ha_support import HOME, OREBRO
+
+    trip = trips.trip(HOME, OREBRO, km=42.0, minutes=30, start_at=now - timedelta(hours=1))
+    (req,) = notifier.enqueue_for_changes(db, user_id=user.id, vehicle=vehicle, merge_items=[],
+                                          trip_items=[(trip, [ReviewKind.CATEGORY])], now=now)
+    return trip, req
+
+
+def test_ha_demo_toggle_keeps_real_pending_question(db, user, vehicle, trips, fake_ha):
+    from app.db import utcnow
+    from app.models.enums import NotificationStatus
+    from app.services.ha import demo as ha_demo
+    from tests.test_ha_support import setup_push
+
+    now = utcnow()
+    setup_push(db, user, batch_window_minutes=10, quiet_start="00:00", quiet_end="00:00")
+    _, req = _real_question(db, user, vehicle, trips, now)
+    ha_demo.enable(db, user.id, now)
+    ha_demo.disable(db, user.id)
+    db.flush()
+    assert req.status == NotificationStatus.PENDING and req.channel is None
+
+
+def test_ha_demo_disable_requeues_real_question_shown_on_demo_phone(db, user, vehicle, trips, fake_ha):
+    from app.db import utcnow
+    from app.models.enums import NotificationStatus
+    from app.services.ha import demo as ha_demo
+    from app.services.ha.connection import CHANNEL_DEMO
+
+    now = utcnow()
+    ha_demo.enable(db, user.id, now)
+    _, req = _real_question(db, user, vehicle, trips, now)
+    req.status, req.channel, req.sent_at = NotificationStatus.SENT, CHANNEL_DEMO, now  # visad i demotelefonen
+    db.flush()
+    ha_demo.disable(db, user.id)
+    db.flush()
+    assert req.status == NotificationStatus.PENDING and req.channel is None and req.sent_at is None
+
+
+def test_ha_demo_disable_clears_test_notification_info(client, fake_ha):
+    client.post(f"{API}/integrations/home-assistant/demo/enable")
+    client.post(f"{API}/integrations/home-assistant/test-notification")
+    body = client.post(f"{API}/integrations/home-assistant/demo/disable").json()
+    assert body["last_test_sent_at"] is None and body["last_test_confirmed_at"] is None
+
+
+# ------------------------------------------------- api-6: Volvo-demo "senast synkad"
+
+
+def test_volvo_demo_last_success_follows_real_clock(db, user):
+    from app.models.enums import IntegrationProvider
+    from app.services import integrations
+    from app.services.volvo import demo as volvo_demo
+    from tests.test_volvo_support import T0
+
+    volvo_demo.enable(db, user.id, now=T0)
+    conn = integrations.get(db, user.id, IntegrationProvider.VOLVO)
+    assert conn.last_success_at == T0
+    volvo_demo.simulate_trip(db, user.id, "commute", now=T0 + timedelta(hours=2))
+    assert conn.last_success_at == T0 + timedelta(hours=2)

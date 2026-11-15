@@ -30,7 +30,7 @@ function Zone({ tone, title, range, children }: { tone: string; title: string; r
     <li className="flex gap-2.5">
       <span className={cn("mt-1 size-2.5 shrink-0 rounded-full", tone)} aria-hidden />
       <p className="text-[13px] leading-relaxed">
-        <span className="font-medium text-fg">{title}</span> <span className="font-mono text-xs text-fg-muted">({range})</span>
+        <span className="font-medium text-fg">{title}</span> <span className="num text-xs text-fg-muted">({range})</span>
         <span className="text-fg-muted"> → {children}</span>
       </p>
     </li>
@@ -99,7 +99,7 @@ export function AiSection({ data }: { data: SettingsPayload }) {
               label={
                 <span className="flex items-baseline justify-between gap-3">
                   Klassa automatiskt från
-                  <span className="font-mono text-sm">{pct(auto)}</span>
+                  <span className="num text-sm">{pct(auto)}</span>
                 </span>
               }
               hint="Högre värde ger färre automatiska klassningar och fler förslag att godkänna."
@@ -113,7 +113,7 @@ export function AiSection({ data }: { data: SettingsPayload }) {
               label={
                 <span className="flex items-baseline justify-between gap-3">
                   Ge förslag från
-                  <span className="font-mono text-sm">{pct(review)}</span>
+                  <span className="num text-sm">{pct(review)}</span>
                 </span>
               }
               hint="Under den här gränsen lämnas resan utan förslag i stället för att gissa."

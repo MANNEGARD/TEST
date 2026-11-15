@@ -129,7 +129,7 @@ export function AllocationDialog({
               <Plus aria-hidden /> Lägg till delsträcka
             </Button>
             <p className={matches ? "text-xs text-ok-ink" : "text-xs text-warn-ink"} aria-live="polite">
-              Summa <span className="font-mono">{formatKm(sum)}</span> av <span className="font-mono">{formatKm(raw.distance_km)}</span>
+              Summa <span className="num">{formatKm(sum)}</span> av <span className="num">{formatKm(raw.distance_km)}</span>
               {matches ? " – stämmer" : ` – ${diff > 0 ? `${formatKm(diff)} kvar` : `${formatKm(-diff)} för mycket`}`}
             </p>
           </div>

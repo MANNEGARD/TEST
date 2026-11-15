@@ -40,25 +40,25 @@ export function SummaryPanel({
         Att redovisa
       </h2>
       <p className="mt-2 flex items-baseline gap-1.5">
-        <span className="font-mono text-[34px] leading-none font-medium tracking-tight text-fg tabular-nums">{milNumberText(t.mil)}</span>
+        <span className="text-[34px] leading-none font-medium tracking-tight text-fg tabular-nums">{milNumberText(t.mil)}</span>
         <span className="text-sm text-fg-muted">mil</span>
       </p>
       <dl className="mt-4 grid grid-cols-2 gap-3 border-t border-border pt-4">
         <div>
           <dt className="text-xs text-fg-muted">Resor</dt>
-          <dd className="mt-0.5 font-mono text-lg font-medium text-fg tabular-nums">{formatNumber(t.trips, 0)}</dd>
+          <dd className="mt-0.5 text-lg font-medium text-fg tabular-nums">{formatNumber(t.trips, 0)}</dd>
         </div>
         {t.amount != null ? (
           <div>
             <dt className="text-xs text-fg-muted">Ersättning</dt>
-            <dd className="mt-0.5 font-mono text-lg font-medium text-fg tabular-nums">
+            <dd className="mt-0.5 text-lg font-medium text-fg tabular-nums">
               {amountNumberText(t.amount)} <span className="font-sans text-xs font-normal text-fg-muted">kr</span>
             </dd>
           </div>
         ) : (
           <div>
             <dt className="text-xs text-fg-muted">Sträcka</dt>
-            <dd className="mt-0.5 font-mono text-lg font-medium text-fg tabular-nums">
+            <dd className="mt-0.5 text-lg font-medium text-fg tabular-nums">
               {formatNumber(t.km, 1, 1)} <span className="font-sans text-xs font-normal text-fg-muted">km</span>
             </dd>
           </div>

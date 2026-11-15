@@ -160,7 +160,7 @@ export function ImportView() {
   }
 
   return (
-    <div className="mx-auto max-w-5xl">
+    <div className="max-w-5xl">
       <PageHeader title="Import" description="Läs in körjournalen från Volvo Cars-appen. Du ser vad som läggs till innan något sparas." />
       <div className="space-y-10">
         {current}

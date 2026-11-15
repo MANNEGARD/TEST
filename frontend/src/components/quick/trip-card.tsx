@@ -43,7 +43,7 @@ export function QuickTripCard({
         <p className="text-sm text-fg-muted">
           {when ? (
             <>
-              <span className="capitalize">{formatWeekday(when)}</span> <span className="font-mono">{formatDate(when)}</span>
+              <span className="capitalize">{formatWeekday(when)}</span> <span className="num">{formatDate(when)}</span>
             </>
           ) : (
             "Okänt datum"
@@ -51,13 +51,13 @@ export function QuickTripCard({
           <span className="mx-1.5" aria-hidden>
             ·
           </span>
-          <span className="font-mono">
+          <span className="num">
             <TripTime at={trip.started_at} quality={full?.start_time_quality ?? (trip.started_at ? "actual" : "unknown")} />–
             <TripTime at={trip.ended_at} quality={full?.end_time_quality ?? (trip.ended_at ? "actual" : "unknown")} />
           </span>
         </p>
         <p className="shrink-0 text-right">
-          <span className="font-mono text-2xl leading-none font-semibold tracking-tight text-fg">{milNumber(trip.distance_km)}</span>
+          <span className="num text-2xl leading-none font-semibold tracking-tight text-fg">{milNumber(trip.distance_km)}</span>
           <span className="ml-1 text-sm text-fg-muted">mil</span>
         </p>
       </div>

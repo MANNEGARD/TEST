@@ -22,7 +22,7 @@ function Figure({ label, unit, children }: { label: string; unit: string; childr
     <div className="min-w-0">
       <dt className="text-xs text-fg-muted">{label}</dt>
       <dd className="mt-1.5 flex items-baseline gap-1.5">
-        <span className="font-mono text-[21px] leading-none font-medium tracking-tight text-fg num sm:text-[26px]">{children}</span>
+        <span className="text-[21px] leading-none font-medium tracking-tight text-fg num sm:text-[26px]">{children}</span>
         <span className="text-sm whitespace-nowrap text-fg-muted">{unit}</span>
       </dd>
     </div>
@@ -46,7 +46,7 @@ function Coverage({ kind, e }: { kind: EnergyKind; e: EnergyTotals }) {
       <div className="flex items-baseline justify-between gap-3 text-xs">
         <span className="text-fg-muted">Uppmätt förbrukning</span>
         <span className="text-fg">
-          <span className="font-mono">{formatPercent(e.coverage)}</span> av sträckan
+          <span className="num">{formatPercent(e.coverage)}</span> av sträckan
         </span>
       </div>
       <div
@@ -61,18 +61,18 @@ function Coverage({ kind, e }: { kind: EnergyKind; e: EnergyTotals }) {
         <div className={cn("h-full rounded-full", k.fill)} style={{ width: `${Math.max(e.coverage > 0 ? 2 : 0, e.coverage * 100)}%` }} />
       </div>
       <p className="mt-2 text-xs leading-relaxed text-fg-muted">
-        <span className="font-mono">{formatMil(e.verified_km)}</span> av <span className="font-mono">{formatMil(totalKm)}</span> har förbrukning uppmätt av bilen.
+        <span className="num">{formatMil(e.verified_km)}</span> av <span className="num">{formatMil(totalKm)}</span> har förbrukning uppmätt av bilen.
         {e.estimated_km > 0 ? (
           <>
             {" "}
             <QualityValue mono value={amount(e.estimated)} quality="estimated" explanation="Beräknad förbrukning – inte uppmätt. Räknas inte in i summan eller snittet." /> är uppskattat för{" "}
-            <span className="font-mono">{formatMil(e.estimated_km)}</span>.
+            <span className="num">{formatMil(e.estimated_km)}</span>.
           </>
         ) : null}
         {e.unknown_km > 0 ? (
           <>
             {" "}
-            För <span className="font-mono">{formatMil(e.unknown_km)}</span> saknas uppgift.
+            För <span className="num">{formatMil(e.unknown_km)}</span> saknas uppgift.
           </>
         ) : null}
       </p>

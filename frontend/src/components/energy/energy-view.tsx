@@ -173,7 +173,7 @@ export function EnergyView() {
               <>
                 {" "}
                 Bilens eget snitt (trippmätaren, {formatRelative(avg.fetched_at)}):{" "}
-                <span className="font-mono">
+                <span className="num">
                   {[avg.fuel_l_per_100km != null ? formatPer100(avg.fuel_l_per_100km, "l") : null, avg.energy_kwh_per_100km != null ? formatPer100(avg.energy_kwh_per_100km, "kWh") : null]
                     .filter(Boolean)
                     .join(" · ")}

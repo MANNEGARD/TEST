@@ -149,7 +149,7 @@ export function UploadStep({
                 <li key={`${f.name}-${i}`} className="flex items-center gap-2">
                   <FileSpreadsheet className="size-3.5 shrink-0 text-fg-subtle" aria-hidden />
                   <span className="truncate">{f.name}</span>
-                  <span className="ml-auto shrink-0 font-mono text-xs text-fg-subtle">{fileSizeLabel(f.size)}</span>
+                  <span className="ml-auto shrink-0 num text-xs text-fg-subtle">{fileSizeLabel(f.size)}</span>
                 </li>
               ))}
               {files.length > 6 ? <li className="text-xs text-fg-subtle">… och {plural(files.length - 6, "fil", "filer")} till</li> : null}

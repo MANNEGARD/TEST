@@ -18,7 +18,7 @@ export function ChartTooltipBox({ title, rows, footer }: { title: ReactNode; row
           <li key={r.label} className="flex items-center gap-2">
             {r.colorVar ? <span className="size-2 rounded-[2px]" style={{ background: `var(${r.colorVar})` }} aria-hidden /> : null}
             <span className="text-fg-muted">{r.label}</span>
-            <span className="ml-auto pl-3 font-mono text-fg">{r.value}</span>
+            <span className="ml-auto pl-3 num text-fg">{r.value}</span>
           </li>
         ))}
       </ul>

@@ -179,6 +179,12 @@ def _ensure_places(db: Session, user_id: uuid.UUID) -> None:
     db.flush()
 
 
+def _mark_synced_now(conn: M.IntegrationConnection, now: datetime) -> None:
+    """"Senast synkad" följer den verkliga klockan, inte simuleringens bakåtdaterade hämtningar."""
+    if conn.status == IntegrationStatus.DEMO:
+        conn.last_sync_at = conn.last_success_at = now
+
+
 def enable(db: Session, user_id: uuid.UUID, *, now: datetime | None = None) -> M.Vehicle:
     """Aktiverar demoläget: skapar demobilen, påhittade platser och en första observation."""
     now = now or utcnow()
@@ -215,6 +221,7 @@ def enable(db: Session, user_id: uuid.UUID, *, now: datetime | None = None) -> M
     collector.probe_capabilities(db, conn, vehicle, client=client, now=now - timedelta(hours=9, minutes=55))
     if collector.latest_observation(db, vehicle.id) is None:
         collector.poll_vehicle(db, vehicle, now=now - timedelta(hours=9, minutes=50), client=client)
+    _mark_synced_now(conn, now)
     audit.record(db, audit.user_actor(user_id), "volvo.demo_enabled", "vehicle", vehicle.id, user_id=user_id)
     db.flush()
     return vehicle
@@ -401,6 +408,7 @@ def simulate_trip(db: Session, user_id: uuid.UUID, scenario: str | None = None, 
         sim.drive(place, km=24, report_position=False)
     sim.settle(detection.LAG_SETTLE_FACTOR if scenario == "round_trip" else 1)
 
+    _mark_synced_now(conn, now)
     demo = _demo_cfg(conn)
     demo["scenario_index"] = int(demo.get("scenario_index", 0)) + 1
     demo["last_simulated_at"] = now.isoformat()

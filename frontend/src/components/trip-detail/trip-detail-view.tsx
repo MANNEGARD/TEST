@@ -84,16 +84,16 @@ function Facts({ d }: { d: TripDetail }) {
       <CardContent className="pt-5">
         <DescriptionList>
           <DescriptionItem label="Sträcka">
-            <span className="font-mono text-lg font-medium">
+            <span className="num text-lg font-medium">
               <QualityValue value={formatMil(t.distance_km)} quality={estimatedDistance ? "estimated" : "actual"} explanation="Sträckan är uppskattad." />
             </span>
-            <span className="ml-1.5 font-mono text-xs text-fg-muted">{formatKm(t.distance_km)}</span>
+            <span className="ml-1.5 num text-xs text-fg-muted">{formatKm(t.distance_km)}</span>
           </DescriptionItem>
           <DescriptionItem label="Körtid">
             <QualityValue value={t.driving_seconds != null ? formatDuration(t.driving_seconds) : null} missingText="Körtid saknas" />
           </DescriptionItem>
           <DescriptionItem label="Tid">
-            <span className="font-mono">
+            <span className="num">
               <TripTime at={t.started_at} quality={t.start_time_quality} earliest={firstRaw?.start_earliest} latest={firstRaw?.start_latest} />
               {" – "}
               <TripTime at={t.ended_at} quality={t.end_time_quality} />
@@ -122,7 +122,7 @@ function Facts({ d }: { d: TripDetail }) {
           </DescriptionItem>
           {t.regen_kwh != null ? (
             <DescriptionItem label="Återvunnet">
-              <span className="font-mono">{formatKwh(t.regen_kwh)}</span>
+              <span className="num">{formatKwh(t.regen_kwh)}</span>
             </DescriptionItem>
           ) : null}
         </DescriptionList>
@@ -156,7 +156,7 @@ function Stops({ d }: { d: TripDetail }) {
             <div className="min-w-0 pb-1">
               <p className="text-xs text-fg-muted">
                 {kind}
-                {s.at ? <span className="ml-1.5 font-mono">{formatTime(s.at)}</span> : null}
+                {s.at ? <span className="ml-1.5 num">{formatTime(s.at)}</span> : null}
               </p>
               <p className="truncate text-sm font-medium">{name ?? <span className="text-fg-subtle">Adress saknas</span>}</p>
               {s.location?.confirmed && s.address && s.address !== name ? <p className="truncate text-xs text-fg-muted">{s.address}</p> : null}
@@ -185,7 +185,7 @@ function CalendarMatches({ d }: { d: TripDetail }) {
               <div className="min-w-0">
                 <p className="truncate text-sm font-medium">{m.subject ?? "Möte utan rubrik"}</p>
                 <p className="text-xs text-fg-muted">
-                  <span className="font-mono">
+                  <span className="num">
                     {formatTime(m.start_at)}–{formatTime(m.end_at)}
                   </span>
                   {m.location ? ` · ${m.location}` : m.is_online ? " · Onlinemöte" : ""} · matchning {formatPercent(m.score)}
@@ -240,7 +240,7 @@ function Reasoning({ d }: { d: TripDetail }) {
                   {e.direction === "work" ? "Arbete" : e.direction === "private" ? "Privat" : "Neutral"}
                 </span>
                 <span className="flex-1">{e.label}</span>
-                {e.weight ? <span className="font-mono text-xs text-fg-subtle">vikt {e.weight.toFixed(2).replace(".", ",")}</span> : null}
+                {e.weight ? <span className="num text-xs text-fg-subtle">vikt {e.weight.toFixed(2).replace(".", ",")}</span> : null}
               </li>
             ))}
           </ul>
@@ -282,7 +282,7 @@ function RawTrips({ d, onAllocate }: { d: TripDetail; onAllocate: (raw: RawTrip)
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div className="min-w-0">
                     <p className="text-sm font-medium">
-                      <span className="font-mono">
+                      <span className="num">
                         <TripTime at={r.started_at} quality={r.start_time_quality} earliest={r.start_earliest} latest={r.start_latest} />–
                         <TripTime at={r.ended_at} quality={r.end_time_quality} />
                       </span>
@@ -313,7 +313,7 @@ function RawTrips({ d, onAllocate }: { d: TripDetail; onAllocate: (raw: RawTrip)
                     {segs.map((s) => (
                       <span key={s.id} className="inline-flex items-center gap-1.5 text-xs">
                         <CategoryPill category={s.category} size="sm" />
-                        <span className="font-mono">{formatKm(s.distance_km)}</span>
+                        <span className="num">{formatKm(s.distance_km)}</span>
                         {s.note ? <span className="text-fg-muted">({s.note})</span> : null}
                       </span>
                     ))}
@@ -379,10 +379,10 @@ function TripListMini({ trips }: { trips: TripDetail["similar_trips"] }) {
       {trips.map((s) => (
         <li key={s.id}>
           <Link href={`/journal/${s.id}`} className="flex items-center gap-3 py-2 text-sm hover:bg-surface-2/50 focus-visible:outline-2 focus-visible:outline-ring">
-            <span className="w-24 shrink-0 font-mono text-xs text-fg-muted">{formatDate(s.started_at ?? s.sort_time)}</span>
+            <span className="w-24 shrink-0 num text-xs text-fg-muted">{formatDate(s.started_at ?? s.sort_time)}</span>
             <span className="min-w-0 flex-1 truncate">{s.purpose ?? `${s.start_address ?? "–"} → ${s.end_address ?? "–"}`}</span>
             <CategoryPill category={s.category} size="sm" />
-            <span className="w-16 shrink-0 text-right font-mono text-xs">{formatKm(s.distance_km)}</span>
+            <span className="w-16 shrink-0 text-right num text-xs">{formatKm(s.distance_km)}</span>
           </Link>
         </li>
       ))}
@@ -424,7 +424,7 @@ function HistorySection({ d }: { d: TripDetail }) {
         <ol className="space-y-2 text-sm">
           {d.history.map((h) => (
             <li key={h.id} className="flex gap-3">
-              <span className="w-32 shrink-0 font-mono text-xs text-fg-muted">{formatDateTime(h.at)}</span>
+              <span className="w-32 shrink-0 num text-xs text-fg-muted">{formatDateTime(h.at)}</span>
               <span className="flex-1">
                 {AUDIT_ACTION_LABELS[h.action] ?? h.action}
                 <span className="ml-1.5 text-xs text-fg-muted">
@@ -475,7 +475,7 @@ function MergeSection({ d }: { d: TripDetail }) {
           <ul className="space-y-1 text-xs text-fg-muted">
             {d.merge_operations.map((op) => (
               <li key={op.id}>
-                <span className="font-mono">{formatDateTime(op.created_at)}</span> · {label(MERGE_OPERATION_LABELS, op.operation)}
+                <span className="num">{formatDateTime(op.created_at)}</span> · {label(MERGE_OPERATION_LABELS, op.operation)}
                 {op.undone_at ? " (ångrad)" : ""}
               </li>
             ))}
@@ -501,7 +501,7 @@ function JourneySection({ d }: { d: TripDetail }) {
       <CardContent className="space-y-2 text-sm">
         <p className="font-medium">{j.name}</p>
         {j.purpose ? <p className="text-fg-muted">{j.purpose}</p> : null}
-        <p className="font-mono text-xs text-fg-muted">
+        <p className="num text-xs text-fg-muted">
           {formatDate(j.started_at)} – {formatDate(j.ended_at)}
         </p>
         <div className="flex gap-2 pt-1">
@@ -553,7 +553,7 @@ export function TripDetailView({ id }: { id: string }) {
       <BackLink />
       <header className="mb-5">
         <p className="text-sm text-fg-muted">
-          <span className="capitalize">{formatWeekday(when)}</span> <span className="font-mono">{formatDate(when)}</span>
+          <span className="capitalize">{formatWeekday(when)}</span> <span className="num">{formatDate(when)}</span>
         </p>
         <h1 className="mt-1 flex flex-wrap items-center gap-x-2 text-xl leading-snug font-semibold tracking-tight sm:text-2xl">
           <span>{t.start_location?.confirmed ? t.start_location.name : (t.start_address ?? "Okänd start")}</span>

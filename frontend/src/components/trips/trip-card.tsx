@@ -45,7 +45,7 @@ export function TripCard({
             <TripTime at={t.started_at} quality={t.start_time_quality} />–<TripTime at={t.ended_at} quality={t.end_time_quality} />
           </span>
         </Link>
-        <span className="shrink-0 font-mono text-[15px] font-semibold">
+        <span className="shrink-0 num text-[15px] font-semibold">
           <QualityValue value={formatKm(t.distance_km)} quality={t.quality_flags.includes("distance_estimated") ? "estimated" : "actual"} explanation={distanceQualityNote(t)} />
         </span>
         <FavoriteStar active={t.is_favorite} onToggle={() => handlers.onFavorite(t)} className="-mr-1" />
@@ -69,7 +69,8 @@ export function TripCard({
           <CategoryToggle value={t.category} onChange={(c) => handlers.onCategory(t, c)} size="md" />
         )}
         <ReviewStatusBadge status={t.review_status} short />
-        <SourceBadge source={t.source} short />
+        {/* "Importerad" + "Importerad" säger samma sak två gånger – källan visas bara när den tillför något. */}
+        {t.review_status === "imported" && t.source === "volvo_import" ? null : <SourceBadge source={t.source} short />}
       </div>
       <div className="mt-2 pl-5">
         <InlinePurpose value={t.purpose} confirmed={t.purpose_confirmed} onSave={(text) => handlers.onPurpose(t, text)} />

@@ -22,7 +22,7 @@ function minutes(value: number | null): string {
 function Rule({ letter, title, when, children, tone }: { letter: string; title: string; when: string; children: React.ReactNode; tone: string }) {
   return (
     <li className="flex gap-3 rounded-lg border border-border bg-surface-2/40 p-3.5">
-      <span className={cn("flex size-6 shrink-0 items-center justify-center rounded-full font-mono text-xs font-semibold", tone)} aria-hidden>
+      <span className={cn("flex size-6 shrink-0 items-center justify-center rounded-full num text-xs font-semibold", tone)} aria-hidden>
         {letter}
       </span>
       <div className="min-w-0">
@@ -30,7 +30,7 @@ function Rule({ letter, title, when, children, tone }: { letter: string; title: 
           <span className="sr-only">Regel {letter}: </span>
           {title}
         </p>
-        <p className="mt-0.5 font-mono text-xs text-fg">{when}</p>
+        <p className="mt-0.5 num text-xs text-fg">{when}</p>
         <p className="mt-1.5 text-xs leading-relaxed text-fg-muted">{children}</p>
       </div>
     </li>

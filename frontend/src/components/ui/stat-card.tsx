@@ -3,7 +3,7 @@ import { cn } from "@/lib/utils";
 import { Skeleton } from "./skeleton";
 
 /**
- * Nyckeltalsruta. Värdet visas i Geist Mono med tabulära siffror. Använd
+ * Nyckeltalsruta. Värdet visas med tabulära siffror i textens typsnitt. Använd
  * <QualityValue> som `value` när värdet kan vara uppskattat eller saknas.
  * `accent` ger en tunn färgmarkering (kategori/energi) – alltid tillsammans med text.
  */
@@ -55,7 +55,7 @@ export function StatCard({
         <Skeleton className="mt-3 h-7 w-24" />
       ) : (
         <div className="mt-2 flex items-baseline gap-1.5">
-          <span className="font-mono text-[21px] leading-none font-medium tracking-tight text-fg num sm:text-[26px]">{value}</span>
+          <span className="text-[21px] leading-none font-medium tracking-tight text-fg num sm:text-[26px]">{value}</span>
           {unit ? <span className="text-sm text-fg-muted">{unit}</span> : null}
         </div>
       )}

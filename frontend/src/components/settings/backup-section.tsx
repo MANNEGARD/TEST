@@ -9,18 +9,12 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
 import { SkeletonBlock } from "@/components/ui/skeleton";
 import { errorMessage } from "@/lib/api";
-import { formatDateTime, formatNumber, formatRelative, plural } from "@/lib/format";
+import { formatBytes, formatDateTime, formatRelative, plural } from "@/lib/format";
 import { useMe } from "@/lib/queries/auth";
 import { downloadBackup, useBackups, useCreateBackup, useDeleteBackup } from "@/lib/queries/settings-page";
 import type { BackupFile } from "@/lib/settings-page-types";
 import { ConfirmInline } from "./actions";
 import { SectionIntro } from "./form-parts";
-
-/** Filstorlek i läsbar form (kB/MB) – lib/format.ts saknar en sådan funktion. */
-function formatSize(bytes: number): string {
-  if (bytes < 1024 * 1024) return `${formatNumber(Math.max(1, Math.round(bytes / 1024)), 0)} kB`;
-  return `${formatNumber(bytes / (1024 * 1024), 1, 1)} MB`;
-}
 
 function BackupRow({ file }: { file: BackupFile }) {
   const remove = useDeleteBackup();
@@ -47,7 +41,7 @@ function BackupRow({ file }: { file: BackupFile }) {
           <time dateTime={file.created_at} title={formatDateTime(file.created_at)}>
             {formatRelative(file.created_at)}
           </time>{" "}
-          · {formatSize(file.size_bytes)}
+          · {formatBytes(file.size_bytes)}
         </p>
       </div>
       <div className="flex flex-wrap items-center gap-1">
@@ -81,7 +75,7 @@ function Backups() {
 
   const onCreate = () =>
     create.mutate(undefined, {
-      onSuccess: (res) => toast.success(`Säkerhetskopian är skapad (${formatSize(res.size_bytes)}).`),
+      onSuccess: (res) => toast.success(`Säkerhetskopian är skapad (${formatBytes(res.size_bytes)}).`),
       onError: (err) => toast.error(errorMessage(err)),
     });
 

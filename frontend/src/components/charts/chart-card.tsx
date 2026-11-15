@@ -110,7 +110,7 @@ export function DataTable({ head, rows }: { head: string[]; rows: (React.ReactNo
         {rows.map((r, i) => (
           <tr key={i} className="border-b border-border last:border-0">
             {r.map((c, j) => (
-              <td key={j} className={cn("py-1.5", j === 0 ? "text-left" : "text-right font-mono text-[13px]")}>
+              <td key={j} className={cn("py-1.5", j === 0 ? "text-left" : "text-right num text-[13px]")}>
                 {c}
               </td>
             ))}

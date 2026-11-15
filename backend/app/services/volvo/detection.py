@@ -454,6 +454,11 @@ def process_vehicle(
     tills den bekräftats avslutad av en senare observation.
     """
     now = now or utcnow()
+    # Lås fordonsraden så att två samtidiga insamlingar (två tick-uppgifter, eller tick och
+    # manuell synk) inte bearbetar samma observationer och skapar samma resa två gånger.
+    # Efter låset ser frågorna nedan det den andra transaktionen redan har committat.
+    db.flush()
+    db.execute(select(Vehicle.id).where(Vehicle.id == vehicle.id).with_for_update())
     settings = settings or settings_svc.get_section(db, user_id, "volvo")
     tolerance = float(settings_svc.get_section(db, user_id, "merge")["odometer_tolerance_km"])
     poll = float(settings.get("poll_interval_seconds", 300))

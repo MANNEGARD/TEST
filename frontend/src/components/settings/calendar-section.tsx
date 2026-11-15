@@ -96,7 +96,7 @@ export function CalendarSection({ data }: { data: SettingsPayload }) {
                 label={
                   <span className="flex items-baseline justify-between gap-3">
                     Minsta träffpoäng
-                    <span className="font-mono text-sm">{formatPercent(score)}</span>
+                    <span className="num text-sm">{formatPercent(score)}</span>
                   </span>
                 }
                 hint="Hur säkert det måste vara att mötet hör till resan (tid och plats vägs ihop). Lägre värde ger fler men osäkrare träffar."

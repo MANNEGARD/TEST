@@ -4,10 +4,12 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { AlertTriangle, Check, CheckCircle2, CircleDashed, CircleDot, Copy, FlaskConical, KeyRound, Lock } from "lucide-react";
+import { AlertTriangle, Check, CheckCircle2, CircleDashed, CircleDot, FlaskConical, KeyRound, Lock } from "lucide-react";
 import { toast } from "sonner";
 import { Badge, type BadgeProps } from "@/components/ui/badge";
-import { Button, type ButtonProps } from "@/components/ui/button";
+import { Button } from "@/components/ui/button";
+import { ConfirmInline } from "@/components/ui/confirm-inline";
+import { copyText, CopyButton } from "@/components/ui/copy-button";
 import { FieldHint, Input, Label } from "@/components/ui/input";
 import { errorMessage } from "@/lib/api";
 import { formatDateTime, formatRelative } from "@/lib/format";
@@ -281,57 +283,7 @@ export function SecretField({
   );
 }
 
-export async function copyText(value: string): Promise<boolean> {
-  try {
-    if (navigator.clipboard && window.isSecureContext) {
-      await navigator.clipboard.writeText(value);
-      return true;
-    }
-  } catch {
-    /* faller tillbaka nedan */
-  }
-  try {
-    const ta = document.createElement("textarea");
-    ta.value = value;
-    ta.setAttribute("readonly", "");
-    ta.style.position = "fixed";
-    ta.style.opacity = "0";
-    document.body.appendChild(ta);
-    ta.select();
-    const ok = document.execCommand("copy");
-    ta.remove();
-    return ok;
-  } catch {
-    return false;
-  }
-}
-
-export function CopyButton({ value, label, size = "icon", variant = "secondary" }: { value: string; label: string } & Pick<ButtonProps, "size" | "variant">) {
-  const [copied, setCopied] = React.useState(false);
-  React.useEffect(() => {
-    if (!copied) return;
-    const t = window.setTimeout(() => setCopied(false), 2000);
-    return () => window.clearTimeout(t);
-  }, [copied]);
-  return (
-    <Button
-      size={size}
-      variant={variant}
-      aria-label={label}
-      title={label}
-      onClick={async () => {
-        if (await copyText(value)) {
-          setCopied(true);
-          toast.success("Kopierat till urklipp.");
-        } else {
-          toast.error("Kunde inte kopiera – markera texten och kopiera manuellt.");
-        }
-      }}
-    >
-      {copied ? <Check className="text-ok" aria-hidden /> : <Copy aria-hidden />}
-    </Button>
-  );
-}
+export { copyText, CopyButton };
 
 /** Skrivskyddat värde med kopiera-knapp (t.ex. redirect-URI). */
 export function CopyField({ label, value, hint }: { label: string; value: string; hint?: React.ReactNode }) {
@@ -348,49 +300,9 @@ export function CopyField({ label, value, hint }: { label: string; value: string
 
 // ----------------------------------------------------------------------------- bekräftelse
 
-/**
- * Knapp för sådant som inte går att ångra: första trycket visar vad som händer,
- * andra genomför. Ingen modal – bekräftelsen står kvar på samma plats.
- */
-export function ConfirmButton({
-  label,
-  confirmLabel,
-  description,
-  onConfirm,
-  loading,
-  icon,
-  size = "sm",
-}: {
-  label: string;
-  confirmLabel: string;
-  description: React.ReactNode;
-  onConfirm: () => void;
-  loading?: boolean;
-  icon?: React.ReactNode;
-  size?: ButtonProps["size"];
-}) {
-  const [armed, setArmed] = React.useState(false);
-  if (!armed) {
-    return (
-      <Button variant="danger-ghost" size={size} onClick={() => setArmed(true)} className="-ml-2">
-        {icon}
-        {label}
-      </Button>
-    );
-  }
-  return (
-    <div role="group" aria-label={label} className="rounded-lg border border-err/30 bg-err-soft/60 p-3">
-      <p className="text-[13px] leading-relaxed text-fg">{description}</p>
-      <div className="mt-2.5 flex flex-wrap gap-2">
-        <Button variant="danger" size="sm" loading={loading} onClick={onConfirm} autoFocus>
-          {confirmLabel}
-        </Button>
-        <Button variant="ghost" size="sm" onClick={() => setArmed(false)} disabled={loading}>
-          Avbryt
-        </Button>
-      </div>
-    </div>
-  );
+/** Bekräftelse på plats (components/ui/confirm-inline) – knappen linjerar med texten ovanför. */
+export function ConfirmButton(props: Omit<React.ComponentProps<typeof ConfirmInline>, "triggerClassName" | "ariaLabel">) {
+  return <ConfirmInline {...props} triggerClassName="-ml-2" />;
 }
 
 // ----------------------------------------------------------------------------- demoläge

@@ -31,7 +31,7 @@ function ReceiptLine({
       </span>
       <div className="min-w-0 flex-1">
         <p className="text-sm">
-          <span className="font-mono font-medium">{formatNumber(value, 0)}</span> {label}
+          <span className="num font-medium">{formatNumber(value, 0)}</span> {label}
         </p>
         <p className="text-xs text-fg-muted">{hint}</p>
       </div>

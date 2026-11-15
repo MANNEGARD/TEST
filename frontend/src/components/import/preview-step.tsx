@@ -32,7 +32,7 @@ function Metric({
     <div className={cn("min-w-0", className)}>
       <dt className="text-xs text-fg-muted">{label}</dt>
       <dd className="mt-1 flex items-baseline gap-1">
-        <span className={cn("font-mono text-xl leading-none font-medium tracking-tight num", tone === "accent" && "text-accent-ink", tone === "err" && "text-err-ink")}>{value}</span>
+        <span className={cn("text-xl leading-none font-medium tracking-tight num", tone === "accent" && "text-accent-ink", tone === "err" && "text-err-ink")}>{value}</span>
         {unit ? <span className="text-xs text-fg-muted">{unit}</span> : null}
       </dd>
       {hint ? <dd className="mt-1 text-xs text-fg-subtle">{hint}</dd> : null}

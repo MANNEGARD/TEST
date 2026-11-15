@@ -63,7 +63,11 @@ function invalidateAfterSettings(qc: QueryClient, changes: SettingsChanges): voi
   const sections = Object.keys(changes);
   const scopeChanged = "journal_scope" in (changes.general ?? {});
   if (scopeChanged || sections.some((s) => REEVALUATING_SECTIONS.has(s))) void invalidateJournalData(qc);
-  else if (sections.includes("export")) void qc.invalidateQueries({ queryKey: qk.dashboard.all }); // milersättningen
+  else if (sections.includes("export")) {
+    // Ersättning per mil, belopp och layout syns på Översikt och i exportens förhandsvisning.
+    void qc.invalidateQueries({ queryKey: qk.dashboard.all });
+    void qc.invalidateQueries({ queryKey: qk.exports.all });
+  }
   if (sections.some((s) => MIRRORED_IN_INTEGRATIONS.has(s))) void qc.invalidateQueries({ queryKey: INTEGRATIONS_KEY });
 }
 
@@ -101,6 +105,7 @@ export function useUpdateVehicle() {
       qc.setQueryData<Vehicle[]>(qk.vehicles, (old) => old?.map((v) => (v.id === vehicle.id ? vehicle : v)));
       void qc.invalidateQueries({ queryKey: qk.vehicles });
       void qc.invalidateQueries({ queryKey: qk.dashboard.all }); // fordonets namn visas på översikten
+      void qc.invalidateQueries({ queryKey: qk.exports.all }); // och i exportens sidhuvud
     },
   });
 }
@@ -125,6 +130,7 @@ export function useOdometerReadings(vehicleId: string | undefined, enabled = tru
 function invalidateOdometer(qc: QueryClient, vehicleId: string): void {
   void qc.invalidateQueries({ queryKey: settingsPageKeys.odometer(vehicleId) });
   void qc.invalidateQueries({ queryKey: qk.dashboard.all }); // senast kända mätarställning
+  void qc.invalidateQueries({ queryKey: qk.exports.all }); // exportens kontroller och mätarställningar
 }
 
 export function useAddOdometerReading() {
@@ -235,8 +241,10 @@ export function useCreateApiToken() {
 export function useRevokeApiToken() {
   const qc = useQueryClient();
   return useMutation({
+    // Första DELETE återkallar, en andra tar bort raden. Listorna visar bara aktiva tokens.
+    // Läs om även vid fel (t.ex. 404 om tokenen redan tagits bort i en annan flik).
     mutationFn: (id: string) => api.del(`/auth/tokens/${id}`),
-    onSuccess: () => invalidateTokens(qc),
+    onSettled: () => invalidateTokens(qc),
   });
 }
 

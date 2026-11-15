@@ -12,9 +12,9 @@ export function TripSummary({ trip: t, className, showCategory = true }: { trip:
   return (
     <div className={cn("min-w-0", className)}>
       <p className="text-xs text-fg-muted">
-        <span className="capitalize">{formatWeekday(when)}</span> <span className="font-mono">{formatDate(when)}</span>
+        <span className="capitalize">{formatWeekday(when)}</span> <span className="num">{formatDate(when)}</span>
         <span className="mx-1.5">·</span>
-        <span className="font-mono">
+        <span className="num">
           <TripTime at={t.started_at} quality={t.start_time_quality} />–<TripTime at={t.ended_at} quality={t.end_time_quality} />
         </span>
       </p>
@@ -24,7 +24,7 @@ export function TripSummary({ trip: t, className, showCategory = true }: { trip:
         <span className="truncate">{t.end_location?.confirmed ? t.end_location.name : (t.end_address ?? "Okänt mål")}</span>
       </p>
       <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
-        <span className="font-mono font-medium">
+        <span className="num font-medium">
           <QualityValue value={formatKm(t.distance_km)} quality={t.quality_flags.includes("distance_estimated") ? "estimated" : "actual"} />
         </span>
         {showCategory ? <CategoryPill category={t.category} mixed={t.has_mixed_categories} preliminary={t.review_status !== "approved" && t.review_status !== "imported"} size="sm" /> : null}
