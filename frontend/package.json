@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "next typegen && tsc --noEmit",
     "gen:api": "openapi-typescript ./openapi.json -o ./src/lib/api-types.ts",
     "gen:openapi": "cd ../backend && DRIVELOG_ENVIRONMENT=test DRIVELOG_DATABASE_URL=sqlite:// .venv/bin/python -m app.cli openapi --output ../frontend/openapi.json",
     "gen:icons": "node scripts/gen-icons.mjs",

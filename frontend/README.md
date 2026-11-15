@@ -9,7 +9,7 @@ All data kommer från backendens REST-API (`/api/v1`, proxas av Next till FastAP
 ```bash
 npm install                 # kopierar även MapLibre-workern till public/vendor (postinstall)
 ../scripts/dev.sh           # backend :8000 (SQLite) + next dev :3000
-npm run build && npm run lint
+npm run typecheck && npm run lint && npm run build
 ../scripts/e2e.sh           # helhetstest över alla sidor mot en ny databas (egna portar 8100/3100)
 ```
 

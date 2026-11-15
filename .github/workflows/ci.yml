@@ -69,7 +69,8 @@ jobs:
       - name: Installera
         run: npm ci --no-audit --no-fund
       - name: Typkontroll
-        run: npx tsc --noEmit -p .
+        # Next skapar typerna för sidor och layouter (PageProps, LayoutProps) först.
+        run: npm run typecheck
       - name: Lint
         run: npx eslint . --max-warnings=0
       - name: Bygg
