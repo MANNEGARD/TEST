@@ -373,35 +373,41 @@ jobs:
         run: |
           . "$RUNNER_TEMP/addon.sh"
           docker rm -f drivelog-tom >/dev/null 2>&1 || true
-          # Samma avbild som nyss byggdes (ingen hämtning), egen datakatalog som på en hyrd server.
-          export DRIVELOG_IMAGE=drivelog-addon DRIVELOG_VERSION=test DRIVELOG_PULL=0
-          export DRIVELOG_DATA="$RUNNER_TEMP/server-data" DRIVELOG_CONTAINER=drivelog-server
+          DATA="$RUNNER_TEMP/server-data"
+          # Samma avbild som nyss byggdes (ingen hämtning) och egen datakatalog, som på en hyrd server.
+          # Värdena ges uttryckligen till sudo (sudo -E är avstängt på byggmaskinen).
+          server() { # [VARIABEL=värde …] -- argument till skriptet
+            local miljo=()
+            while [ "$1" != "--" ]; do miljo+=("$1"); shift; done
+            shift
+            sudo env DRIVELOG_IMAGE=drivelog-addon DRIVELOG_VERSION=test DRIVELOG_PULL=0 \
+              DRIVELOG_DATA="$DATA" DRIVELOG_CONTAINER=drivelog-server "${miljo[@]}" deploy/server.sh "$@"
+          }
           # 1) Ny installation utan frågor (uppgifterna i miljön).
-          sudo -E env DRIVELOG_ADMIN_EMAIL=ci@example.com DRIVELOG_ADMIN_PASSWORD="$CI_ADMIN_PASSWORD" \
-            deploy/server.sh localhost
+          server DRIVELOG_ADMIN_EMAIL=ci@example.com DRIVELOG_ADMIN_PASSWORD="$CI_ADMIN_PASSWORD" -- localhost
+          test "$(docker inspect -f '{{.Config.Image}}' drivelog-server)" = drivelog-addon:test
           SMOKE_EMAIL=ci@example.com SMOKE_PASSWORD="$CI_ADMIN_PASSWORD" deploy/smoke-test.sh https://localhost
           # Lösenordet ligger inte kvar i inställningsfilen eller någon annanstans i datakatalogen.
-          sudo python3 -c 'import json, sys; d = json.load(open(sys.argv[1])); assert d["admin_password"] == "" and d["admin_email"] == "ci@example.com" and d["domain"] == "localhost", d' "$DRIVELOG_DATA/options.json"
-          test "$(sudo stat -c '%a %U' "$DRIVELOG_DATA/options.json")" = "600 root"
-          if sudo grep -rF "$CI_ADMIN_PASSWORD" "$DRIVELOG_DATA" >/dev/null 2>&1; then
+          sudo python3 -c 'import json, sys; d = json.load(open(sys.argv[1])); assert d["admin_password"] == "" and d["admin_email"] == "ci@example.com" and d["domain"] == "localhost", d' "$DATA/options.json"
+          test "$(sudo stat -c '%a %U' "$DATA/options.json")" = "600 root"
+          if sudo grep -rF "$CI_ADMIN_PASSWORD" "$DATA" >/dev/null 2>&1; then
             echo "Lösenordet finns i klartext i datakatalogen" >&2; exit 1
           fi
           test "$(docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' drivelog-server)" = unless-stopped
           # 2) Samma rad igen = uppdatering: inga frågor (här finns ingen terminal), kontot finns kvar.
-          sudo -E deploy/server.sh localhost </dev/null
+          server -- localhost </dev/null
           test "$(logga_in "$CI_ADMIN_PASSWORD")" = 200
           # 3) Glömt lösenord: --nytt-losenord byter det, och det gamla slutar gälla.
-          sudo -E env DRIVELOG_ADMIN_EMAIL=ci@example.com DRIVELOG_ADMIN_PASSWORD="$CI_NYTT_PASSWORD" \
-            deploy/server.sh localhost --nytt-losenord
+          server DRIVELOG_ADMIN_EMAIL=ci@example.com DRIVELOG_ADMIN_PASSWORD="$CI_NYTT_PASSWORD" -- localhost --nytt-losenord
           test "$(logga_in "$CI_NYTT_PASSWORD")" = 200
           test "$(logga_in "$CI_ADMIN_PASSWORD")" = 401
-          if sudo grep -rF "$CI_NYTT_PASSWORD" "$DRIVELOG_DATA" >/dev/null 2>&1; then
+          if sudo grep -rF "$CI_NYTT_PASSWORD" "$DATA" >/dev/null 2>&1; then
             echo "Det nya lösenordet finns i klartext i datakatalogen" >&2; exit 1
           fi
           # 4) Ny server utan uppgifter och utan terminal: tydligt fel i stället för en halv installation.
           docker rm -f drivelog-server >/dev/null
-          if sudo -E env DRIVELOG_DATA="$RUNNER_TEMP/server-tom" DRIVELOG_CONTAINER=drivelog-server-tom \
-               deploy/server.sh localhost </dev/null 2> "$RUNNER_TEMP/server-fel.txt"; then
+          if server DRIVELOG_DATA="$RUNNER_TEMP/server-tom" DRIVELOG_CONTAINER=drivelog-server-tom -- localhost \
+               </dev/null 2> "$RUNNER_TEMP/server-fel.txt"; then
             echo "Skriptet gick igenom utan konto" >&2; exit 1
           fi
           grep -F "Ingen terminal att fråga i" "$RUNNER_TEMP/server-fel.txt"
