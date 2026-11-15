@@ -10,7 +10,7 @@ configuration:
     description: "Fill in to create the account the first time or to reset a forgotten password: enter a new one, save and restart the app. Otherwise preferably leave it empty. At least 12 characters."
   strato_dyndns:
     name: "STRATO DynDNS"
-    description: "Keep the domain's address up to date at STRATO (your STRATO package must include DynDNS). Turn off if your router already handles DynDNS."
+    description: "Keep the domain's address up to date at STRATO (your STRATO package must include DynDNS). Off: the A record is set by hand or by your router – the app then checks every 15 minutes that the domain leads here and tells you if it stops doing so."
   strato_dyndns_user:
     name: "STRATO user name"
     description: "The domain in your STRATO package, e.g. example.com. Leave empty if STRATO DynDNS is off."

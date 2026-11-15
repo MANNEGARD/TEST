@@ -327,20 +327,89 @@ def test_kontrollservern_svarar_medan_tillagget_gar(tmp_path):
     assert program._kontrollserver is None  # stängd vid nedstängning
 
 
-def test_aaaa_kontroll_kors_aven_utan_dyndns(tmp_path, monkeypatch):
-    """SUP-F5: utan DynDNS körs ändå AAAA-kontrollen en gång efter start."""
-    anrop = []
-    monkeypatch.setattr(
-        startprogram, "kontrollera_aaaa_en_gang",
-        lambda doman, nyckel, stopp, fordrojning: anrop.append((doman, nyckel, fordrojning)),
-    )
+def _fanga_vakter(monkeypatch):
+    """Adressvakternas kor() ersätts: inget nätverk, men vi ser vilka som startas och hur."""
+    vakter = []
+    monkeypatch.setattr(startprogram.Adressvakt, "kor", lambda self, stopp: vakter.append(self))
+    return vakter
+
+
+def test_adressvakten_startas_utan_dyndns(tmp_path, monkeypatch):
+    """1.0.3: utan DynDNS startar adressvakten (med AAAA-kontrollen) efter samma fördröjning som förut."""
+    vakter = _fanga_vakter(monkeypatch)
+    uppdaterare = []
+    monkeypatch.setattr(startprogram.Uppdaterare, "kor", lambda self, stopp: uppdaterare.append(self))
     varld = Varld(behover_konto=False)
     program = _program(tmp_path, varld)
+    program.supervisor_token = None
     stopp, trad, _ = _kor_i_bakgrunden(program)
-    assert _vanta_tills(lambda: program.lage == "igang" and anrop)
+    assert _vanta_tills(lambda: program.lage == "igang" and vakter)
     stopp.set()
     trad.join(5)
-    assert anrop == [("drivelog.example.se", program.kontrollnyckel, 60)]
+    (vakt,) = vakter
+    assert vakt.doman == "drivelog.example.se"
+    assert vakt.fordrojning == 60
+    assert vakt.data_katalog == tmp_path / "data"
+    assert uppdaterare == []
+
+
+def test_ingen_adressvakt_for_lokal_doman(tmp_path, monkeypatch, caplog):
+    caplog.set_level(logging.INFO)
+    vakter = _fanga_vakter(monkeypatch)
+    varld = Varld(behover_konto=False)
+    program = _program(tmp_path, varld, domain="localhost")
+    stopp, trad, _ = _kor_i_bakgrunden(program)
+    assert _vanta_tills(lambda: program.lage == "igang")
+    stopp.set()
+    trad.join(5)
+    assert vakter == []
+    assert "Adressvakten" not in caplog.text
+
+
+def test_med_dyndns_ingen_adressvakt_och_uppdateraren_som_forut(tmp_path, monkeypatch, caplog):
+    caplog.set_level(logging.INFO)
+    vakter = _fanga_vakter(monkeypatch)
+    uppdaterare = []
+    monkeypatch.setattr(startprogram.Uppdaterare, "kor", lambda self, stopp: uppdaterare.append(self))
+    varld = Varld(behover_konto=False)
+    program = _program(
+        tmp_path, varld, strato_dyndns=True, strato_dyndns_user="example.se", strato_dyndns_password="p"
+    )
+    stopp, trad, _ = _kor_i_bakgrunden(program)
+    assert _vanta_tills(lambda: program.lage == "igang" and uppdaterare)
+    stopp.set()
+    trad.join(5)
+    assert vakter == [] and len(uppdaterare) == 1
+    assert "Adressvakten" not in caplog.text
+    assert not (tmp_path / "data" / "adressvakt.json").exists()
+
+
+SUPERVISOR_TOKEN = "supervisor-token-for-test-" + "q" * 16  # noqa: S105 - låtsasvärde
+
+
+def test_supervisor_token_nar_aldrig_barnprocesserna_eller_loggen(tmp_path, monkeypatch, caplog):
+    """Token (administratörsåtkomst till Home Assistant) stannar i startprogrammet."""
+    caplog.set_level(logging.DEBUG)
+    monkeypatch.setenv("SUPERVISOR_TOKEN", SUPERVISOR_TOKEN)
+    vakter = _fanga_vakter(monkeypatch)
+    varld = Varld(behover_konto=True)
+    program = _program(tmp_path, varld, admin_email="agare@example.se", admin_password=ADMIN_LOSEN)
+    assert program.supervisor_token == SUPERVISOR_TOKEN  # läses ur startprogrammets egen miljö
+    assert SUPERVISOR_TOKEN not in repr(program)
+    stopp, trad, _ = _kor_i_bakgrunden(program)
+    assert _vanta_tills(lambda: program.lage == "igang" and vakter)
+    stopp.set()
+    trad.join(5)
+    assert set(varld.miljoer) == {"API", "webbappen", "Caddy"}
+    (kommando,) = varld.kommandon  # create-admin
+    for miljo in [*varld.miljoer.values(), kommando["miljo"]]:
+        assert "SUPERVISOR_TOKEN" not in miljo
+        assert not any(SUPERVISOR_TOKEN in v for v in miljo.values())
+    assert all(SUPERVISOR_TOKEN not in a for a in kommando["argv"])
+    assert SUPERVISOR_TOKEN not in caplog.text
+    # Vakten har fått en aviserare med token – och den syns inte heller där.
+    (vakt,) = vakter
+    assert vakt._avisera.aktiv and SUPERVISOR_TOKEN not in repr(vakt._avisera)
 
 
 def test_sparrlaget_sager_att_kontot_bara_skapas_ur_installningarna(tmp_path, caplog):

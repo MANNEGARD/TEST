@@ -36,7 +36,7 @@ loggar en förklaring och uppdaterar då i stället högst varannan timme när k
 Domänen får inte ha en AAAA-post (IPv6) som leder någon annanstans: Let's Encrypt föredrar IPv6
 och certifikatet kan då inte utfärdas. STRATO lägger in en sådan för sin parkeringssida.
 Tillägget varnar om en global AAAA-post finns och inte leder till den egna proxyn – den kontrollen
-körs också när DynDNS är avslaget (``kontrollera_aaaa_en_gang``).
+körs också när DynDNS är avslaget, i adressvakten (adressvakt.py).
 """
 
 from __future__ import annotations
@@ -401,14 +401,3 @@ class Uppdaterare:
                 return
             stopp.wait(vanta)
 
-
-def kontrollera_aaaa_en_gang(doman: str, kontrollnyckel: str, stopp: threading.Event, *, fordrojning: float = 30.0,
-                             **kw) -> None:
-    """AAAA-kontrollen när DynDNS är avslaget (t.ex. när routern sköter DynDNS): en gång, strax efter
-    att Caddy har startat. Uppdaterar ingenting hos STRATO."""
-    if stopp.wait(fordrojning):
-        return
-    try:
-        Uppdaterare(doman, "", "", kontrollnyckel, **kw).kontrollera_aaaa()
-    except Exception:  # noqa: BLE001 - kontrollen får aldrig fälla DriveLog
-        logger.exception("Oväntat fel i AAAA-kontrollen")

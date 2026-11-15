@@ -7,6 +7,8 @@ utan backendens beroenden:
 - ``hemligheter`` skapar nycklarna första gången och återanvänder dem sedan,
 - ``caddyfil`` skriver proxyns konfiguration,
 - ``dyndns`` håller domänens adress hos STRATO uppdaterad,
+- ``adressvakt`` säger till när domänen inte leder hit (när DynDNS är avslaget), och
+  ``avisering`` visar det som en avisering i Home Assistant,
 - ``startprogram`` startar och övervakar API, webbapp och proxy.
 """
 

@@ -3,6 +3,19 @@
 > Från 1.0.2 visar Home Assistant **Uppdatera** först när den nya versionen är färdigbyggd och
 > går att hämta – det går bra att trycka direkt.
 
+## 1.0.3
+
+- **Adressvakt när STRATO DynDNS är avslaget.** Har du satt domänens A-post för hand (t.ex.
+  för att DynDNS inte ingår i ditt STRATO-paket) kontrollerar appen nu var 15:e minut att
+  domänen fortfarande leder hem. Gör den inte det står det i loggen vad A-posten pekar på och
+  vad du ska göra – första gången och sedan högst en gång per dygn.
+- Har kontrollen fungerat tidigare och misslyckas tre gånger i rad (cirka 45 minuter) visas
+  också en **avisering i Home Assistant**: *DriveLog: &lt;domän&gt; leder inte längre hem*. Den
+  försvinner av sig själv när domänen leder hem igen. Appen behöver därför åtkomst till Home
+  Assistants API (`homeassistant_api`) – Home Assistant kan be dig godkänna det vid uppdateringen.
+- Ingen ny tjänst tillfrågas: kontrollen är densamma som DynDNS-delen använder och går bara till
+  din egen domän. Varningen för en AAAA-post körs nu i samma vakt, inte bara en gång vid start.
+
 ## 1.0.2
 
 - **Glömt lösenord kan återställas i appen.** Skriv ett nytt lösenord i *Administratörens

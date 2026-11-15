@@ -24,6 +24,11 @@ watchdog: "http://[HOST]:[PORT:8000]/api/v1/health/ready"
 # Tillägget stoppas medan säkerhetskopian tas: då är SQLite-databasen garanterat konsekvent
 # (ingen halvskriven transaktion eller WAL-fil). En kopia tar normalt några sekunder.
 backup: cold
+# Adressvakten (när STRATO DynDNS är avslaget) visar en avisering i Home Assistant om domänen slutar
+# leda hem: POST till http://supervisor/core/api/services/persistent_notification/… med
+# SUPERVISOR_TOKEN. Det ger startprogrammet administratörsåtkomst till Home Assistant – därför
+# används token bara av startprogrammet och följer aldrig med till API, webbapp eller Caddy.
+homeassistant_api: true
 # 80 och 443 publiceras på värden och skickas vidare från routern. API:t (8000) publiceras inte:
 # det nås bara på Home Assistants interna nät, av integrationen, på http://<värdnamn>:8000.
 ports:

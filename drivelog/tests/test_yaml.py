@@ -56,6 +56,13 @@ def test_portar_och_watchdog(config):
     assert not config.get("host_network", False)
 
 
+def test_home_assistant_api_for_adressvaktens_avisering(config):
+    # Adressvakten skickar aviseringar via Supervisorns proxy (http://supervisor/core/api).
+    assert config["homeassistant_api"] is True
+    # Inget annat Supervisor-API behövs.
+    assert not config.get("hassio_api", False)
+
+
 def test_options_och_schema(config):
     schema = config["schema"]
     assert set(schema) == {

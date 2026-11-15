@@ -51,13 +51,22 @@ Menynamnen är STRATOS (på tyska).
    **verwalten** → slå på → **Einstellungen übernehmen**. Sätt sedan ett eget, slumpat
    **DynDNS-lösenord** under **Sicherheit → Passwörter festlegen** (inte huvudlösenordet).
    *Syns ingen DynDNS-rad* ingår DynDNS inte i ditt STRATO-paket (det finns t.ex. i
-   PowerWeb-paketen och i STRATO Domain). Låt då routern sköta adressen, eller fråga STRATO.
+   PowerWeb-paketen och i STRATO Domain). Låt då routern sköta adressen, eller sätt den för
+   hand (steg 2.5).
 4. **AAAA-post (IPv6) – ta bort den.** Raden **AAAA-Record** → **verwalten**. Finns en
    IPv6-adress där (STRATO lägger in en för sin parkeringssida) ska den bort – annars försöker
    Let's Encrypt nå parkeringssidan och inget certifikat utfärdas. Domänen `smgd.se` har redan det
    läget (bara en A-post, ingen AAAA). Hittar du inget val för att ta bort posten: be STRATOS
    support ta bort AAAA-posten för `drivelog.smgd.se`. Appen varnar i loggen så länge en sådan
    post finns – också när DynDNS sköts av routern.
+5. **Utan DynDNS – sätt A-posten för hand.** Raden **A-Record** → **verwalten** → skriv hemmets
+   publika IPv4-adress. Den står som *WAN-adress* eller *internetadress* på routerns statussida
+   (inte en adress som börjar med `192.168.`, `10.` eller `172.16.`–`172.31.`, se steg 3). Spara.
+   Ta bort AAAA-posten som i steg 4, och låt **STRATO DynDNS** vara **Av** i appen (steg 4.3).
+   Byter hemmet publik adress (det händer hos de flesta operatörer ibland, t.ex. efter ett
+   strömavbrott) slutar sidan fungera tills du ändrar A-posten. Appens **adressvakt** kontrollerar
+   därför var 15:e minut att domänen leder hit och säger till i loggen – och med en avisering i
+   Home Assistant om den har fungerat förut och slutar fungera (se felsökningen, steg 8).
 
 Kontrollera efteråt (i en terminal, eller på en webbsida för DNS-uppslag):
 `nslookup drivelog.smgd.se` ska ge hemmets publika IPv4-adress och
@@ -113,7 +122,9 @@ statussida:
    - `API:t är redo. Home Assistant-integrationen når det på http://<värdnamn>:8000` – skriv upp
      värdnamnet, t.ex. `82cbe348-drivelog`,
    - `DriveLog startas på https://drivelog.smgd.se`,
-   - med DynDNS: `STRATO har satt …` eller `… leder hit – ingen uppdatering behövs`.
+   - med DynDNS: `STRATO har satt …` eller `… leder hit – ingen uppdatering behövs`,
+   - utan DynDNS: `Adressvakten kontrollerar var 15:e minut att drivelog.smgd.se leder hit.` och
+     efter ungefär en halv minut `drivelog.smgd.se leder hit (A-posten <adress>).`
 
    Står det `Det finns inget konto i DriveLog än`: e-post eller lösenord saknas – fyll i, spara
    och starta om. Webbapp och proxy startar inte förrän kontot finns.
@@ -199,6 +210,11 @@ aldrig över.
 | `… har en AAAA-post (IPv6) som inte leder hit` | Ta bort AAAA-posten hos STRATO (steg 2.4). |
 | `nyckeln … saknas men databasen finns` | Återställ appen ur en säkerhetskopia (steg 7). |
 | Fungerar från mobilnätet men inte hemma på wifi | Routern saknar **hårnåls-NAT** (NAT loopback). Slå på det i routern om det går, eller låt routerns DNS svara med maskinens lokala adress för `drivelog.smgd.se`. Appen märker det och uppdaterar då STRATO högst varannan timme; en lokal DNS-post luras den inte av. |
+| Avisering i Home Assistant: **DriveLog: drivelog.smgd.se leder inte längre hem** | Kontrollen har fungerat förut men har nu misslyckats i ungefär 45 minuter – hemmets publika adress har troligen bytts. Ändra A-posten hos STRATO till adressen som står som WAN- eller internetadress på routerns statussida (steg 2.5) och kontrollera port 80 och 443 (steg 3). Aviseringen försvinner av sig själv inom 15 minuter när domänen leder hem igen, och loggen säger `… leder hit igen`. |
+| `… leder inte hit: A-posten pekar på <adress>, men DriveLog svarar inte där` | Samma åtgärd som raden ovan. Står `Kontrollen har aldrig lyckats här` med: pröva först `https://drivelog.smgd.se` från mobilnätet med wifi avslaget. Fungerar det saknar routern troligen hårnåls-NAT – då är allt i ordning, men vakten kan inte se det och kan inte avisera. Raden upprepas högst en gång per dygn. |
+| `… har ingen A-post (IPv4-adress)` | A-posten saknas hos STRATO. Lägg in den (steg 2.5). |
+| `… ger bara lokala adresser här` | Routerns DNS svarar med maskinens lokala adress för domänen (en lösning för routrar utan hårnåls-NAT). Då kan adressvakten inte kontrollera den publika A-posten och aviserar inte. Inget fel i sig. |
+| `Aviseringen i Home Assistant kunde inte skickas` | Visas högst en gång per start. Loggen fungerar ändå. Uppdatera appen och starta om den; Home Assistant ska ha godkänt att appen får använda Home Assistants API. |
 | Integrationen når inte DriveLog | Använd `http://<värdnamn>:8000` från loggen; kontrollera att appen är igång. |
 
 Mer om webbappen: [anvandning.md](anvandning.md). Om säkerhet: [sakerhet.md](sakerhet.md).
@@ -232,6 +248,7 @@ Mer om webbappen: [anvandning.md](anvandning.md). Om säkerhet: [sakerhet.md](sa
   | --- | --- | --- | --- |
   | `/data` | root | 711 | – |
   | `/data/options.json` | root | 600 | inställningarna (skrivs av Home Assistant) |
+  | `/data/adressvakt.json` | root | 600 | adressvaktens tillstånd: domänen, om kontrollen har lyckats någon gång, om en avisering är utskickad |
   | `/data/hemligheter/` | root | 700 (filer 600) | `secret_key`, `encryption_keys`, `admin_losenord_marke` |
   | `/data/app/` | drivelog | 700 | databasen och API:ts filer |
   | `/data/caddy/` | caddy | 700 | certifikat och ACME-konto |
@@ -243,3 +260,10 @@ Mer om webbappen: [anvandning.md](anvandning.md). Om säkerhet: [sakerhet.md](sa
 - **Kontrollen "leder domänen hit?"** (DynDNS och AAAA-varningen) är fråga och svar: appen
   hämtar `/.well-known/drivelog-dyndns?n=<slumpvärde>` och godtar bara en HMAC som räknas ut med
   en nyckel som skapas vid varje start. Bara globala adresser godtas.
+- **Adressvakten** (`adressvakt.py`, bara när STRATO DynDNS är av och domänen inte är
+  `localhost`) gör den kontrollen var 15:e minut, och AAAA-kontrollen i samma varv. Aviseringen
+  skickas av startprogrammet (root) med `POST http://supervisor/core/api/services/persistent_notification/create`
+  (och `…/dismiss`), fast `notification_id` `drivelog_adressvakt` och `SUPERVISOR_TOKEN`. Det
+  kräver `homeassistant_api: true` i `config.yaml`, vilket enligt Home Assistants dokumentation
+  ger appen administratörsåtkomst till Home Assistant. Token används därför bara av
+  startprogrammet och följer aldrig med i miljön till API, webbapp, Caddy eller `create-admin`.

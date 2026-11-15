@@ -10,7 +10,8 @@ Den fullständiga guiden – STRATO, routern, notiser och felsökning – finns 
 ## Innan du startar
 
 1. **Domänen** (t.ex. `drivelog.smgd.se`) måste peka på hemmets publika IPv4-adress – antingen
-   genom att appen sköter STRATO DynDNS (se nedan) eller genom att routern gör det.
+   genom att appen sköter STRATO DynDNS (se nedan), genom att routern gör det, eller genom att
+   du sätter A-posten för hand (se *Utan DynDNS: adressvakten*).
    Domänen får **inte** ha någon AAAA-post (IPv6) – ta bort den som STRATO lägger in för sin
    parkeringssida, annars kan certifikatet inte utfärdas.
 2. **Routern** ska skicka port **80** och **443** (TCP, och gärna 443 UDP) vidare till
@@ -87,6 +88,25 @@ dygn för säkerhets skull). Ingen annan tjänst tillfrågas. Fel som kräver å
 okänd domän) stoppar uppdateringarna tills appen startas om – upprepade felaktiga försök kan
 annars få STRATO att spärra domänen. DynDNS måste ingå i ditt STRATO-paket.
 
+## Utan DynDNS: adressvakten
+
+Ingår inte DynDNS i ditt STRATO-paket sätter du A-posten för hand och låter **STRATO DynDNS**
+vara **Av**. Byter hemmet publik adress slutar sidan då att fungera – därför kontrollerar appen
+var 15:e minut att domänen fortfarande leder hit (samma kontroll som DynDNS-delen, ingen annan
+tjänst tillfrågas):
+
+- Fungerar det står `<din domän> leder hit (A-posten <adress>).` i loggen.
+- Fungerar det inte står det `<din domän> leder inte hit: A-posten pekar på <adress> …` med
+  vad du ska göra: ändra A-posten hos STRATO till hemmets publika IPv4-adress (WAN- eller
+  internetadressen på routerns statussida) och kontrollera att port 80 och 443 skickas vidare.
+  Raden upprepas högst en gång per dygn.
+- Har kontrollen **aldrig** fungerat kan det också bero på att routern saknar hårnåls-NAT – då
+  fungerar sidan utifrån fast kontrollen misslyckas. Pröva från mobilnätet med wifi avslaget.
+- Har kontrollen fungerat förut och misslyckas i cirka 45 minuter visas en **avisering i Home
+  Assistant** (*DriveLog: &lt;domän&gt; leder inte längre hem*). Den försvinner av sig själv när
+  domänen leder hem igen. För det behöver appen åtkomst till Home Assistants API; den används
+  bara till aviseringen.
+
 ## Säkerhetskopior och uppdateringar
 
 Appen stoppas en kort stund medan Home Assistant tar en säkerhetskopia, så att databasen
@@ -105,4 +125,5 @@ du låter rutan för det vara ikryssad.
 - **Certifikatet utfärdas inte:** kontrollera att domänen pekar på rätt adress (A-post), att
   ingen AAAA-post finns och att port 80 och 443 når Home Assistant-maskinen utifrån.
 - **Fungerar utifrån men inte hemma:** routern saknar troligen "hårnåls-NAT". Se guiden.
+- **Aviseringen *… leder inte längre hem*:** se *Utan DynDNS: adressvakten* ovan.
 - **Appen startar inte:** loggen börjar med vad som behöver rättas.

@@ -12,7 +12,8 @@ Ordning:
    internet utan konto. API:t fortsätter att gå (bara på Home Assistants interna nät) så att
    tillägget inte startas om i en slinga; loggen säger vad ägaren ska fylla i.
 5. Webbappen (bara på 127.0.0.1) och sedan Caddy (80/443, automatisk HTTPS) startas, och
-   DynDNS-uppdateraren om den är påslagen (annars en engångskontroll av AAAA-posten).
+   DynDNS-uppdateraren om den är påslagen – annars adressvakten (adressvakt.py), som
+   regelbundet kontrollerar att domänen leder hit och kan avisera i Home Assistant.
 6. Dör någon av processerna avslutas allt med felkod så att Supervisor startar om tillägget.
    SIGTERM ger en ren nedstängning i omvänd ordning.
 
@@ -23,6 +24,7 @@ Lagringen i /data (kontraktet, se docs/home-assistant-tillagg.md):
 
     /data                 root:root 711   (ingen annan kan skapa, flytta eller ta bort något här)
     /data/options.json    root      600   (Supervisor skriver den)
+    /data/adressvakt.json root      600   adressvaktens tillstånd (adressvakt.py), ingen hemlighet
     /data/hemligheter/    root      700   nycklarna, filerna 600 (hemligheter.py)
     /data/app/            drivelog  700   API:ts databas (drivelog.sqlite3) och dess kataloger
     /data/caddy/          caddy     700   certifikat och ACME-konto
@@ -50,6 +52,10 @@ i /data/hemligheter (hemligheter.py) – aldrig lösenordet. När API:t är redo
 
 Kommandot körs som API-användaren med API:ts miljö (samma databas). Lösenordet får det i
 miljövariabeln DRIVELOG_ADMIN_PASSWORD – aldrig på kommandoraden – och det skrivs aldrig i loggen.
+
+Supervisorns token (SUPERVISOR_TOKEN, ger administratörsåtkomst till Home Assistant) används bara
+här, av adressvaktens aviseringar (avisering.py). Barnprocessernas miljöer byggs uttryckligen
+från grunden, så token följer aldrig med till API, webbapp, Caddy eller create-admin.
 """
 
 from __future__ import annotations
@@ -72,7 +78,9 @@ from pathlib import Path
 from typing import Protocol
 
 from . import caddyfil, hemligheter, installningar, kontroll
-from .dyndns import Uppdaterare, kontrollera_aaaa_en_gang
+from .adressvakt import Adressvakt
+from .avisering import Aviserare
+from .dyndns import Uppdaterare
 
 logger = logging.getLogger("drivelog.addon")
 
@@ -254,7 +262,8 @@ class Startprogram:
     lage: str = "startar"
     kontrollnyckel: str = field(default_factory=kontroll.ny_nyckel, repr=False)
     kontroll_port: int = kontroll.PORT
-    aaaa_fordrojning: float = 30.0
+    aaaa_fordrojning: float = 30.0  # första kontrollen (adressvakt/AAAA) efter att Caddy har startat
+    supervisor_token: str | None = field(default_factory=lambda: os.environ.get("SUPERVISOR_TOKEN"), repr=False)
     _kontrollserver: kontroll.Kontrollserver | None = None
     _dyndns_trad: threading.Thread | None = None
 
@@ -380,16 +389,23 @@ class Startprogram:
 
     def starta_dyndns(self, stopp: threading.Event) -> None:
         if not self.inst.strato_dyndns:
-            logger.info("STRATO DynDNS är avslaget – domänens adress sköts någon annanstans (t.ex. av routern).")
+            logger.info("STRATO DynDNS är avslaget – domänens adress sköts någon annanstans (t.ex. för hand).")
             if not self.inst.ar_lokal:
-                # Varningen för en främmande AAAA-post behövs lika mycket när routern sköter DynDNS.
-                self._dyndns_trad = threading.Thread(
-                    target=kontrollera_aaaa_en_gang,
-                    args=(self.inst.domain, self.kontrollnyckel, stopp),
-                    kwargs={"fordrojning": self.aaaa_fordrojning},
-                    name="aaaa-kontroll",
-                    daemon=True,
+                # Adressvakten: säger till om domänen slutar leda hit (och varnar för en AAAA-post).
+                vakt = Adressvakt(
+                    self.inst.domain,
+                    self.kontrollnyckel,
+                    data_katalog=self.sokvagar.data,
+                    avisera=Aviserare(self.supervisor_token),
+                    version=self.version,
+                    fordrojning=self.aaaa_fordrojning,
                 )
+                logger.info(
+                    "Adressvakten kontrollerar var 15:e minut att %s leder hit%s.",
+                    self.inst.domain,
+                    "" if self.supervisor_token else " (bara i loggen – ingen avisering utanför Home Assistant)",
+                )
+                self._dyndns_trad = threading.Thread(target=vakt.kor, args=(stopp,), name="adressvakt", daemon=True)
                 self._dyndns_trad.start()
             return
         uppdaterare = Uppdaterare(

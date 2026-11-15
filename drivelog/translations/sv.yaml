@@ -10,7 +10,7 @@ configuration:
     description: "Fyll i för att skapa kontot första gången eller för att återställa ett glömt lösenord: skriv ett nytt, spara och starta om appen. Lämna gärna tomt annars. Minst 12 tecken."
   strato_dyndns:
     name: "STRATO DynDNS"
-    description: "Låt appen hålla domänens adress hos STRATO uppdaterad (DynDNS måste ingå i STRATO-paketet). Stäng av om routern redan sköter DynDNS."
+    description: "Låt appen hålla domänens adress hos STRATO uppdaterad (DynDNS måste ingå i STRATO-paketet). Av: A-posten sätts för hand eller av routern – appen kontrollerar då var 15:e minut att domänen leder hit och säger till om den slutar göra det."
   strato_dyndns_user:
     name: "STRATO-användarnamn"
     description: "Domänen i ditt STRATO-paket, t.ex. smgd.se. Lämna tomt om STRATO DynDNS är av."

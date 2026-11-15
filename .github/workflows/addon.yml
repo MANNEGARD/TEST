@@ -159,6 +159,9 @@ jobs:
           starta drivelog drivelog-data
           vanta_pa_https
           docker logs drivelog 2>&1 | grep -F "Lösenordet för ci@example.com sattes från appens inställningar."
+          # domain=localhost: ingen adressvakt (den gäller bara en riktig domän utan DynDNS).
+          docker logs drivelog 2>&1 | grep -F "STRATO DynDNS är avslaget"
+          if docker logs drivelog 2>&1 | grep -F "Adressvakten" >/dev/null; then echo "Adressvakten startade för localhost" >&2; exit 1; fi
 
       - name: Röktest genom proxyn (HTTPS)
         env:

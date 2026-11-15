@@ -364,31 +364,6 @@ def test_lokal_aaaa_post_ger_ingen_varning(caplog):
     assert "AAAA" not in caplog.text
 
 
-def test_aaaa_kontroll_utan_dyndns(caplog):
-    """SUP-F5: AAAA-kontrollen körs också när DynDNS är avslaget – och skickar inget till STRATO."""
-    anrop = []
-
-    def hamta(url, **kw):
-        anrop.append(url)
-        return 0, ""  # adressen svarar inte
-
-    dyndns.kontrollera_aaaa_en_gang(
-        "drivelog.example.se", TOKEN, threading.Event(), fordrojning=0,
-        sla_upp=Dns(aaaa=["2a00:1450:4001:80b::200e"]), hamta=hamta,
-    )
-    assert anrop and all(dyndns.DYNDNS_KONTROLLSOKVAG in u for u in anrop)  # bara kontrollen, aldrig STRATO
-    assert "AAAA" in caplog.text and "Domainverwaltung" in caplog.text
-    assert "Domänverwaltung" not in caplog.text
-
-
-def test_aaaa_kontroll_utan_dyndns_avbryts_vid_stopp(caplog):
-    stopp = threading.Event()
-    stopp.set()
-    dyndns.kontrollera_aaaa_en_gang("drivelog.example.se", TOKEN, stopp, fordrojning=5,
-                                    sla_upp=Dns(aaaa=["2a00:1450:4001:80b::200e"]))
-    assert "AAAA" not in caplog.text
-
-
 def test_kontrollservern_svarar_bara_pa_giltiga_fragor():
     server = kontroll.Kontrollserver(TOKEN, port=0).starta()
     try:
