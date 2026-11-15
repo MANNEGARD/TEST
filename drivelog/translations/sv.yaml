@@ -4,10 +4,10 @@ configuration:
     description: "Adressen DriveLog ska nås på, t.ex. drivelog.smgd.se. Domänen måste peka på hemmets publika IP-adress."
   admin_email:
     name: "Administratörens e-post"
-    description: "Första kontot (blir inloggningen). Kontot skapas bara härifrån; utan konto öppnas ingenting mot internet."
+    description: "Administratörskontot (blir inloggningen). Kontot skapas bara härifrån; utan konto öppnas ingenting mot internet."
   admin_password:
     name: "Administratörens lösenord"
-    description: "Minst 12 tecken. Används bara när kontot skapas; töm fältet när kontot finns och byt lösenord i DriveLog."
+    description: "Fyll i för att skapa kontot första gången eller för att återställa ett glömt lösenord: skriv ett nytt, spara och starta om appen. Lämna gärna tomt annars. Minst 12 tecken."
   strato_dyndns:
     name: "STRATO DynDNS"
     description: "Låt appen hålla domänens adress hos STRATO uppdaterad (DynDNS måste ingå i STRATO-paketet). Stäng av om routern redan sköter DynDNS."

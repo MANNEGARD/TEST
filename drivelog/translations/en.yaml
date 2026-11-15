@@ -4,10 +4,10 @@ configuration:
     description: "The address DriveLog is served on, e.g. drivelog.example.com. It must point to your home's public IP address."
   admin_email:
     name: "Administrator e-mail"
-    description: "The first account (your login). The account is only created from here; without an account nothing is exposed to the internet."
+    description: "The administrator account (your login). The account is only created from here; without an account nothing is exposed to the internet."
   admin_password:
     name: "Administrator password"
-    description: "At least 12 characters. Only used when the account is created; clear the field afterwards."
+    description: "Fill in to create the account the first time or to reset a forgotten password: enter a new one, save and restart the app. Otherwise preferably leave it empty. At least 12 characters."
   strato_dyndns:
     name: "STRATO DynDNS"
     description: "Keep the domain's address up to date at STRATO (your STRATO package must include DynDNS). Turn off if your router already handles DynDNS."

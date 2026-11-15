@@ -86,24 +86,27 @@ jobs:
           test "$(label io.hass.version)" = "$VERSION"
           test "$(label org.opencontainers.image.source)" = https://github.com/SMGD-MP/TEST
 
-      - name: Slumpa ett lösenord för testkontot
+      - name: Slumpa lösenord för testkontot
         run: |
-          pw="$(openssl rand -hex 16)"
-          echo "::add-mask::$pw"
-          echo "CI_ADMIN_PASSWORD=$pw" >> "$GITHUB_ENV"
+          # Första lösenordet, det som återställs via inställningarna och det som byts via API:t.
+          for namn in CI_ADMIN_PASSWORD CI_NYTT_PASSWORD CI_BYTT_PASSWORD; do
+            pw="$(openssl rand -hex 16)"
+            echo "::add-mask::$pw"
+            echo "$namn=$pw" >> "$GITHUB_ENV"
+          done
 
       - name: Hjälpfunktioner
         run: |
           cat > "$RUNNER_TEMP/addon.sh" <<'EOF'
           # Skriver options.json i volymen, som Supervisor gör före varje start.
-          skriv_options() { # volym, med_admin (1/0)
+          skriv_options() { # volym, lösenord: 0 = tomma fält, annars namnet på miljövariabeln med lösenordet
             python3 - "$2" > "$RUNNER_TEMP/options.json" <<'PY'
           import json, os, sys
           # Som Supervisor skriver den med standardvärdena i config.yaml: tomma fält är "".
           o = {"domain": "localhost", "admin_email": "", "admin_password": "", "strato_dyndns": False,
                "strato_dyndns_user": "", "strato_dyndns_password": "", "log_level": "info"}
-          if sys.argv[1] == "1":
-              o.update(admin_email="ci@example.com", admin_password=os.environ["CI_ADMIN_PASSWORD"])
+          if sys.argv[1] != "0":
+              o.update(admin_email="ci@example.com", admin_password=os.environ[sys.argv[1]])
           print(json.dumps(o))
           PY
             docker run --rm -v "$1:/data" -v "$RUNNER_TEMP/options.json:/in.json:ro" --entrypoint cp \
@@ -130,6 +133,17 @@ jobs:
             done
             echo "Hittade inte '$2' i loggen" >&2; return 1
           }
+          # Inloggning genom proxyn; skriver HTTP-koden och sparar svaret (med en andra parameter även kakan).
+          logga_in() { # lösenord [kakfil]
+            curl -ksS -o "$RUNNER_TEMP/inloggning.json" -w '%{http_code}' ${2:+-c "$2"} \
+              -H 'Content-Type: application/json' \
+              -d "{\"email\":\"ci@example.com\",\"password\":\"$1\"}" https://localhost/api/v1/auth/login
+          }
+          stoppa() { # namn
+            docker stop -t 30 "$1" >/dev/null
+            test "$(docker inspect -f '{{.State.ExitCode}}' "$1")" = 0 || { echo "Nedstängningen gav inte kod 0" >&2; return 1; }
+            docker rm "$1" >/dev/null
+          }
           fingeravtryck() { docker exec "$1" sh -c 'cat /data/hemligheter/secret_key /data/hemligheter/encryption_keys | sha256sum'; }
           # Kör Python i en ANNAN container på samma Docker-nät – som ett annat tillägg på
           # Home Assistants interna nät (hassio). Avbilden återanvänds; inget mer hämtas.
@@ -143,9 +157,10 @@ jobs:
         run: |
           . "$RUNNER_TEMP/addon.sh"
           docker volume create drivelog-data >/dev/null
-          skriv_options drivelog-data 1
+          skriv_options drivelog-data CI_ADMIN_PASSWORD
           starta drivelog drivelog-data
           vanta_pa_https
+          docker logs drivelog 2>&1 | grep -F "Lösenordet för ci@example.com sattes från appens inställningar."
 
       - name: Röktest genom proxyn (HTTPS)
         env:
@@ -175,6 +190,12 @@ jobs:
           test "$(docker exec drivelog stat -c '%a %U' /data/app)" = "700 drivelog"
           test "$(docker exec drivelog stat -c '%U' /data/app/drivelog.sqlite3)" = "drivelog"
           test "$(docker exec drivelog stat -c '%a %U' /data/caddy)" = "700 caddy"
+          # Märket över senast tillämpade administratörslösenord: bara root, aldrig lösenordet.
+          test "$(docker exec drivelog stat -c '%a %U' /data/hemligheter/admin_losenord_marke)" = "600 root"
+          docker exec drivelog grep -qE '^v1:[0-9a-f]{64}$' /data/hemligheter/admin_losenord_marke
+          if docker exec drivelog grep -rF "$CI_ADMIN_PASSWORD" /data/hemligheter /data/app >/dev/null 2>&1; then
+            echo "Lösenordet finns i klartext i /data" >&2; exit 1
+          fi
           if docker exec drivelog sh -c 'ls /data/*.sqlite3' 2>/dev/null; then echo "Databasen ligger direkt i /data" >&2; exit 1; fi
           # API-användaren kan inte flytta, ersätta eller skapa något direkt i /data.
           docker exec -u drivelog drivelog python3 -I - <<'EOF'
@@ -250,9 +271,7 @@ jobs:
           SMOKE_PASSWORD: ${{ env.CI_ADMIN_PASSWORD }}
         run: |
           . "$RUNNER_TEMP/addon.sh"
-          docker stop -t 30 drivelog >/dev/null
-          test "$(docker inspect -f '{{.State.ExitCode}}' drivelog)" = 0 || { echo "Nedstängningen gav inte kod 0" >&2; exit 1; }
-          docker rm drivelog >/dev/null
+          stoppa drivelog
           # Utan administratörsuppgifter: webbappen startar bara om kontot finns kvar i databasen.
           skriv_options drivelog-data 0
           starta drivelog drivelog-data
@@ -261,6 +280,57 @@ jobs:
           cmp -s "$RUNNER_TEMP/nycklar-1" "$RUNNER_TEMP/nycklar-2" || { echo "Nycklarna ändrades vid omstart" >&2; exit 1; }
           if docker logs drivelog 2>&1 | grep -F "skapades och sparades" >/dev/null; then echo "Nycklar skapades på nytt" >&2; exit 1; fi
           deploy/smoke-test.sh https://localhost
+
+      - name: Glömt lösenord – ett ÄNDRAT lösenord i inställningarna återställer det
+        run: |
+          . "$RUNNER_TEMP/addon.sh"
+          # En inloggad session före återställningen ska avslutas av den.
+          test "$(logga_in "$CI_ADMIN_PASSWORD" "$RUNNER_TEMP/kaka-fore")" = 200
+          stoppa drivelog
+          skriv_options drivelog-data CI_NYTT_PASSWORD
+          starta drivelog drivelog-data
+          vanta_pa_https
+          docker logs drivelog 2>&1 | grep -F "Lösenordet för ci@example.com sattes från appens inställningar."
+          test "$(logga_in "$CI_NYTT_PASSWORD")" = 200 || { echo "Det nya lösenordet fungerar inte" >&2; exit 1; }
+          test "$(logga_in "$CI_ADMIN_PASSWORD")" = 401 || { echo "Det gamla lösenordet fungerar fortfarande" >&2; exit 1; }
+          kod="$(curl -ksS -o /dev/null -w '%{http_code}' -b "$RUNNER_TEMP/kaka-fore" https://localhost/api/v1/auth/me)"
+          test "$kod" = 401 || { echo "Sessionen från före återställningen gäller fortfarande ($kod)" >&2; exit 1; }
+          for pw in "$CI_ADMIN_PASSWORD" "$CI_NYTT_PASSWORD"; do
+            if docker logs drivelog 2>&1 | grep -F "$pw" >/dev/null; then echo "Ett lösenord finns i loggen" >&2; exit 1; fi
+          done
+
+      - name: Oförändrat fält skriver inte över ett lösenord som bytts i DriveLog
+        run: |
+          . "$RUNNER_TEMP/addon.sh"
+          # Ägaren byter lösenord inne i DriveLog (samma anrop som webbappen gör).
+          test "$(logga_in "$CI_NYTT_PASSWORD" "$RUNNER_TEMP/kaka")" = 200
+          csrf="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["csrf_token"])' "$RUNNER_TEMP/inloggning.json")"
+          kod="$(curl -ksS -o /dev/null -w '%{http_code}' -b "$RUNNER_TEMP/kaka" -H "X-CSRF-Token: $csrf" \
+            -H 'Content-Type: application/json' \
+            -d "{\"current_password\":\"$CI_NYTT_PASSWORD\",\"new_password\":\"$CI_BYTT_PASSWORD\"}" \
+            https://localhost/api/v1/auth/change-password)"
+          test "$kod" = 204 || { echo "Lösenordsbytet via API:t gav $kod" >&2; exit 1; }
+          # Omstart med SAMMA options.json (fältet innehåller fortfarande CI_NYTT_PASSWORD).
+          stoppa drivelog
+          starta drivelog drivelog-data
+          vanta_pa_https
+          docker logs drivelog 2>&1 | grep -F "är oförändrat sedan det senast tillämpades"
+          if docker logs drivelog 2>&1 | grep -F "sattes från appens inställningar" >/dev/null; then
+            echo "Lösenordet sattes igen trots oförändrat fält" >&2; exit 1
+          fi
+          test "$(logga_in "$CI_BYTT_PASSWORD")" = 200 || { echo "Det bytta lösenordet gäller inte längre" >&2; exit 1; }
+          test "$(logga_in "$CI_NYTT_PASSWORD")" = 401 || { echo "Fältets lösenord skrev över det bytta" >&2; exit 1; }
+
+      - name: För kort lösenord i inställningarna – DriveLog startar ändå, lösenordet ändras inte
+        run: |
+          . "$RUNNER_TEMP/addon.sh"
+          stoppa drivelog
+          export CI_KORT_PASSWORD=kort-lösen
+          skriv_options drivelog-data CI_KORT_PASSWORD
+          starta drivelog drivelog-data
+          vanta_pa_https
+          docker logs drivelog 2>&1 | grep -F "Lösenordet ändrades inte"
+          test "$(logga_in "$CI_BYTT_PASSWORD")" = 200
 
       - name: Utan konto och utan uppgifter öppnas inte port 443
         run: |
@@ -310,7 +380,7 @@ jobs:
         run: |
           docker rm -f drivelog drivelog-tom >/dev/null 2>&1 || true
           docker volume rm drivelog-data drivelog-tom >/dev/null 2>&1 || true
-          rm -f "$RUNNER_TEMP/options.json" "$RUNNER_TEMP"/nycklar-*
+          rm -f "$RUNNER_TEMP/options.json" "$RUNNER_TEMP"/nycklar-* "$RUNNER_TEMP"/kaka* "$RUNNER_TEMP/inloggning.json"
 
   aarch64:
     name: aarch64 – bygg under emulering och provstarta
