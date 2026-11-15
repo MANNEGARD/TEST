@@ -35,3 +35,6 @@ Underlag*.xlsx
 .DS_Store
 .idea/
 .vscode/
+
+# Tillfälliga arbetskopior för verktyg – hör inte hemma i repot
+.claude/worktrees/
