@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 import uuid
 from typing import Any
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import select
@@ -145,10 +146,17 @@ _BOUNDS: dict[tuple[str, str], tuple[float, float]] = {
     ("notifications", "max_reminders"): (0, 10),
     ("notifications", "expire_after_hours"): (1, 24 * 60),
     ("notifications", "weekly_day"): (0, 6),
+    ("notifications", "snooze_minutes"): (5, 7 * 24 * 60),  # samma som POST /notifications/{id}/snooze
+    ("notifications", "digest_threshold"): (1, 50),
     ("volvo", "poll_interval_seconds"): (60, 24 * 3600),
     ("volvo", "settle_minutes"): (1, 240),
     ("volvo", "position_threshold_m"): (20, 5000),
     ("calendar", "min_match_score"): (0.0, 1.0),
+    ("calendar", "arrival_window_before_minutes"): (0, 24 * 60),
+    ("calendar", "arrival_window_after_minutes"): (0, 24 * 60),
+    ("calendar", "sync_days_back"): (0, 3650),
+    ("calendar", "sync_days_forward"): (0, 365),
+    ("privacy", "observation_retention_days"): (0, 3650),
     ("export", "rate_per_mil"): (0, 1000),
 }
 
@@ -159,8 +167,41 @@ _CHOICES: dict[tuple[str, str], tuple[str, ...]] = {
 }
 
 
+# Egna förkortningar (abbreviations.map): samma gränser som formuläret i webben.
+MAX_ABBREVIATIONS = 200
+MAX_ABBREVIATION_LENGTH = 20
+MAX_ABBREVIATION_FULL_LENGTH = 120
+MAX_URL_LENGTH = 500
+
+
 class SettingsError(ValueError):
     pass
+
+
+def _validate_abbreviations(value: dict[str, Any]) -> None:
+    if len(value) > MAX_ABBREVIATIONS:
+        raise SettingsError(f"Högst {MAX_ABBREVIATIONS} förkortningar kan sparas.")
+    for short, full in value.items():
+        if not isinstance(short, str) or not short.strip():
+            raise SettingsError("En förkortning får inte vara tom.")
+        if len(short.strip()) > MAX_ABBREVIATION_LENGTH:
+            raise SettingsError(f"Förkortningen {short!r} är längre än {MAX_ABBREVIATION_LENGTH} tecken.")
+        if not isinstance(full, str) or not full.strip():
+            raise SettingsError(f"Förkortningen {short!r} saknar betydelse.")
+        if len(full.strip()) > MAX_ABBREVIATION_FULL_LENGTH:
+            raise SettingsError(f"Betydelsen för {short!r} är längre än {MAX_ABBREVIATION_FULL_LENGTH} tecken.")
+
+
+def _validate_url(value: str, key: str) -> None:
+    """Tom text eller en http(s)-adress (platshållare som {z} tillåts)."""
+    v = value.strip()
+    if not v:
+        return
+    if len(v) > MAX_URL_LENGTH:
+        raise SettingsError(f"{key} får vara högst {MAX_URL_LENGTH} tecken.")
+    parsed = urlsplit(v)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc or any(c.isspace() for c in v):
+        raise SettingsError(f"{key} måste vara en adress som börjar med https:// eller http://.")
 
 
 def _validate_time(value: Any, key: str) -> None:
@@ -212,6 +253,12 @@ def _validate(section: str, values: dict[str, Any]) -> None:
         raise SettingsError("ai.provider måste vara none, anthropic eller openai.")
     if section == "notifications" and values.get("delivery_mode") not in (None, "push", "pull"):
         raise SettingsError("notifications.delivery_mode måste vara push eller pull.")
+    if section == "abbreviations" and isinstance(values.get("map"), dict):
+        _validate_abbreviations(values["map"])
+    if section == "privacy":
+        for key in ("map_tiles_url", "geocoder_url"):
+            if isinstance(values.get(key), str):
+                _validate_url(values[key], f"privacy.{key}")
     if section == "import" and values.get("default_coverage") not in (None, "selection", "complete", "unknown"):
         raise SettingsError("import.default_coverage måste vara selection, complete eller unknown.")
 
