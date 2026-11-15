@@ -25,7 +25,7 @@ export function useAiTestAction() {
     isPending: test.isPending,
     run: () =>
       test.mutate(undefined, {
-        onSuccess: (r) => toast.success("Nyckeln och modellen fungerar.", { description: r.model ? `Svar från ${r.model}.` : undefined }),
+        onSuccess: (r) => toast.success("Nyckeln och modellen fungerar.", { description: (r.verified_model ?? r.model) ? `Svar från ${r.verified_model ?? r.model}.` : undefined }),
         onError: notifyError,
       }),
   };

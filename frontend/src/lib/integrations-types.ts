@@ -288,4 +288,6 @@ export interface AiStatus extends IntegrationView {
 
 export interface AiTestResult extends AiStatus {
   ok: boolean;
+  /** Modellnamnet som leverantören själv svarade med vid testet. */
+  verified_model?: string | null;
 }

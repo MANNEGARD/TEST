@@ -44,9 +44,15 @@ class Principal:
 
 
 def client_ip(request: Request) -> str:
+    """Klientens adress enligt närmaste proxy.
+
+    Det SISTA värdet i X-Forwarded-For är det som den egna proxyn lade till; värden
+    längre till vänster kan klienten själv ha skickat med och får inte styra
+    inloggningsspärren eller ändringsloggen.
+    """
     fwd = request.headers.get("x-forwarded-for")
     if fwd:
-        return fwd.split(",")[0].strip()[:64]
+        return fwd.split(",")[-1].strip()[:64]
     return (request.client.host if request.client else "")[:64]
 
 
@@ -86,10 +92,26 @@ def get_principal(request: Request, db: DbDep) -> Principal:
     return Principal(user=user, session=sess, ip=ip)
 
 
-PrincipalDep = Annotated[Principal, Depends(get_principal)]
+# Rått beroende som godtar både session och API-token. Används ENDAST av routes
+# som uttryckligen tillåter maskintokens (require_scope och /auth/whoami).
+AnyPrincipalDep = Annotated[Principal, Depends(get_principal)]
 
 
-def get_web_principal(principal: PrincipalDep) -> Principal:
+def get_session_principal(principal: AnyPrincipalDep) -> Principal:
+    """Standardberoendet: API-tokens är spärrade om routen inte uttryckligen tillåter dem.
+
+    En token (t.ex. Home Assistants med scope "ha") når bara routes som använder
+    require_scope(...) eller AnyPrincipalDep – aldrig resten av körjournalen.
+    """
+    if principal.api_token is not None:
+        raise ApiError(403, "API-token saknar behörighet för åtgärden.", "insufficient_scope")
+    return principal
+
+
+PrincipalDep = Annotated[Principal, Depends(get_session_principal)]
+
+
+def get_web_principal(principal: AnyPrincipalDep) -> Principal:
     """Endast inloggade webbanvändare (inte maskintokens)."""
     if principal.api_token is not None:
         raise ApiError(403, "Den här åtgärden kräver inloggning i webbappen.", "session_required")
@@ -100,7 +122,7 @@ WebPrincipalDep = Annotated[Principal, Depends(get_web_principal)]
 
 
 def require_scope(scope: str):
-    def _dep(principal: PrincipalDep) -> Principal:
+    def _dep(principal: AnyPrincipalDep) -> Principal:
         if not principal.has_scope(scope):
             raise ApiError(403, "API-token saknar behörighet för åtgärden.", "insufficient_scope")
         return principal

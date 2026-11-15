@@ -58,6 +58,8 @@ def complete_month(db, trips, vehicle):
 
 
 def export(db, user, vehicle, actor, period=SEPT, **kw) -> tuple[M.ExportJob, Path]:
+    """Detaljerad export (sex blad). Den enkla standardlayouten prövas i test_export_simple.py."""
+    kw.setdefault("layout", "detailed")
     job = export_svc.create_export(
         db, user_id=user.id, vehicle=vehicle, start=period.start, end=period.end, actor=actor, tz=TZ, now=NOW, **kw
     )
@@ -133,7 +135,7 @@ def test_complete_export_has_all_required_fields(db, user, vehicle, actor, trips
                              wbmod.SHEET_QUALITY, wbmod.SHEET_SOURCES]
 
     ov = wv[wbmod.SHEET_OVERVIEW]
-    assert overview_value(ov, "Status")[0] == wbmod.STATUS_COMPLETE
+    assert overview_value(ov, "Status")[0] == wbmod.STATUS_READY  # omfånget business_only (standard)
     assert overview_value(ov, "Bilens registreringsnummer")[0] == "ABC123"
     assert overview_value(ov, "År / period")[0] == "2026-09"
     assert overview_value(ov, "Förare")[0] == "Test Förare"
@@ -452,7 +454,7 @@ def test_checks_pass_for_complete_month_and_detect_unreconciled_km(db, user, veh
 def test_selection_export(db, user, vehicle, actor, trips, complete_scope):
     t1, t2, _ = complete_month(db, trips, vehicle)
     job = export_svc.create_export(db, user_id=user.id, vehicle=vehicle, start=None, end=None, trip_ids=[t1.id, t2.id],
-                                   actor=actor, tz=TZ, now=NOW)
+                                   actor=actor, tz=TZ, now=NOW, layout="detailed")
     assert job.filename == "Körjournal_ABC123_urval.xlsx"
     assert job.summary["trips"] == 2 and job.summary["total_km"] == pytest.approx(20.0)
     assert any(w["code"] == "selection_export" for w in job.warnings)

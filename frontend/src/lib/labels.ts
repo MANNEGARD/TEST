@@ -181,10 +181,10 @@ export const INTEGRATION_PROVIDER_LABELS: Record<string, string> = {
 
 export const INTEGRATION_STATUS_LABELS: Record<string, string> = {
   not_configured: "Inte konfigurerad",
-  configured: "Konfigurerad – ej verifierad",
+  configured: "Konfigurerad – inte ansluten",
   demo: "Demoläge",
   connected: "Ansluten",
-  needs_reauth: "Behöver logga in igen",
+  needs_reauth: "Behöver anslutas på nytt",
   error: "Fel",
 };
 

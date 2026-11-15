@@ -144,6 +144,11 @@ Kör du redan Traefik/nginx kan `proxy`-tjänsten tas bort. Routa `/api/v1/*` ti
 och allt annat till `web:3000`, terminera TLS i din proxy och skicka `X-Forwarded-For` och
 `X-Forwarded-Proto`.
 
+DriveLog använder det sista värdet i `X-Forwarded-For` – det som din proxy själv lagt till –
+för inloggningsspärren och ändringsloggen. Sätt gärna `FORWARDED_ALLOW_IPS` till proxyns
+adress i `.env` (standard är `*`, vilket förutsätter att API:t bara nås via proxyn, som i den
+medföljande Compose-filen där port 8000 inte publiceras).
+
 ## Utvecklingsläge utan Docker
 
 ```bash

@@ -26,10 +26,12 @@ function ThemedToaster() {
   return (
     <Toaster
       theme={resolved}
-      position="bottom-right"
+      // Överst i mitten: där skymmer kvittona varken sidopanelernas knappar (nere till höger)
+      // eller mobilens flikrad och bottenark.
+      position="top-center"
       closeButton
-      offset={{ bottom: 24 }}
-      mobileOffset={{ bottom: 76 }}
+      offset={{ top: 68 }}
+      mobileOffset={{ top: 64 }}
       toastOptions={{
         classNames: {
           toast: "!bg-surface !text-fg !border-border !shadow-lg !font-sans",

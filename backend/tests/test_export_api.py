@@ -49,7 +49,7 @@ def test_precheck(complete_scope, client, db, vehicle, trips):
 
 def test_create_list_download_delete(client, db, vehicle, trips):
     seed(db, trips, vehicle)
-    r = client.post("/api/v1/exports", json=PERIOD)
+    r = client.post("/api/v1/exports", json={**PERIOD, "layout": "detailed"})
     assert r.status_code == 201, r.text
     job = r.json()
     assert job["status"] == "done" and job["is_complete"]

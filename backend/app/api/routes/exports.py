@@ -160,7 +160,8 @@ def preview(
         "scope": settings_svc.journal_scope(db, principal.user.id),
         "period": {"start": start, "end": end, "timezone": str(tz), "label": journal.period_label},
         "filename": export_svc.download_name(
-            vehicle, Period("export", start, end, journal.period_label), tz, selection=trip_ids is not None
+            vehicle, Period("export", start, end, journal.period_label), tz, selection=trip_ids is not None,
+            layout=settings_svc.LAYOUT_SIMPLE,
         ),
         **journal.as_dict(),
     }

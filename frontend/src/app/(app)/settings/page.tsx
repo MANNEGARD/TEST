@@ -1,8 +1,13 @@
 import type { Metadata } from "next";
-import { PlaceholderPage } from "@/components/placeholder-page";
+import { Suspense } from "react";
+import { SettingsView } from "@/components/settings/settings-view";
 
 export const metadata: Metadata = { title: "Inställningar" };
 
-export default function Page() {
-  return <PlaceholderPage title="Inställningar" description="Konto, skatteregler, sekretess och notiser." />;
+export default function SettingsPage() {
+  return (
+    <Suspense>
+      <SettingsView />
+    </Suspense>
+  );
 }

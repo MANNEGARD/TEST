@@ -125,7 +125,7 @@ def ai_test(principal: WebPrincipalDep, db: DbDep) -> dict[str, Any]:
     conn.status = IntegrationStatus.CONNECTED
     integrations.mark_success(conn)
     db.commit()
-    return {"ok": True, "model": name, **_ai_view(db, user_id)}
+    return {"ok": True, **_ai_view(db, user_id), "verified_model": name}
 
 
 @router.delete("/ai", summary="Ta bort API-nycklar och stäng av AI (reglerna fortsätter fungera)")

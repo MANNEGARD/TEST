@@ -56,6 +56,12 @@ SHEET_SOURCES = "Källa och ändringshistorik"
 
 STATUS_COMPLETE = "Fullständig"
 STATUS_INCOMPLETE = "OFULLSTÄNDIG – se bladet Datakvalitet och avvikelser"
+# Omfånget business_only (endast tjänsteresor redovisas): ordet "fullständig" används inte, och
+# luckor i mätarställningen är privat körning – aldrig en brist.
+STATUS_READY = "Klart att redovisa"
+STATUS_NEEDS_FIX = "Fel behöver åtgärdas – se bladet Datakvalitet och avvikelser"
+SCOPE_COMPLETE = "complete"
+SCOPE_BUSINESS_ONLY = "business_only"
 DEMO_WATERMARK = "DEMODATA – påhittade uppgifter, inte en riktig körjournal"
 MISSING = "Uppgift saknas"
 
@@ -149,6 +155,22 @@ class ExportContext:
     include_change_history: bool = True
     selection: bool = False
     generated_at: datetime | None = None
+    scope: str = SCOPE_COMPLETE  # general.journal_scope: complete | business_only
+
+    @property
+    def business_only(self) -> bool:
+        return self.scope == SCOPE_BUSINESS_ONLY
+
+
+def status_text(ctx: ExportContext, *, short: bool = False) -> str:
+    """Statusrutans text enligt de omfångsmedvetna kontrollerna (``ctx.is_complete``)."""
+    if ctx.business_only:
+        if ctx.is_complete:
+            return STATUS_READY
+        return "Fel behöver åtgärdas" if short else STATUS_NEEDS_FIX
+    if ctx.is_complete:
+        return STATUS_COMPLETE
+    return "OFULLSTÄNDIG" if short else STATUS_INCOMPLETE
 
 
 # ----------------------------------------------------------------------------- radmodell
@@ -406,7 +428,7 @@ class _Book:
             ws.repeat_rows(header_row)
         reg = (ctx.vehicle.registration_number or "regnr saknas").replace("&", "och")
         label = ctx.period.label.replace("&", "och")
-        status = STATUS_COMPLETE if ctx.is_complete else "OFULLSTÄNDIG"
+        status = status_text(ctx, short=True)
         demo = "  DEMODATA" if ctx.vehicle.is_demo else ""
         ws.set_header(f"&L{title} – {reg} – {label}&R{status}{demo}"[:250])
         ws.set_footer("&LSMGD DriveLog&CSida &P av &N&R&D")
@@ -420,8 +442,7 @@ def _journal_sheet(book: _Book, rows: list[dict[str, Any]]) -> dict[str, Any]:
     book.text(ws, 1, 0, f"Bilens registreringsnummer: {reg}", "bold")
     book.text(ws, 1, 3, f"År/period: {ctx.period.label}", "bold")
     book.text(ws, 1, 4, f"Förare: {ctx.driver_name or MISSING}", "bold")
-    status = STATUS_COMPLETE if ctx.is_complete else STATUS_INCOMPLETE
-    book.text(ws, 2, 0, f"Status: {status}", "bold")
+    book.text(ws, 2, 0, f"Status: {status_text(ctx)}", "bold")
     if ctx.vehicle.is_demo:
         book.text(ws, 2, 4, DEMO_WATERMARK, "demo")
 
@@ -541,13 +562,13 @@ def _overview_sheet(book: _Book, ws, rows: list[dict[str, Any]], jr: dict[str, A
         ws.merge_range(r, 0, r, 3, DEMO_WATERMARK, book.fmt["demo"])
         r += 1
     book.text(ws, r, 0, "Status", "bold")
-    ws.merge_range(r, 1, r, 3, STATUS_COMPLETE if ctx.is_complete else STATUS_INCOMPLETE,
-                   book.fmt["ok" if ctx.is_complete else "bad"])
+    ws.merge_range(r, 1, r, 3, status_text(ctx), book.fmt["ok" if ctx.is_complete else "bad"])
     ws.set_row(r, 24)
     r += 1
     errors = [c for c in ctx.checks if c["severity"] == "error"]
     if errors:
-        book.text(ws, r, 0, "Brister som gör journalen ofullständig", "bold")
+        book.text(ws, r, 0, "Fel som behöver åtgärdas" if ctx.business_only else "Brister som gör journalen ofullständig",
+                  "bold")
         for c in errors[:12]:
             ws.merge_range(r, 1, r, 3, safe_text(f"• {c['title']}: {c['message']}"), book.fmt["text"])
             ws.set_row(r, 28)
@@ -622,13 +643,18 @@ def _overview_sheet(book: _Book, ws, rows: list[dict[str, Any]], jr: dict[str, A
     book.text(ws, r, 0, "Differens mätarställning − journal (km)", "plain")
     if both:
         book.formula(ws, r, 1, f"={xl_rowcol_to_cell(delta_row, 1)}-{xl_rowcol_to_cell(journal_row, 1)}", delta - journal_km)
-        book.text(ws, r, 3, "Kilometer som inte är journalförda. Ska vara nära noll för en komplett journal.", "muted")
+        book.text(ws, r, 3, "Körning mellan tjänsteresorna är privat och redovisas inte." if ctx.business_only
+                  else "Kilometer som inte är journalförda. Ska vara nära noll för en komplett journal.", "muted")
     else:
         book.text(ws, r, 1, "Kan inte beräknas", "plain")
     r += 1
     open_gaps = [g for g in ctx.gaps if g.status == GapStatus.OPEN]
-    label_value("Ej journalförda km (öppna luckor)", round(sum(g.km for g in open_gaps), 1),
-                f"{len(open_gaps)} luckor i mätarställningen saknar journalpost." if open_gaps else "", "km")
+    if ctx.business_only:
+        label_value("Körning mellan resorna (privat)", round(sum(g.km for g in open_gaps), 1),
+                    "Luckor i mätarställningen är privat körning och ingen brist.", "km")
+    else:
+        label_value("Ej journalförda km (öppna luckor)", round(sum(g.km for g in open_gaps), 1),
+                    f"{len(open_gaps)} luckor i mätarställningen saknar journalpost." if open_gaps else "", "km")
     first_odo, last_odo = common.first_and_last_trip_odometer(ctx.trips)
     label_value("Första journalförda resans mätarställning (km)", first_odo, "", "odo")
     label_value("Sista journalförda resans mätarställning (km)", last_odo, "", "odo")
@@ -821,7 +847,10 @@ def _quality_sheet(book: _Book, rows: list[dict[str, Any]]) -> None:
     tz = ctx.tz
     ws = wb.add_worksheet(SHEET_QUALITY)
     ws.write_string(0, 0, "Datakvalitet och avvikelser", book.fmt["title"])
-    status = STATUS_COMPLETE if ctx.is_complete else "OFULLSTÄNDIG – bristerna nedan måste åtgärdas"
+    if ctx.business_only:
+        status = STATUS_READY if ctx.is_complete else "Fel behöver åtgärdas – se felen nedan"
+    else:
+        status = STATUS_COMPLETE if ctx.is_complete else "OFULLSTÄNDIG – bristerna nedan måste åtgärdas"
     ws.merge_range(1, 0, 1, 4, status, book.fmt["ok" if ctx.is_complete else "bad"])
     hr = 3
     for c, h in enumerate(["Allvarlighetsgrad", "Kontroll", "Beskrivning", "Antal", "Berörda resor (Rese-ID)"]):
@@ -849,7 +878,8 @@ def _quality_sheet(book: _Book, rows: list[dict[str, Any]]) -> None:
         r += 1
     r += 2
 
-    ws.write_string(r, 0, "Dataluckor i mätarställningen", book.fmt["section"])
+    ws.write_string(r, 0, "Körning mellan resorna (privat, ingen brist)" if ctx.business_only
+                    else "Dataluckor i mätarställningen", book.fmt["section"])
     r += 1
     for c, h in enumerate(["Status", "Från mätarställning (km)", "Till mätarställning (km)", "Kilometer", "Från tid – till tid",
                            "Notering"]):
@@ -860,8 +890,12 @@ def _quality_sheet(book: _Book, rows: list[dict[str, Any]]) -> None:
         r += 1
     first_gap = r
     for g in ctx.gaps:
-        book.text(ws, r, 0, GAP_STATUS_LABELS.get(g.status, str(g.status)),
-                  "sev_error" if g.status == GapStatus.OPEN else "plain")
+        if ctx.business_only:
+            label = "Privat körning" if g.status == GapStatus.OPEN else GAP_STATUS_LABELS.get(g.status, str(g.status))
+            book.text(ws, r, 0, label, "plain")
+        else:
+            book.text(ws, r, 0, GAP_STATUS_LABELS.get(g.status, str(g.status)),
+                      "sev_error" if g.status == GapStatus.OPEN else "plain")
         book.number(ws, r, 1, g.odometer_start, "odo")
         book.number(ws, r, 2, g.odometer_end, "odo")
         book.number(ws, r, 3, g.km, "km")
@@ -1018,7 +1052,7 @@ def build_workbook(path: Path, ctx: ExportContext) -> dict[str, Any]:
             "subject": "Körjournal",
             "author": "SMGD DriveLog",
             "comments": (DEMO_WATERMARK if v.is_demo else "")
-            + ("" if ctx.is_complete else " Körjournalen är ofullständig – se bladet Datakvalitet och avvikelser."),
+            + ("" if ctx.is_complete else f" {status_text(ctx)}."),
         }
     )
     rows = journal_rows(ctx)

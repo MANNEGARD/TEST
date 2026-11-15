@@ -115,11 +115,16 @@ def build_simple_journal(
 
 
 def simple_summary(journal: SimpleJournal) -> dict[str, Any]:
-    """Kompakt sammanfattning av den enkla exporten: summor och vad som inte togs med."""
+    """Kompakt sammanfattning av den enkla exporten: summor och vad som inte togs med.
+
+    ``excluded`` anger hur många resor med tjänstekörning i perioden som inte togs med och
+    varför (väntar på godkännande, ej avgjord kategori). Privata resor räknas inte, och
+    godkända resor som saknar syfte tas med och redovisas som fel i kontrollerna.
+    """
     excluded = {
-        key: ({k: v for k, v in value.items() if k != "trip_ids"} if isinstance(value, dict) else value)
-        for key, value in journal.excluded.items()
+        key: {k: v for k, v in value.items() if k != "trip_ids"} for key, value in journal.excluded.items()
     }
+    excluded["total"] = sum(v["count"] for v in excluded.values())
     return {
         "layout": settings_svc.LAYOUT_SIMPLE,
         **journal.totals(),
@@ -143,8 +148,9 @@ def build_context(
     selection = trip_ids is not None
     ids = list(trip_ids) if trip_ids is not None else None
     trips = common.load_trips(db, vehicle.id, period.start, period.end, trip_ids=ids)
+    scope = settings_svc.journal_scope(db, user_id)
     checks = checks_mod.run_checks(
-        db, vehicle=vehicle, start=period.start, end=period.end, tz=tz, trip_ids=ids, now=now
+        db, vehicle=vehicle, start=period.start, end=period.end, tz=tz, trip_ids=ids, now=now, scope=scope
     )
     export_cfg = settings_svc.get_section(db, user_id, "export")
     tol = float(settings_svc.get_section(db, user_id, "merge")["odometer_tolerance_km"])
@@ -227,6 +233,7 @@ def build_context(
         include_change_history=bool(export_cfg["include_change_history"]),
         selection=selection,
         generated_at=now,
+        scope=scope,
     )
 
 
@@ -258,9 +265,17 @@ def _selection_energy(trips: list, tz: ZoneInfo) -> list[dict[str, Any]]:
     return out
 
 
-def download_name(vehicle: Vehicle, period: Period, tz: ZoneInfo, *, selection: bool = False) -> str:
+def download_name(
+    vehicle: Vehicle, period: Period, tz: ZoneInfo, *, selection: bool = False, layout: str = settings_svc.LAYOUT_DETAILED
+) -> str:
+    """Filnamn: Körjournal_<regnr>_<ÅÅÅÅ-MM>.xlsx för en hel kalendermånad, annars <från>_<till>."""
     reg = "".join(ch for ch in (vehicle.registration_number or "utan-regnr") if ch.isalnum() or ch in "-_") or "utan-regnr"
-    part = "urval" if selection else common.period_filename_part(period, tz)
+    if selection:
+        part = "urval"
+    elif layout == settings_svc.LAYOUT_SIMPLE:
+        part = simple_mod.filename_part(period.start, period.end, tz)
+    else:
+        part = common.period_filename_part(period, tz)
     prefix = "DEMO_Körjournal" if vehicle.is_demo else "Körjournal"
     return f"{prefix}_{reg}_{part}.xlsx"
 
@@ -349,7 +364,7 @@ def create_export(
         job.file_path = str(path)
         job.sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
         naming_period = Period("export", start, end, label)
-        job.filename = download_name(vehicle, naming_period, tz, selection=ids is not None)
+        job.filename = download_name(vehicle, naming_period, tz, selection=ids is not None, layout=layout)
         job.is_complete = checks_mod.is_complete(checks)
         job.warnings = [{k: c[k] for k in ("code", "severity", "title", "message", "count")} for c in checks]
         job.summary = {

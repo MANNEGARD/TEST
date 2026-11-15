@@ -21,6 +21,7 @@ from app.models import (
     BusinessJourney,
     CalendarEvent,
     CalendarMatch,
+    Driver,
     ImportedFile,
     ImportRow,
     KnownLocation,
@@ -400,6 +401,10 @@ def update_trip(trip_id: uuid.UUID, body: TripUpdate, principal: PrincipalDep, d
     trip = get_owned_trip(db, principal, trip_id)
     data = body.model_dump(exclude_unset=True)
     if "driver_id" in data:
+        if body.driver_id is not None:
+            driver = db.get(Driver, body.driver_id)
+            if driver is None or driver.owner_user_id != principal.user.id:
+                raise not_found("Föraren")
         trip.driver_id = body.driver_id
     if body.is_favorite is not None:
         trip.is_favorite = body.is_favorite

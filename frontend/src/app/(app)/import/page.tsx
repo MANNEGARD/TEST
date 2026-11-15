@@ -1,8 +1,8 @@
 import type { Metadata } from "next";
-import { PlaceholderPage } from "@/components/placeholder-page";
+import { ImportView } from "@/components/import/import-view";
 
 export const metadata: Metadata = { title: "Import" };
 
-export default function Page() {
-  return <PlaceholderPage title="Import" description="Importera körjournaler från Volvo Cars-appen." />;
+export default function ImportPage() {
+  return <ImportView />;
 }

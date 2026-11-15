@@ -15,7 +15,7 @@ export const buttonVariants = cva(
         subtle: "bg-surface-2 text-fg hover:bg-surface-3",
         danger: "bg-err text-white shadow-sm hover:opacity-90",
         "danger-ghost": "text-err-ink hover:bg-err-soft",
-        link: "h-auto px-0 text-accent-ink underline-offset-4 hover:underline",
+        link: "text-accent-ink underline-offset-4 hover:underline",
       },
       size: {
         xs: "h-7 rounded-sm px-2 text-xs [&_svg]:size-3.5",
@@ -28,6 +28,10 @@ export const buttonVariants = cva(
         "icon-xs": "size-7 rounded-sm [&_svg]:size-3.5",
       },
     },
+    // En länk-knapp ska flöda som text oavsett storlek: ingen fast höjd eller sidopadding.
+    compoundVariants: [
+      { variant: "link", size: ["xs", "sm", "md", "lg", "xl"], class: "h-auto rounded-sm px-0" },
+    ],
     defaultVariants: { variant: "secondary", size: "md" },
   },
 );

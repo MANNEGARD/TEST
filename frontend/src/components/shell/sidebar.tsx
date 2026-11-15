@@ -78,9 +78,9 @@ export function Sidebar() {
         <NavList />
       </div>
       <div className="border-t border-border px-4 py-3 text-[11px] leading-relaxed text-fg-subtle">
-        Självhostad körjournal.
+        Självhostad körjournal
         <br />
-        Dina uppgifter lämnar aldrig servern.
+        för tjänsteresor med egen bil.
       </div>
       </div>
     </aside>

@@ -65,7 +65,7 @@ JSON. Svaret passerar sedan skyddsräcken:
 | ≥ 0,60 | Förslag som väntar på godkännande | *Förslag* |
 | < 0,60 | Obligatorisk manuell granskning | *Behöver granskas* (kategori Ej avgjord) |
 
-Trösklarna ändras under *Inställningar → AI*. I **strikt läge** blir ingenting automatiskt
+Trösklarna ändras under *Inställningar → Förslag och AI*. I **strikt läge** blir ingenting automatiskt
 klassat – allt måste godkännas. Preliminära klassningar särredovisas i dashboard och
 flaggas i exporten tills de godkänts.
 

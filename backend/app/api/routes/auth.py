@@ -9,7 +9,7 @@ from fastapi import APIRouter, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
-from app.api.deps import DbDep, PrincipalDep, WebPrincipalDep, client_ip
+from app.api.deps import AnyPrincipalDep, DbDep, WebPrincipalDep, client_ip
 from app.api.errors import ApiError, bad_request, not_found
 from app.config import get_config
 from app.db import utcnow
@@ -20,6 +20,16 @@ from app.services import audit, vehicles
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 ALLOWED_TOKEN_SCOPES = {"ha"}
+
+_DUMMY_HASH: str | None = None
+
+
+def _dummy_hash() -> str:
+    """Hash för okända konton, beräknad en gång så att båda vägarna kostar en verifiering."""
+    global _DUMMY_HASH
+    if _DUMMY_HASH is None:
+        _DUMMY_HASH = passwords.hash_password("dummy-password-for-timing")
+    return _DUMMY_HASH
 
 
 class Credentials(BaseModel):
@@ -135,15 +145,21 @@ def login(body: Credentials, request: Request, response: Response, db: DbDep) ->
     cfg = get_config()
     ip = client_ip(request)
     email = body.email.strip().lower()
-    for key in (f"login:ip:{ip}", f"login:user:{email}"):
-        allowed, wait = ratelimit.hit(key, cfg.login_rate_limit_attempts, cfg.login_rate_limit_window_seconds)
+    limit, window = cfg.login_rate_limit_attempts, cfg.login_rate_limit_window_seconds
+    ip_key, user_key = f"login:ip:{ip}", f"login:user:{email}"
+    # Avvisade (429) försök registreras inte och förlänger alltså inte spärren.
+    for key in (ip_key, user_key):
+        allowed, wait = ratelimit.check(key, limit, window)
         if not allowed:
             raise ApiError(429, f"För många inloggningsförsök. Vänta {wait} sekunder.", "rate_limited")
+    ratelimit.record(ip_key, window)
     user = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
-    # Verifiera alltid en hash så att svarstiden inte avslöjar om kontot finns.
-    stored = user.password_hash if user else passwords.hash_password("dummy-password-for-timing")
+    # Verifiera alltid exakt en hash så att svarstiden inte avslöjar om kontot finns.
+    stored = user.password_hash if user else _dummy_hash()
     ok = passwords.verify_password(stored, body.password)
     if user is None or not ok or not user.is_active:
+        # Kontospärren räknar bara misslyckade försök.
+        ratelimit.record(user_key, window)
         audit.record(db, audit.Actor("user", None, None, ip), "auth.login_failed", "user", None, after={"email": email})
         db.commit()
         raise ApiError(401, "Fel e-postadress eller lösenord.", "invalid_credentials")
@@ -210,7 +226,7 @@ def create_token(body: TokenCreate, principal: WebPrincipalDep, db: DbDep) -> To
     )
 
 
-@router.delete("/tokens/{token_id}", status_code=204, summary="Återkalla API-token")
+@router.delete("/tokens/{token_id}", status_code=204, summary="Återkalla API-token (en återkallad token tas bort)")
 def revoke_token(token_id: uuid.UUID, principal: WebPrincipalDep, db: DbDep) -> Response:
     row = db.get(ApiToken, token_id)
     if row is None or row.user_id != principal.user.id:
@@ -218,12 +234,16 @@ def revoke_token(token_id: uuid.UUID, principal: WebPrincipalDep, db: DbDep) -> 
     if row.revoked_at is None:
         row.revoked_at = utcnow()
         audit.record(db, principal.actor, "auth.token_revoked", "api_token", row.id)
+    else:
+        # Andra anropet rensar bort den redan återkallade raden ur listan.
+        audit.record(db, principal.actor, "auth.token_deleted", "api_token", row.id, before={"name": row.name})
+        db.delete(row)
     db.commit()
     return Response(status_code=204)
 
 
 @router.get("/whoami", summary="Verifiera en API-token (används av Home Assistant-integrationen)")
-def whoami(principal: PrincipalDep) -> dict[str, object]:
+def whoami(principal: AnyPrincipalDep) -> dict[str, object]:
     return {
         "user": principal.user.display_name or principal.user.email,
         "auth": "token" if principal.api_token else "session",
