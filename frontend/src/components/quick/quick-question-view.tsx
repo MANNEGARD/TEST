@@ -26,23 +26,38 @@ import { QuickTripCard, QuickTripCardSkeleton } from "./trip-card";
 function headline(q: Question): string {
   switch (q.kind) {
     case "classify":
-      return "Arbete eller privat?";
+      return isSelfDrivingClassify(q) ? "Tjänst eller privat?" : "Arbete eller privat?";
     case "purpose":
       return "Vad var syftet med resan?";
     case "merge":
       return "Slå samman resorna?";
     case "test":
       return "Testnotis";
+    case "company":
+      return "Vilket företag var det?";
     default:
       return q.title;
   }
 }
 
+/** Notistyperna från självgående läge (1.1.0) som inte finns i den gemensamma etikettlistan. */
+const EXTRA_KIND_LABELS: Record<string, string> = {
+  assumed: "Antagande",
+  company: "Företag",
+  alert: "Larm",
+  monthly: "Månadsskifte",
+};
+
+/** Klassningsfrågan i självgående läge har ärendet i samma svar. */
+function isSelfDrivingClassify(q: Question): boolean {
+  return q.kind === "classify" && !q.actions.some((a) => a.key === "WORK");
+}
+
 /** Underrubrik: frågans text när den säger mer än rubriken (resan visas separat). */
 function subline(q: Question): string | null {
   if (q.kind === "merge") return q.detail_message ?? q.message;
-  if (q.kind === "classify" || q.kind === "purpose") return null;
-  return q.message;
+  if (q.kind === "classify" || q.kind === "purpose" || q.kind === "company") return null;
+  return q.detail_message ?? q.message;
 }
 
 function whenText(iso: string): string {
@@ -66,7 +81,7 @@ function Header({ q }: { q: Question }) {
   return (
     <header className="mb-5">
       <p className="text-xs font-medium text-fg-subtle">
-        {label(NOTIFICATION_KIND_LABELS, q.kind)} · {formatRelative(sent)}
+        {label({ ...NOTIFICATION_KIND_LABELS, ...EXTRA_KIND_LABELS }, q.kind)} · {formatRelative(sent)}
       </p>
       <h1 className="mt-1 text-[26px] leading-tight font-semibold tracking-tight text-fg sm:text-[28px]">{headline(q)}</h1>
       {sub ? <p className="mt-2 text-[15px] leading-relaxed text-fg-muted">{sub}</p> : null}
@@ -101,6 +116,31 @@ function Trips({ q, detail }: { q: Question; detail: TripDetail | undefined }) {
   }
   if (q.trip) return <QuickTripCard trip={q.trip} full={detail?.trip} showPurpose={q.kind !== "purpose"} />;
   return null;
+}
+
+/** Notisens egna länkknappar (t.ex. "Öppna underlaget" och "Se antagna" i månadsnotisen). */
+function NoticeLinks({ q }: { q: Question }) {
+  const linked = q.actions.filter((a) => a.uri);
+  if (!linked.length) return null;
+  return (
+    <div className="mt-6 flex flex-col gap-2 sm:flex-row sm:justify-center">
+      {linked.map((a, i) => {
+        const href = a.uri ?? "/";
+        let path = href;
+        try {
+          const url = new URL(href);
+          path = `${url.pathname}${url.search}`;
+        } catch {
+          // redan en relativ sökväg
+        }
+        return (
+          <Button key={a.key} asChild variant={i === 0 ? "primary" : "secondary"} size="lg" className="rounded-xl">
+            <Link href={path}>{a.title}</Link>
+          </Button>
+        );
+      })}
+    </div>
+  );
 }
 
 /** Länkar vidare: resan i körjournalen och granskningen. */
@@ -212,7 +252,7 @@ function Receipt({
   let text = result.message;
   if (o === "snoozed" && result.snoozed_until) text = `Du får frågan igen ${whenText(result.snoozed_until)}.`;
   if (o === "duplicate" && q.answer?.message) text = `${result.message} ${q.answer.message}`;
-  const askPurpose = o === "applied" && q.kind === "classify" && result.category === "work" && !!tripId && !result.follow_up;
+  const askPurpose = o === "applied" && q.kind === "classify" && result.category === "work" && !!tripId && !result.follow_up && !result.purpose;
   const canRetry = o === "invalid" && result.code !== "not_active" && q.answerable;
 
   return (
@@ -291,12 +331,12 @@ export function QuickQuestionView({ publicId }: { publicId: string }) {
   const detail = useQuestionTrip(needsDetail ? q.trip_id : null);
   const keys = React.useRef(new Map<string, string>());
 
-  const answer = (action: string, replyText?: string) => {
-    const id = `${action}|${replyText ?? ""}`;
+  const answer = (action: string, replyText?: string, always?: boolean) => {
+    const id = `${action}|${replyText ?? ""}|${always ? "1" : ""}`;
     const key = keys.current.get(id) ?? newKey();
     keys.current.set(id, key);
     respond.mutate(
-      { action, reply_text: replyText ?? null, idempotency_key: key },
+      { action, reply_text: replyText ?? null, idempotency_key: key, always: !!always },
       {
         onSuccess: (res) => {
           setResult(res);
@@ -339,7 +379,8 @@ export function QuickQuestionView({ publicId }: { publicId: string }) {
   }
 
   const data = query.data;
-  const informational = data.kind === "digest" || data.kind === "weekly" || data.kind === "daily";
+  const informational =
+    data.kind === "digest" || data.kind === "weekly" || data.kind === "daily" || data.kind === "alert" || data.kind === "monthly";
   const open = data.answerable && !informational && data.status !== "answered";
   const pending = respond.isPending ? (respond.variables?.action ?? null) : null;
 
@@ -364,7 +405,7 @@ export function QuickQuestionView({ publicId }: { publicId: string }) {
               {data.kind !== "test" ? <Links tripId={data.trip_id ?? data.merge_trips[0]?.id ?? null} /> : null}
             </>
           ) : informational ? (
-            <Links tripId={null} primary />
+            data.actions.some((a) => a.uri) ? <NoticeLinks q={data} /> : <Links tripId={null} primary />
           ) : (
             <div className="mt-4">
               <Closed q={data} />

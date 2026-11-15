@@ -2,7 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError } from "../api";
-import type { Question, RespondInput, RespondResult } from "../notifications-types";
+import type { MonthClose, Question, RespondInput, RespondResult, ReviewVerdict, ReviewVerdictResult } from "../notifications-types";
 import type { TripDetail } from "../types";
 import { invalidateJournalData, qk } from "./keys";
 
@@ -52,5 +52,23 @@ export function useQuestionTrip(tripId: string | null | undefined) {
     queryFn: ({ signal }) => api.get<TripDetail>(`/trips/${tripId}`, { signal }),
     enabled: !!tripId,
     retry: false,
+  });
+}
+
+/** Månadsskiftets läge med månadens automatiskt godkända och antagna rader (GET /month-close). */
+export function useMonthReview() {
+  return useQuery({
+    queryKey: ["notifications", "month-review"] as const,
+    queryFn: ({ signal }) => api.get<MonthClose>("/month-close", { signal }),
+  });
+}
+
+/** "Stämmer" eller "Fel" på en rad i månadens genomgång. */
+export function useReviewVerdict() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ tripId, verdict }: { tripId: string; verdict: ReviewVerdict }) =>
+      api.post<ReviewVerdictResult>(`/notifications/review-rows/${encodeURIComponent(tripId)}`, { verdict }),
+    onSuccess: () => Promise.all([qc.invalidateQueries({ queryKey: notificationKeys.all }), invalidateJournalData(qc)]),
   });
 }

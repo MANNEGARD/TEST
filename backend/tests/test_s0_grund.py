@@ -317,7 +317,9 @@ def test_stubs_are_neutral(db, user, vehicle, trips, actor):
     assert geocode.place_for_position(db, user_id=user.id, lat=57.78, lon=14.16, demo=False) is None
     assert db.execute(select(M.KnownLocation).where(M.KnownLocation.created_from == "api")).first() is None
     assert geocode.run_pending(now) == {}
-    assert geocode.reverse(provider_url="https://geo.example.org", lat_key=577800, lon_key=141600) is None
+    # S1a: reverse är byggd; med testernas offlinetransport blir anropet ett GeocodeError.
+    with pytest.raises(geocode.GeocodeError):
+        geocode.reverse(provider_url="https://geo.example.org", lat_key=577800, lon_key=141600)
     assert "SMGD-DriveLog/" in geocode.USER_AGENT and "@" not in geocode.USER_AGENT
 
     status = month_close.evaluate(db, user_id=user.id, vehicle=vehicle, month=date(2026, 10, 1), now=now)

@@ -204,7 +204,7 @@ def test_run_pending_fills_address_kind_and_company(db, user, vehicle, monkeypat
 
     out = geocode.run_pending(now=utcnow())
 
-    assert out["looked_up"] == 1 and out["ok"] == 1
+    assert out.get("looked_up") == 1 and out.get("ok") == 1
     loc = reload(db, loc)
     assert loc.geocode_status == GeocodeStatus.OK and loc.geocoded_at is not None
     assert loc.address == "Exempelgatan 5, 123 45 Exempelstad"  # utan POI-namn
@@ -305,7 +305,7 @@ def test_no_request_before_home_has_coordinate(db, user, monkeypatch, no_dns):
     db.commit()
     rec = use(monkeypatch, Recorder())
     out = geocode.run_pending(now=utcnow())
-    assert rec.requests == [] and out["waiting_for_home"] == 1
+    assert rec.requests == [] and out.get("waiting_for_home") == 1
     assert reload(db, loc).geocode_status == GeocodeStatus.PENDING
 
     # Hemmet utan koordinat räcker inte heller.
@@ -351,7 +351,7 @@ def test_cache_same_cell_is_never_looked_up_twice(db, user, monkeypatch, no_dns)
     db.add(second)
     db.commit()
     out = geocode.run_pending(now=utcnow())
-    assert len(rec.requests) == 1 and out["from_cache"] == 1
+    assert len(rec.requests) == 1 and out.get("from_cache") == 1
     assert reload(db, second).geocode_status == GeocodeStatus.NOT_FOUND
 
 
@@ -366,7 +366,7 @@ def test_two_places_in_same_cell_give_one_request(db, user, monkeypatch, no_dns)
     db.commit()
     rec = use(monkeypatch, Recorder())
     out = geocode.run_pending(now=utcnow())
-    assert len(rec.requests) == 1 and out["ok"] == 2
+    assert len(rec.requests) == 1 and out.get("ok") == 2
 
 
 def test_rate_limit_one_call_per_1_1_seconds(db, user, monkeypatch, no_dns, fast_clock):
@@ -408,7 +408,7 @@ def test_failed_lookup_is_retried_on_schedule(db, user, offline_geocoder, no_dns
     db.commit()
     t = utcnow()
     out = geocode.run_pending(now=t)
-    assert out["failed"] == 1 and len(offline_geocoder.requests) == 1
+    assert out.get("failed") == 1 and len(offline_geocoder.requests) == 1
     assert reload(db, loc).geocode_status == GeocodeStatus.FAILED and reload(db, loc).address is None
     cache = db.execute(select(M.GeocodeCache)).scalar_one()
     assert cache.attempts == 1 and cache.next_attempt_at == t + timedelta(minutes=5)
@@ -436,7 +436,7 @@ def test_match_by_address_merges_with_imported_place(db, user, vehicle, monkeypa
 
     out = geocode.run_pending(now=utcnow())
 
-    assert out["merged"] == 1
+    assert out.get("merged") == 1
     loc, imported = reload(db, loc), db.get(M.KnownLocation, imported.id)
     assert loc.merged_into_id == imported.id
     assert (imported.latitude, imported.longitude) == B and imported.coordinate_source == "api"
@@ -499,7 +499,7 @@ def test_url_guard_checks_every_dns_answer(monkeypatch, answer):
 
     monkeypatch.setattr(geocode, "_getaddrinfo", fake)
     with pytest.raises(ValueError):
-        geocode.validate_runtime_url(PROVIDER)
+        geocode.validate_runtime_url(PROVIDER, resolve=True)
 
 
 def test_url_guard_dns_failure(monkeypatch):
@@ -508,7 +508,7 @@ def test_url_guard_dns_failure(monkeypatch):
 
     monkeypatch.setattr(geocode, "_getaddrinfo", fail)
     with pytest.raises(ValueError):
-        geocode.validate_runtime_url(PROVIDER)
+        geocode.validate_runtime_url(PROVIDER, resolve=True)
 
 
 def test_real_transport_checks_dns_before_connecting(monkeypatch):
@@ -600,3 +600,16 @@ def test_offline_failure_becomes_geocode_error(offline_geocoder):
     with pytest.raises(geocode.GeocodeError):
         geocode.reverse(provider_url=PROVIDER, lat_key=590900, lon_key=150000)
     assert len(offline_geocoder.requests) == 1
+
+
+def test_default_resolve_follows_transport(monkeypatch, no_dns):
+    # Med utbytt transport (testerna) görs inget DNS-uppslag; den riktiga gör alltid ett.
+    assert geocode.validate_runtime_url(PROVIDER + "/") == PROVIDER
+    monkeypatch.setattr(geocode, "_default_transport", None)
+    with pytest.raises(AssertionError, match="DNS-uppslag"):
+        geocode.validate_runtime_url(PROVIDER)
+
+
+def test_nothing_to_do_returns_empty(db, user):
+    db.commit()
+    assert geocode.run_pending(now=utcnow()) == {}

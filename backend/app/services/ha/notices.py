@@ -86,7 +86,10 @@ def queue_assumed(
     if veto_until is None and trip.auto_approved_at is not None:
         veto_until = trip.auto_approved_at + timedelta(hours=veto_hours)
     tz = settings_svc.user_timezone(db, user_id)
-    built = messages.assumed(trip, tz=tz, now=now, veto_until=veto_until)
+    hide = bool(settings_svc.get_section(db, user_id, "notifications")["hide_locations_on_lock_screen"])
+    built = messages.assumed(trip, tz=tz, now=now, veto_until=veto_until, hide_locations=hide)
+    if hide:
+        built["context"]["detail_message"] = f"{trip.purpose or 'Kundbesök'} · {built['message']}"
     valid = (veto_until - now) if veto_until is not None and veto_until > now else timedelta(hours=veto_hours)
     return _create(
         db, user_id=user_id, kind=NotificationKind.ASSUMED, built=built, now=now, valid=valid, dedupe_key=key,

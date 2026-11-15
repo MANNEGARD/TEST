@@ -22,8 +22,19 @@ export type QuestionTrip = S["TripSummary"] & {
   end_time_quality?: string | null;
 };
 
-/** classify | purpose | merge | digest | weekly | daily | test */
-export type QuestionKind = "classify" | "purpose" | "merge" | "digest" | "weekly" | "daily" | "test";
+/** Frågor och notiser. assumed, company, alert och monthly kommer från självgående läge (1.1.0). */
+export type QuestionKind =
+  | "classify"
+  | "purpose"
+  | "merge"
+  | "digest"
+  | "weekly"
+  | "daily"
+  | "test"
+  | "assumed"
+  | "company"
+  | "alert"
+  | "monthly";
 
 export interface QuestionAnswer {
   action: string;
@@ -59,6 +70,8 @@ export interface RespondResult {
   purpose?: string;
   merged_trip_id?: string;
   snoozed_until?: string;
+  /** Företagsnamnet efter svaret på "Vilket företag var det?". */
+  company?: string;
   /** Felkod vid outcome = invalid, t.ex. not_active, empty_purpose, purpose_too_long. */
   code?: string;
 }
@@ -67,4 +80,22 @@ export interface RespondInput {
   action: string;
   reply_text?: string | null;
   idempotency_key: string;
+  /** "Gör alltid så här": sparar en egen regel när det går (prövas i backend). */
+  always?: boolean;
+}
+
+/**
+ * Månadens genomgång (/m/month/[month]): GET /month-close → MonthCloseOut (G0:s schema).
+ * POST /notifications/review-rows/{trip_id} {verdict} svarar med ReviewVerdictResult.
+ */
+export type MonthClose = S["MonthCloseOut"];
+export type MonthStatus = S["MonthStatusOut"];
+export type ReviewRow = S["ReviewRowOut"];
+
+export type ReviewVerdict = "ok" | "wrong";
+
+export interface ReviewVerdictResult {
+  trip_id: string;
+  verdict: ReviewVerdict;
+  message: string;
 }

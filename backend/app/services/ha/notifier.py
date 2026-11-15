@@ -885,6 +885,8 @@ def deliver_user(db: Session, user_id: uuid.UUID, now: datetime | None = None) -
 
         # 4. Påminnelser för obesvarade frågor.
         max_reminders = int(cfg["max_reminders"])
+        if self_driving:
+            max_reminders = min(max_reminders, 1)  # E.5: en påminnelse per fråga
         if enabled and max_reminders > 0 and not quiet:
             wait = timedelta(hours=float(cfg["reminder_after_hours"]))
             for r in reqs:
@@ -1211,7 +1213,9 @@ def ensure_open_questions(db: Session, now: datetime | None = None) -> dict[str,
         vehicle_ids = list(db.execute(vq).scalars())
         if not vehicle_ids:
             continue
-        settled = now - timedelta(minutes=float(cfg["batch_window_minutes"]))
+        # I demoläget visas frågorna direkt i den simulerade telefonen (som i enqueue_for_changes).
+        window = 0.0 if state.channel == CHANNEL_DEMO else float(cfg["batch_window_minutes"])
+        settled = now - timedelta(minutes=window)
         rows = db.execute(
             select(ReviewItem.kind, LogicalTrip)
             .join(LogicalTrip, LogicalTrip.id == ReviewItem.logical_trip_id)

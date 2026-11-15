@@ -356,14 +356,18 @@ def company(db: Session, trip: LogicalTrip, *, tz: tzinfo, hide_locations: bool)
     }
 
 
-def assumed(trip: LogicalTrip, *, tz: tzinfo, now: datetime, veto_until: datetime | None) -> dict[str, Any]:
-    """"Antaget: Kundbesök Dagab" med vetotiden. Inga platser utöver ärendet."""
+def assumed(
+    trip: LogicalTrip, *, tz: tzinfo, now: datetime, veto_until: datetime | None, hide_locations: bool = False
+) -> dict[str, Any]:
+    """"Antaget: Kundbesök Dagab" med vetotiden. Inga platser utöver ärendet, och med
+    ``hide_locations`` inte ens ärendet (det innehåller platsens namn)."""
     purpose_text = (trip.purpose or "Kundbesök").strip()
+    title = "Antaget kundbesök" if hide_locations else _button("Antaget: ", purpose_text)
     day, distance = fmt_day(trip.ended_at or trip.sort_time, tz), fmt_mil(trip.distance_km)
     when = fmt_when_local(veto_until, now, tz) if veto_until is not None else "snart"
     message = f"{day} {distance} · Räknas som tjänst {when} om du inte säger emot"
     return {
-        "title": _button("Antaget: ", purpose_text),
+        "title": title,
         "message": message,
         "actions": [
             {"key": A.OK, "title": "Stämmer"},

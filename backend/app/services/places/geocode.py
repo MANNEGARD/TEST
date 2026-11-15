@@ -230,7 +230,7 @@ def run_pending(now: datetime | None = None, limit: int = 5) -> dict[str, Any]:
     with session_scope() as db:
         plan = _collect(db, now=now, limit=limit, out=out)
     if not plan.jobs:
-        return out
+        return _nonzero(out)
 
     # Nätverket: ingen databastransaktion är öppen här.
     results: dict[tuple[uuid.UUID, str, int, int], tuple[str, GeoAddress | None]] = {}
@@ -256,7 +256,12 @@ def run_pending(now: datetime | None = None, limit: int = 5) -> dict[str, Any]:
                     autopilot.reconsider(db, user_id=user_id, trip_ids=sorted(trip_ids), actor=audit.SYSTEM)
             except Exception:
                 logger.exception("Omprövningen efter adressuppslaget misslyckades.")
-    return out
+    return _nonzero(out)
+
+
+def _nonzero(out: dict[str, Any]) -> dict[str, Any]:
+    """Bara räknare som inte är noll; inget att göra ger ``{}``."""
+    return {k: v for k, v in out.items() if v}
 
 
 def _collect(db: Session, *, now: datetime, limit: int, out: dict[str, Any]) -> _Plan:
@@ -567,14 +572,17 @@ def _refresh_for_raws(db: Session, raw_ids: list[uuid.UUID]) -> set[uuid.UUID]:
 # --------------------------------------------------------------------------- nätverket
 
 
-def validate_runtime_url(url: str, *, resolve: bool = True) -> str:
+def validate_runtime_url(url: str, *, resolve: bool | None = None) -> str:
     """Kontrollerar geokodarens adress före ett anrop och returnerar den; kastar ValueError.
 
     Först den statiska kontrollen (https, port 443, ingen användarinfo, frågesträng,
     fragment eller lokal IP). Med ``resolve`` prövas även varje DNS-svar: alla adresser
-    måste vara globala och får inte vara multicast.
+    måste vara globala och får inte vara multicast. Standard (None): DNS prövas när den
+    riktiga transporten används, alltså inte när testerna har bytt ut den.
     """
     base = settings_svc.validate_geocoder_url(url)
+    if resolve is None:
+        resolve = default_transport() is None
     if not resolve:
         return base
     host = urlsplit(base).hostname or ""
