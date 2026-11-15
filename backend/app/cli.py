@@ -16,28 +16,36 @@ from app.db import session_scope
 
 def cmd_create_admin(args: argparse.Namespace) -> int:
     from app.models import User
-    from app.security import passwords
-    from app.services import vehicles
+    from app.security import passwords, sessions
+    from app.services import audit, vehicles
 
-    # Lösenordet kan ges via miljövariabel (automatiserad installation) så att det inte syns
-    # i processlistan; annars frågar kommandot efter det.
+    email = args.email.strip().lower()
+    if "@" not in email or email.startswith("@") or email.endswith("@") or " " in email:
+        print(f"'{email}' är inte en giltig e-postadress.", file=sys.stderr)
+        return 1
+    # Lösenordet kan ges via miljövariabel (automatiserad installation, Home Assistant-tillägget)
+    # så att det inte syns i processlistan; annars frågar kommandot efter det.
     password = args.password or os.environ.get("DRIVELOG_ADMIN_PASSWORD") or getpass.getpass("Lösenord: ")
     problem = passwords.validate_password_strength(password)
     if problem:
         print(problem, file=sys.stderr)
         return 1
     with session_scope() as db:
-        email = args.email.strip().lower()
         user = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
+        created = user is None
         if user is None:
             user = User(email=email, display_name=email.split("@")[0], password_hash="", is_admin=True)
             db.add(user)
         user.password_hash = passwords.hash_password(password)
         user.is_active = True
         db.flush()
+        if not created:
+            # Som vid lösenordsbyte i webbappen: alla inloggade sessioner för kontot avslutas.
+            sessions.destroy_all_for_user(db, user.id)
+        audit.record(db, audit.SYSTEM, "auth.admin_created" if created else "auth.password_reset", "user", user.id)
         vehicles.default_vehicle(db, user.id)
         vehicles.default_driver(db, user.id, user.display_name)
-    print(f"Kontot {email} är klart.")
+    print(f"Kontot {email} skapades." if created else f"Lösenordet för {email} är återställt.")
     return 0
 
 

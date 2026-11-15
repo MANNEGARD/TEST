@@ -23,6 +23,7 @@ LOGGNIVAER = {
 }
 
 _ETIKETT = re.compile(r"^(?!-)[a-z0-9-]{1,63}(?<!-)$")
+MINSTA_LOSENORD = 12
 _EPOST = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
@@ -40,10 +41,14 @@ class Installningar:
     strato_dyndns_password: str | None = field(default=None, repr=False)
     log_level: str = "info"
     varningar: tuple[str, ...] = ()
+    # Varför administratörsuppgifterna inte kan användas (ogiltig adress, för kort lösenord).
+    # Stoppar inte starten: finns redan ett konto ska DriveLog starta som vanligt.
+    adminproblem: str | None = None
 
     @property
     def har_adminuppgifter(self) -> bool:
-        return bool(self.admin_email and self.admin_password)
+        """Båda fälten är ifyllda och går att använda."""
+        return bool(self.admin_email and self.admin_password) and self.adminproblem is None
 
     @property
     def ar_lokal(self) -> bool:
@@ -113,17 +118,22 @@ def tolka(data: dict) -> Installningar:
     losenord = data.get("admin_password") or None
     if losenord is not None and not isinstance(losenord, str):
         raise OgiltigaInstallningar("Inställningen 'admin_password' ska vara text.")
-    if epost and not _EPOST.match(epost):
-        raise OgiltigaInstallningar(f"'admin_email' ser inte ut som en e-postadress ('{epost}').")
+    adminproblem = None
     if bool(epost) != bool(losenord):
         varningar.append(
-            "Både 'admin_email' och 'admin_password' behövs för att skapa det första kontot – "
-            "bara den ena är ifylld."
+            "Både 'Administratörens e-post' (admin_email) och 'Administratörens lösenord' (admin_password) "
+            "behövs för att skapa kontot eller återställa lösenordet – bara den ena är ifylld."
         )
-    elif losenord and len(losenord) < 12:
-        raise OgiltigaInstallningar(
-            "'admin_password' måste vara minst 12 tecken långt (kontot nås från internet)."
-        )
+    elif epost and losenord:
+        if not _EPOST.match(epost):
+            adminproblem = f"'Administratörens e-post' (admin_email) ser inte ut som en e-postadress ('{epost}')."
+        elif len(losenord) < MINSTA_LOSENORD:
+            adminproblem = (
+                f"'Administratörens lösenord' (admin_password) måste vara minst {MINSTA_LOSENORD} tecken långt "
+                "(kontot nås från internet)."
+            )
+        elif "\x00" in losenord:
+            adminproblem = "'Administratörens lösenord' (admin_password) innehåller ett otillåtet tecken."
 
     dyndns = data.get("strato_dyndns", False)
     if not isinstance(dyndns, bool):
@@ -161,6 +171,7 @@ def tolka(data: dict) -> Installningar:
         strato_dyndns_password=strato_losenord,
         log_level=niva,
         varningar=tuple(varningar),
+        adminproblem=adminproblem,
     )
 
 

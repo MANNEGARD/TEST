@@ -16,12 +16,20 @@ Kontrakt (se docs/home-assistant-tillagg.md):
   krypterade uppgifterna (t.ex. Volvo- och Outlook-anslutningarna) inte att läsa, och det får aldrig
   ske tyst. Då återställs tillägget från en säkerhetskopia.
 - Home Assistants säkerhetskopior av tillägget tar med hela /data och därmed nycklarna.
+
+Märket för administratörens lösenord (``admin_losenord_marke``, samma katalog, 600) säger vilka
+uppgifter i fälten "Administratörens e-post"/"Administratörens lösenord" som senast tillämpades. Det
+är en nyckelad hash (HMAC-SHA256 med en nyckel härledd ur ``secret_key``) av adressen och lösenordet
+– aldrig lösenordet självt – och går inte att använda för att pröva gissningar utan nyckeln. Till
+skillnad från nycklarna skrivs märket över varje gång nya uppgifter har tillämpats.
 """
 
 from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
+import hmac
 import logging
 import os
 import secrets
@@ -34,6 +42,8 @@ logger = logging.getLogger("drivelog.addon")
 KATALOG = "hemligheter"
 SECRET_KEY_FIL = "secret_key"  # noqa: S105 - filnamn, inte ett lösenord
 ENCRYPTION_KEYS_FIL = "encryption_keys"
+ADMIN_MARKE_FIL = "admin_losenord_marke"
+_MARKE_VERSION = "v1"
 
 
 class TrasigaHemligheter(RuntimeError):
@@ -176,3 +186,56 @@ def las_eller_skapa(data_katalog: Path, *, databas: Path | None = None) -> Hemli
         databas,
     )
     return Hemligheter(secret_key=secret_key, encryption_keys=nycklar, nyskapade=tuple(nyskapade))
+
+
+# Märket för administratörens lösenord --------------------------------------------------------------
+
+SAKNAS = "saknas"
+TRASIGT = "trasigt"
+
+
+def admin_marke(secret_key: str, epost: str, losenord: str) -> str:
+    """Nyckelad hash av (adress, lösenord). Nyckeln härleds ur ``secret_key`` för just detta syfte."""
+    nyckel = hmac.new(secret_key.encode("utf-8"), b"drivelog-addon/admin-losenord/v1", hashlib.sha256).digest()
+    meddelande = epost.strip().lower().encode("utf-8") + b"\0" + losenord.encode("utf-8", "surrogatepass")
+    return f"{_MARKE_VERSION}:{hmac.new(nyckel, meddelande, hashlib.sha256).hexdigest()}"
+
+
+def _ar_marke(varde: str) -> bool:
+    prefix, _, hexdel = varde.partition(":")
+    return prefix == _MARKE_VERSION and len(hexdel) == 64 and all(c in "0123456789abcdef" for c in hexdel)
+
+
+def las_admin_marke(data_katalog: Path) -> str:
+    """Det sparade märket, ``SAKNAS`` eller ``TRASIGT`` (oläsligt, fel format eller osäkert lagrat)."""
+    path = data_katalog / KATALOG / ADMIN_MARKE_FIL
+    if not _finns(path):
+        return SAKNAS
+    try:
+        varde = _las(path)
+    except TrasigaHemligheter as exc:
+        logger.warning("%s", exc)
+        return TRASIGT
+    return varde if _ar_marke(varde) else TRASIGT
+
+
+def stammer_admin_marke(sparat: str, secret_key: str, epost: str, losenord: str) -> bool:
+    return _ar_marke(sparat) and hmac.compare_digest(sparat, admin_marke(secret_key, epost, losenord))
+
+
+def spara_admin_marke(data_katalog: Path, marke: str) -> None:
+    """Skriver märket atomärt (600) och ersätter ett tidigare – även en symlänk byts ut, följs aldrig."""
+    if not _ar_marke(marke):
+        raise ValueError("ogiltigt märke")
+    katalog = data_katalog / KATALOG
+    _kontrollera_katalog(katalog)
+    tmp = katalog / f".{ADMIN_MARKE_FIL}.{secrets.token_hex(4)}.tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="ascii") as fil:
+            fil.write(marke + "\n")
+            fil.flush()
+            os.fsync(fil.fileno())
+        os.replace(tmp, katalog / ADMIN_MARKE_FIL)
+    finally:
+        tmp.unlink(missing_ok=True)
