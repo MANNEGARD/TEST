@@ -1,8 +1,8 @@
 import type { Metadata } from "next";
-import { PlaceholderPage } from "@/components/placeholder-page";
+import { EnergyView } from "@/components/energy/energy-view";
 
 export const metadata: Metadata = { title: "Bränsle & energi" };
 
-export default function Page() {
-  return <PlaceholderPage title="Bränsle & energi" description="Tankningar, laddningar och förbrukning." />;
+export default function EnergyPage() {
+  return <EnergyView />;
 }

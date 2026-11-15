@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Pencil, Plus, Trash2, Zap } from "lucide-react";
+import { Pencil, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -116,10 +116,9 @@ export function ChargingSection({ period, onShowAll }: { period: PeriodValue; on
       ) : rows.length === 0 ? (
         <EmptyState
           compact
-          icon={<Zap />}
           title="Inga laddningar i perioden"
           description="Elförbrukningen ovan kommer från bilens körjournal. Lägg till laddningar om du vill se vad elen har kostat."
-          className="border-t border-border"
+          className="border-t border-border py-7"
         />
       ) : (
         <>

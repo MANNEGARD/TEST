@@ -39,9 +39,9 @@ EMPTY_TEXT = "Inga tjänsteresor att redovisa i perioden."
 # (nyckel, rubrik, kolumnbredd i tecken). Bredderna är avvägda så att tabellen fyller en
 # liggande A4 i 100 % skala.
 COLUMNS: list[tuple[str, str, float]] = [
-    ("date", "Datum", 11),
+    ("date", "Datum", 12),
     ("from", "Från", 30),
-    ("to", "Till", 31),
+    ("to", "Till", 30),
     ("purpose", "Ärende", 37),
     ("odometer_start", "Mätarställning start", 13),
     ("odometer_end", "Mätarställning slut", 13),
@@ -401,8 +401,8 @@ def write_workbook(path: Path, journal: SimpleJournal) -> dict[str, Any]:
     f = wb.add_format
     fmt_title = f({**base, "font_size": 18, "bold": True})
     fmt_label = f({**base, "font_color": MUTED, "indent": 1})
-    fmt_value = f({**base})
-    panel = {**base, "bg_color": ZEBRA, "align": "right", "indent": 1}
+    fmt_value = f({**base, "indent": 1})
+    panel = {**base, "align": "right", "indent": 1}
     fmt_sum_label = f({**panel, "font_color": MUTED})
     fmt_sum_label_bold = f({**panel, "bold": True})
     fmt_sum_km = f({**panel, "num_format": '#,##0.0" km"'})

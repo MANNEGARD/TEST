@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Check, Fuel, Pencil, Plus, Sparkles, Trash2 } from "lucide-react";
+import { Check, Pencil, Plus, Sparkles, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -178,10 +178,9 @@ export function FuelSection({ period, onShowAll }: { period: PeriodValue; onShow
       ) : rows.length === 0 ? (
         <EmptyState
           compact
-          icon={<Fuel />}
           title="Inga tankningar i perioden"
           description="Förbrukningen ovan kommer från bilens körjournal och kräver inga tankningar. Lägg till dem om du vill se vad bränslet har kostat."
-          className="border-t border-border"
+          className="border-t border-border py-7"
         />
       ) : (
         <>

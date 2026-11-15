@@ -18,10 +18,12 @@ import type { SettingsForm } from "./use-settings-form";
 // ----------------------------------------------------------------------------- sektion
 
 /** Rubrik och ingress för en sektion (h2 – sidans h1 är "Inställningar"). */
-export function SectionIntro({ title, children }: { title: string; children?: React.ReactNode }) {
+export function SectionIntro({ id, title, children }: { id: string; title: string; children?: React.ReactNode }) {
   return (
     <header className="mb-5">
-      <h2 className="text-lg font-semibold tracking-tight text-fg">{title}</h2>
+      <h2 id={id} className="text-lg font-semibold tracking-tight text-fg">
+        {title}
+      </h2>
       {children ? <p className="mt-1 max-w-2xl text-sm leading-relaxed text-fg-muted">{children}</p> : null}
     </header>
   );
