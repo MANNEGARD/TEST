@@ -9,7 +9,7 @@ Körjournalen sköter sig själv utan Excel-uppladdning: resorna kommer från bi
 kategori och ärende, och månadens underlag skapas av sig självt. Importen fungerar som förut
 för den som vill använda den.
 
-- **Självgående läge** (nytt, påslaget som standard). Under *Inställningar → Självgående läge*
+- **Självgående läge** (nytt, påslaget som standard). Under *Inställningar → Automatik*
   väljer du *Självgående* eller *Jag godkänner allt själv*. Bara resor från bilen som kommer in
   efter att läget slogs på berörs – importerade, manuellt inlagda och äldre resor rörs aldrig.
   En resa godkänns bara automatiskt av ett av skälen *Din regel för …*, *Som de 3 senaste

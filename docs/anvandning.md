@@ -41,7 +41,7 @@ rekonstruerade, och dina beslut följer med.
 
 ## Självgående läge
 
-Under *Inställningar → Självgående läge* finns ett val: **Självgående** (standard) eller **Jag
+Under *Inställningar → Automatik* finns ett val: **Självgående** (standard) eller **Jag
 godkänner allt själv**. Läget gäller bara resor från bilen som kommer in efter att det slogs
 på (*Självgående sedan …*). Importerade och manuellt inlagda resor, och resor från före dess,
 rörs aldrig.
