@@ -38,3 +38,6 @@ Underlag*.xlsx
 
 # Tillfälliga arbetskopior för verktyg – hör inte hemma i repot
 .claude/worktrees/
+
+# Byggd ZIP av webOS-appen (för import i Developer Lab)
+/smgd-hem-webos.zip
