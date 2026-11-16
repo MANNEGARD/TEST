@@ -296,7 +296,8 @@ def test_lookup_address_for_one_place_after_the_owners_press(client, db, user, l
     assert r.json() == {"address": HOME_ADDR, "city": "Påhittby"}
     assert len(lookup.requests) == 1
     params = dict(lookup.requests[0].url.params)
-    assert (params["lat"], params["lon"]) == ("59.1235", "15.6543")
+    # 1.3.0: platsens egen position (6 decimaler); cachen nycklas fortfarande per ruta.
+    assert (params["lat"], params["lon"]) == ("59.123456", "15.654321")
     # Förslaget sparas inte förrän ägaren sparar platsen.
     db.expire_all()
     assert db.get(M.KnownLocation, home.id).address is None

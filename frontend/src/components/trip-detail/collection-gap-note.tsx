@@ -20,7 +20,7 @@ export function collectionGapText(trip: Pick<Trip, "collection_gap">): string {
   if (!gap) return `Hämtningen från Volvo hade ett uppehåll före resan, så den kan vara flera körningar. ${advice}`;
   const [from, to] = formatSpanParts(gap.from, gap.to);
   if (gap.odometer_km != null) {
-    return `Hämtningen låg nere mellan ${from} och ${to}. Under tiden ökade mätaren med ${formatNumber(gap.odometer_km, 1)} km, så resan kan vara flera körningar. ${advice}`;
+    return `Hämtningen låg nere mellan ${from} och ${to}. Under tiden ökade mätaren med ${formatNumber(gap.odometer_km, 1, 0)} km, så resan kan vara flera körningar. ${advice}`;
   }
   return `Hämtningen låg nere mellan ${from} och ${to}, så resan kan vara flera körningar. ${advice}`;
 }

@@ -90,8 +90,10 @@ ingen telefon är vald*, och frågorna väntar i DriveLog.
 Från 1.1.0 sköter körjournalen sig själv utan Excel-uppladdning när Volvo är anslutet:
 
 - Resorna kommer från bilen. Nya platser får gatuadress från **OpenStreetMap** (Nominatim).
-  Bara mittpunkten av en liten ruta skickas, aldrig resa, tid eller namn, men OpenStreetMap ser
-  appens publika adress och när uppslagen görs. Adressdata © OpenStreetMap-bidragsgivare
+  Platsens position skickas, aldrig resa, tid eller namn, men OpenStreetMap ser appens publika
+  adress och när uppslagen görs. Från 1.3.0 slås också bostadens adress upp, och platser från en
+  importerad körjournal som har adress men ingen position får en ungefärlig position ur
+  adressen. Adressdata © OpenStreetMap-bidragsgivare
   (ODbL). Geokodningen stängs av under *Inställningar → Sekretess*.
 - Tydliga resor godkänns av sig själva (egen regel, samma som de tre senaste gångerna,
   hemresa, resa till arbetet, privat plats, antaget kundbesök). Resten blir en fråga i taget
@@ -99,10 +101,11 @@ Från 1.1.0 sköter körjournalen sig själv utan Excel-uppladdning när Volvo �
   Automatik* om du hellre godkänner allt.
 - När månaden är klar skapas underlaget, och notisen i telefonen har en länk som går att
   öppna utan inloggning.
+  Vill du lämna in månaden i förväg trycker du *Skapa underlaget nu* på månadskortet under
+  *Export*; vid månadsskiftet kontrolleras den igen.
 - **Kom igång:** överst på *Översikt* visar kortet *Kom igång* vad som återstår – anslut
   bilen, markera bostaden (*Bilen står hemma nu* använder bilens senaste position) och anslut
-  telefonen. Adresser slås upp först när bostaden är markerad; hemadressen skickas aldrig till
-  karttjänsten. Kortet försvinner när allt är klart.
+  telefonen. Adresser slås upp först när bostaden är markerad. Kortet försvinner när allt är klart.
 - **Kalendern (valfritt):** under *Integrationer → Microsoft Outlook* kan du klistra in en
   kalenderlänk (ICS) från Outlook på webben – ingen inloggning eller appregistrering behövs.
   Mötena ger förslag på ärende. Länken sparas krypterad och visas aldrig igen.

@@ -3,6 +3,43 @@
 > Från 1.0.2 visar Home Assistant **Uppdatera** först när den nya versionen är färdigbyggd och
 > går att hämta – det går bra att trycka direkt.
 
+## 1.3.0
+
+- **Egna gränser för sammanslagning av tjänsteresor och privata resor.** Under *Inställningar →
+  Sammanslagning av resor* finns nu två uppsättningar gränser: *Tjänsteresor* och *Privata
+  resor*. Två tjänsteresor i rad följer tjänstegränserna, två privata följer privatgränserna; en
+  tjänsteresa och en privat, eller en resa som inte är avgjord än, slås aldrig ihop och ger ingen
+  fråga. Stopp hemma slås aldrig ihop. Det du ställer in gäller också i självgående läge. **Din
+  installation behåller det tidigare sättet** (i självgående läge bara korta tankstopp, inga
+  frågor) tills du sparar sektionen – det står överst i sektionen. Resor som redan finns slås
+  inte ihop i efterhand.
+- **Varning när hämtningen från Volvo har legat nere.** Kommer en resa efter ett uppehåll i
+  hämtningen står det på resan, i Granskning och i frågan i telefonen när hämtningen var borta
+  och hur många km mätaren ökade under tiden, med rådet att importera Volvos körjournal för
+  dagen (då ersätts resan av de riktiga resorna, utan dubbletter) eller dela upp resan. En sådan
+  resa godkänns aldrig av sig själv och blir inte privat utan att du har sagt det. Följd vid
+  uppdateringen: oavgjorda resor som föreslås privata och har märkningen *kan vara flera
+  körningar* får nu ett ärende i Granskning (ingen notis). Larmet om att hämtningen inte fungerar
+  påminner om Volvos körjournal.
+- **Ta bort importerade resor.** En importerad resa tas bort med *Ta bort resan* på resan, och
+  flera på en gång med *Ta bort* i körjournalen. Resan raderas inte för gott – originalraden
+  finns kvar under Import och borttagningen syns i historiken. Importerar du samma fil igen
+  kommer de borttagna resorna tillbaka (förhandsgranskningen visar hur många), som de står i
+  filen; resor som finns kvar hoppas över som förut.
+- **Månadens underlag i förväg.** *Skapa underlaget nu* på den pågående månaden under *Export*
+  skapar filen och länken direkt, med samma kontroller som vid månadsskiftet. I filen står när
+  den skapades. Vid månadsskiftet kontrolleras månaden igen och ett uppdaterat underlag kommer
+  bara om en redovisad resa har tillkommit eller ändrats.
+- **Kartan för importerade resor.** Platser som har adress men ingen position (till exempel ur
+  en importerad körjournal) får en ungefärlig position ur adressen, i bakgrunden och lite i
+  taget. Kartan visar *Positionen slås upp* medan det pågår, och *Adressen hittades inte på
+  kartan* om den inte gick att hitta. Hamnar en sådan plats vid bostaden eller kontoret slås de
+  ihop, så att bostaden får sin adress.
+- **Träffsäkrare adresser.** Adressuppslaget skickar nu platsens exakta position, så att rätt hus
+  hittas, och bostadens adress slås upp av sig själv när den saknas.
+- **Saknad adress syns i förhandsvisningen.** På exportsidan står *Adress saknas – lägg till under
+  Platser* direkt i cellen för start eller mål, och tiden bryts aldrig på två rader.
+
 ## 1.2.3
 
 Rättningar i Excel-underlaget.

@@ -127,7 +127,7 @@ function DesktopTable({ rows, flaggedIds }: { rows: ExportRow[]; flaggedIds: Rea
         <caption className="sr-only">Tjänsteresor. Välj en rad för att öppna resan.</caption>
         <colgroup>
           <col className="w-[5.6rem]" />
-          <col className="w-[9.6rem] min-w-[9.6rem]" />
+          <col className="w-[7.9rem] min-w-[7.9rem]" />
           <col />
           <col />
           <col />

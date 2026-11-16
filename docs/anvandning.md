@@ -153,8 +153,9 @@ arbetsförmedling, förening eller ett vineri/bryggeri. Där uträttar man ofta 
 ### Adresser
 
 När bilen stannar på en okänd plats slår DriveLog inom någon minut upp adressen i
-OpenStreetMap (Nominatim). Bara mittpunkten av en liten ruta (koordinaten med fyra decimaler)
-skickas – aldrig resa, tid eller namn – och samma ruta slås bara upp en gång. Ingenting skickas
+OpenStreetMap (Nominatim). Från 1.3.0 skickas platsens egen position (sex decimaler), så att
+rätt hus hittas – aldrig resa, tid eller namn. Svaret sparas per liten ruta (fyra decimaler,
+ungefär 11 × 6 meter), så samma ruta slås bara upp en gång. Ingenting skickas
 förrän hemmet finns som plats med koordinat (se *Kom igång* ovan). Svaret ger gatuadress och, om kartan har det,
 namn och typ. Matchar adressen en plats som redan finns, till exempel från en import, används
 den. Går uppslaget inte att göra står adressen tom; ingen adress hittas på.
@@ -167,7 +168,8 @@ Adressdata © OpenStreetMap-bidragsgivare, under licensen ODbL.
 aldrig *Hem*. En bekräftad plats med eget namn står som *Acme AB, Kundvägen 2, Exempelstad*,
 bostaden med sin adress – även en manuell eller importerad resa där det står "Hem". En privat
 plats står bara med sin adress, utan namnet. I appen i övrigt visas platsernas namn som förut.
-Bostadens adress slås aldrig upp av sig själv, så den kan saknas. Saknar bostaden eller en
+Från 1.3.0 slås också bostadens adress upp av sig själv när bostaden har en position men ingen
+adress; bara adress och ort fylls i, namnet *Hemmet* ändras inte. Saknar bostaden eller en
 annan bekräftad plats adress eller ort står det på exportsidan (*Bostaden saknar adress – fyll
 i den under Platser*), och månadens underlag skapas inte förrän den är ifylld. Öppna platsen under **Platser** och
 skriv adressen i fältet **Adress**, eller tryck **Hämta adressen från kartan**: då skickas
@@ -176,6 +178,21 @@ OpenStreetMap), och svaret fylls i fältet så att du kan kontrollera det innan 
 sparas, så ett nytt tryck skickar ingenting, och uppslagen räknas mot samma gräns som övriga
 (500 per dygn). Knappen kräver att platsen har en
 sparad position och att geokodningen är på.
+
+På exportsidan står saknad adress också direkt i förhandsvisningens cell för start eller mål:
+*Adress saknas – lägg till under Platser*.
+
+**Positioner ur adresser (1.3.0).** En importerad resa har adresser men inga positioner. Platser
+som har en adress men saknar position slås upp åt andra hållet – adressen skickas till samma
+karttjänst och svaret blir en position. Det sker i bakgrunden, högst tre platser åt gången och
+inom samma gränser som övriga uppslag (en per sekund, 500 per dygn), utan att du gör något.
+Positionen märks *ungefärlig position ur adressen* på platsen och på resans karta. Medan det
+pågår visar kartan *Positionen slås upp*. Hittar kartan inte adressen, eller ger den flera
+möjliga platser, står det *Adressen hittades inte på kartan*; sätt då ut platsen själv under
+**Platser**. En sådan adress prövas inte igen förrän du ändrar den. En position som du har satt
+eller som kommer från bilen skrivs aldrig över. Hamnar en uppslagen plats vid bostaden eller ett
+kontor som saknar adress slås de ihop, och bostaden eller kontoret får adressen; har båda olika
+adresser visas ett förslag om att slå ihop dem under Platser.
 
 ### Starttid
 
@@ -230,6 +247,18 @@ när det här inte längre gäller:
   inom ett par timmar, med notisen *Oktober uppdaterad: +1 resa, +34 km*. Den gamla filen och dess
   länk slutar gälla. Ändras inget i underlaget skapas aldrig någon ny fil.
 
+**Skapa underlaget nu.** Vet du att bilen inte ska användas i tjänsten mer den här månaden kan
+du skapa underlaget i förväg: tryck **Skapa underlaget nu** på den pågående månaden i
+månadskortet på *Export*. Samma kontroller gäller som vid månadsskiftet – obesvarade frågor,
+vetotiden för antagna resor och kopplingen till Volvo. Väntar något ser du vad, och ingen fil
+skapas. Annars skapas filen och länken direkt, och i filens sidhuvud står *Skapad 16 november
+2026 kl. 10:12, innan månaden var slut*. Perioden är fortfarande hela månaden (filnamnet slutar
+på *november 2026*). Vid månadsskiftet kontrolleras månaden igen: har en redovisad resa
+tillkommit eller ändrats skapas ett uppdaterat underlag med notisen *November uppdaterad*, och
+finns det då en obesvarad fråga om en tjänsteresa får du notisen *November väntar …*. Annars
+händer inget mer – ingen ny fil och ingen ny notis. Har något ändrats innan månaden är slut
+visar kortet *Skapa nytt underlag nu*.
+
 Månadskontrollen körs bara i självgående läge och för bilar som DriveLog läser av. Månader som
 tog slut innan läget slogs på sköts som förut, för hand. På *Export* visar månadskortet läget
 för innevarande och föregående månad, upplysningar som *1 resa saknar starttid*, *Kontrollera
@@ -259,6 +288,12 @@ Assistants historik kan därför hämta underlaget så länge länken gäller. L
 - **Dubbletter:** samma fil kan laddas upp igen utan att något händer. Samma resa i en annan
   export känns igen på starttid och mätarställning.
 - **Ångra:** varje import kan ångras under *Tidigare importer*.
+- **Borttagna resor kommer tillbaka:** har du tagit bort en importerad resa (se *Ta bort en
+  resa* nedan) och importerar samma fil – eller en annan fil med samma resa – igen, kommer den
+  borttagna resan tillbaka. Förhandsgranskningen visar hur många (*Kommer tillbaka*), medan resor
+  som finns kvar hoppas över som dubbletter. En resa som kommer tillbaka läggs in som den står i
+  filen och bedöms på nytt; ändringar och beslut du gjorde innan du tog bort den kommer inte
+  tillbaka.
 - **Originalen bevaras:** kategori, adresser, mätarställningar, sträcka, förbrukning och
   anteckningar sparas exakt som i filen. Dina kommentarer blir resornas syfte och ändras
   aldrig automatiskt.
@@ -288,7 +323,28 @@ och syfte. Snabbfiltren *Alla / Arbete / Privat / Att granska* ligger överst.
 
 - **Byt kategori med ett klick** direkt i raden; syftet redigeras på plats.
 - Sök i adresser och syften, sortera och filtrera på period.
-- Markera flera rader för att sätta kategori eller syfte, godkänna, slå samman eller exportera.
+- Markera flera rader för att sätta kategori eller syfte, godkänna, slå samman, exportera
+  eller ta bort (se nedan).
+
+### Ta bort en resa
+
+Importerade och manuellt inlagda resor kan tas bort: **Ta bort resan** längst ned på resans
+sida, eller markera flera i körjournalen och välj **Ta bort**. Resor från bilen kan inte tas
+bort. Innan något händer ser du vad borttagningen gör:
+
+- Resan försvinner ur körjournalen och underlaget, men raderas inte för gott: originalraden
+  finns kvar under *Import → Tidigare importer*, och borttagningen syns i historiken.
+- Kilometrarna räknas därefter som övrig (privat) körning när bara tjänsteresor redovisas, och
+  blir en lucka med frågor när hela körjournalen redovisas.
+- Öppna frågor om resan stängs, och det du har bestämt om resan används inte längre för
+  förslag. Egna regler som du har skapat finns kvar (de tas bort under *Platser → AI-minne*).
+- Har månadens underlag redan skapats uppdateras det, på samma sätt som när du ändrar en resa.
+  En Excel-fil du har skapat själv ändras inte.
+- En importerad resa kommer tillbaka om du importerar samma fil igen, en manuellt inlagd gör det
+  inte.
+
+En sammanslagen resa delar du först upp (under *Sammanslagning* på resan), och en resa som ingår
+i en tjänsteresa löser du först upp tjänsteresan för – texten säger hur.
 
 | Status | Betydelse |
 | --- | --- |
@@ -311,7 +367,17 @@ föreslog som det gjorde, matchande Outlook-möten, liknande tidigare resor, ing
 originalresor och ändringshistorik.
 
 - **Kartan** visar de punkter som faktiskt är kända. En linje mellan dem är inte den körda
-  vägen, och det står utskrivet.
+  vägen, och det står utskrivet. För importerade resor slås adresserna upp i bakgrunden (se
+  *Positioner ur adresser* ovan).
+- **Uppehåll i hämtningen från Volvo:** kom resan efter ett uppehåll i hämtningen visas en gul
+  ruta överst med när hämtningen låg nere och hur mycket mätaren ökade under tiden, t.ex.
+  *Hämtningen låg nere mellan mån 16/11 08:10 och 12:40. Under tiden ökade mätaren med 95 km …*.
+  Det kan vara flera körningar. Tryck **Importera körjournal** och importera Volvos körjournal
+  för dagen – då ersätts resan av de riktiga resorna, utan dubbletter – eller **Dela upp** för att
+  fördela kilometrarna i tjänst och privat. Har du redan svarat om resan och importen ger flera
+  resor står ditt tidigare beslut i ett ärende i Granskning, så att du kan lägga in det på rätt
+  resa. Samma besked kommer i frågan i telefonen. En sådan resa godkänns aldrig av sig själv, och
+  den blir inte privat utan att du har sagt det.
 - **Delvis privat?** Dela resan i delsträckor (t.ex. 30 km tjänst + 12 km privat). Summan
   måste stämma med den uppmätta sträckan, och bara tjänstedelen hamnar i underlaget.
 - **Ångra ändring** återställer både resan och det systemet lärt sig av ändringen.
@@ -333,11 +399,33 @@ Steg för steg och vad som läses finns i [Microsoft Outlook](microsoft-graph.md
 
 ## Sammanslagning av resor
 
-| Stillestånd | Vad som händer |
-| --- | --- |
-| Högst 15 minuter | Resorna slås ihop automatiskt (kan ångras) |
-| Över 15 och högst 60 minuter | Du får en fråga |
-| Över 60 minuter | Inget automatiskt; markera resorna och välj *Slå samman* |
+Bilen delar upp en resa varje gång du stannar. Under *Inställningar → Sammanslagning av resor*
+bestämmer du hur korta stopp som räknas som samma resa, med egna gränser för **tjänsteresor**
+och **privata resor**:
+
+| Stillestånd | Tjänsteresor (standard) | Privata resor (standard) |
+| --- | --- | --- |
+| Högst 15 minuter | Slås ihop automatiskt (kan ångras) | Slås ihop automatiskt |
+| Över 15 och högst 60 minuter | Du får en fråga | Ingen fråga, två resor |
+| Längre | Inget automatiskt; markera resorna och välj *Slå samman* | Samma |
+
+- Två tjänsteresor i rad följer tjänstegränserna, två privata följer privatgränserna.
+- En tjänsteresa och en privat, eller en resa som inte är avgjord än, slås aldrig ihop
+  automatiskt och ger ingen fråga. Antagna kundbesök som du inte har bekräftat räknas inte som
+  avgjorda.
+- Resorna slås ihop när båda är avgjorda – av dig, av en regel eller av importen. Det gäller även
+  i självgående läge: en ny resa från bilen slås ihop i samma stund som den godkänns, annars när
+  du svarar. Ändrar du senare kategorin på en sammanslagen resa förblir den en resa (dela upp
+  den om du vill).
+- Stopp hemma eller vid en privat plats slås aldrig ihop.
+- Frågor hamnar i Granskning, och i telefonen om notiser om sammanslagning är på (bara för resor
+  från de senaste två dygnen).
+
+**Efter uppdateringen till 1.3.0** gäller det tidigare sättet tills du sparar sektionen (det
+står överst i sektionen): i självgående läge slås bara stopp på högst 15 minuter vid bekräftade
+tank- och laddstationer ihop, och inga frågor ställs; i läget *Jag godkänner allt själv* gäller
+samma gränser för alla resor. När du sparar gäller de nya gränserna för resor från och med då;
+resor som redan finns slås inte ihop i efterhand.
 
 Den sammanslagna resan visar mellanstoppen ("via …"), summerar sträckan och behåller första
 starttid och sista sluttid. Originalresorna finns alltid kvar, och gränserna ändras under
@@ -348,11 +436,8 @@ mätarställningen), och en privat delsträcka blir aldrig tjänst genom en samm
 Saknar en importerad resa klockslag (bara datum) går stilleståndet inte att bedöma; då ställs
 ingen fråga, men du kan fortfarande slå samman manuellt.
 
-**I självgående läge** slås resor från bilen bara ihop vid ett stopp på högst 15 minuter vid en
-bekräftad tank- eller laddstation. Allt annat blir separata resor, och ingen
-sammanslagningsfråga ställs. Ett stopp hemma eller vid en bekräftad privat plats slås aldrig
-ihop när någon av resorna kommer från bilen, i något läge (också i *Jag godkänner allt
-själv*). Ett mellanstopp hemma eller vid en privat plats på en resa från bilen skrivs som
+Ett stopp hemma eller vid en bekräftad privat plats slås aldrig ihop med de nya gränserna. Med
+det tidigare sättet gäller det när någon av resorna kommer från bilen, i båda lägena. Ett mellanstopp hemma eller vid en privat plats på en resa från bilen skrivs som
 "Privat stopp" i underlaget, aldrig med adress; importerade och manuellt inlagda resor skrivs
 som förut.
 

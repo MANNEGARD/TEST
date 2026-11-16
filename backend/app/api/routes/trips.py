@@ -14,7 +14,7 @@ from sqlalchemy.orm import selectinload
 
 from app.api.deps import DbDep, PrincipalDep, WebPrincipalDep, get_owned_trip, get_vehicle, owned_vehicle_ids
 from app.api.errors import bad_request, conflict, not_found
-from app.api.serializers import trip_out, trips_out
+from app.api.serializers import location_brief, position_lookup, trip_out, trips_out
 from app.jobs import enqueue
 from app.models import (
     AuditEvent,
@@ -45,7 +45,7 @@ from app.models.enums import (
     TripSource,
     ValueQuality,
 )
-from app.schemas.common import AuditOut, FeedbackOut, LocationBrief, TripListOut, TripOut
+from app.schemas.common import AuditOut, FeedbackOut, TripListOut, TripOut
 from app.services import audit
 from app.services import settings as settings_svc
 from app.services.classify import engine as classify_engine
@@ -53,8 +53,9 @@ from app.services.classify import purpose as purpose_mod
 from app.services.classify import signals as sig
 from app.services.learning import feedback, recompute
 from app.services.places import registry as places
-from app.services.trips import pipeline, start_time
+from app.services.trips import pipeline, removal, start_time
 from app.services.trips import segments as seg
+from app.services.trips.segments import TripError
 
 router = APIRouter(tags=["Trips"])
 
@@ -307,10 +308,13 @@ def trip_detail(trip_id: uuid.UUID, principal: PrincipalDep, db: DbDep) -> dict[
         lat, lon = getattr(raw, f"{which}_lat"), getattr(raw, f"{which}_lon")
         basis = "vehicle_position" if lat is not None else None
         if lat is None and loc is not None and loc.latitude is not None:
-            lat, lon, basis = loc.latitude, loc.longitude, "known_location"
+            # En position som slagits upp ur adressen är ungefärlig (places.geocode.run_forward).
+            lat, lon = loc.latitude, loc.longitude
+            basis = "address_lookup" if loc.coordinate_source == "geocoded" else "known_location"
         return {
             "address": getattr(raw, f"{which}_address"),
-            "location": LocationBrief.model_validate(loc).model_dump(mode="json") if loc else None,
+            "location": location_brief(db, loc).model_dump(mode="json") if loc else None,
+            "position_lookup": position_lookup(db, loc) if loc is not None and lat is None else None,
             "lat": lat, "lon": lon, "coordinate_basis": basis,
             "at": raw.started_at if which == "start" else raw.ended_at,
         }
@@ -597,28 +601,53 @@ def create_manual_trip(body: ManualTrip, principal: WebPrincipalDep, db: DbDep) 
     return trip_out(db, get_owned_trip(db, principal, active or trip.id))
 
 
-@router.delete("/trips/{trip_id}", status_code=204, summary="Ta bort en manuellt inlagd resa")
-def delete_manual_trip(trip_id: uuid.UUID, principal: WebPrincipalDep, db: DbDep) -> Response:
-    from app.db import utcnow
-
+@router.delete("/trips/{trip_id}", status_code=204, summary="Ta bort en importerad eller manuellt inlagd resa")
+def delete_trip(trip_id: uuid.UUID, principal: WebPrincipalDep, db: DbDep) -> Response:
+    """Resan makuleras (originalraden och historiken finns kvar). Resor från bilen,
+    sammanslagna resor och resor i en tjänsteresa nekas med en begriplig text. Luckor,
+    förslag och ärenden räknas om efter svaret. En borttagen importerad resa kommer
+    tillbaka om samma fil importeras igen."""
     trip = get_owned_trip(db, principal, trip_id)
-    raws = seg.ordered_raws(trip)
-    if trip.state != LogicalState.ACTIVE or len(raws) != 1 or raws[0].source != TripSource.MANUAL:
-        raise bad_request(
-            "Endast manuellt inlagda, ej sammanslagna resor kan tas bort. Importerade resor tas bort genom att ångra importen.",
-            "not_deletable",
-        )
-    raws[0].voided_at = utcnow()
-    raws[0].void_reason = "Borttagen av användaren"
-    trip.state = LogicalState.VOIDED
-    audit.record(db, principal.actor, "trip.manual_delete", "logical_trip", trip.id)
-    vehicle = get_vehicle(db, principal, trip.vehicle_id)
-    pipeline.after_trips_changed(
-        db, user_id=principal.user.id, vehicle=vehicle, actor=principal.actor, apply_merge_rules=False, notify=False,
-        origin="manual", use_llm=False,
-    )
+    recompute.defer(db)
+    try:
+        removal.delete_trip(db, trip, actor=principal.actor)
+    except TripError as exc:
+        db.rollback()
+        raise bad_request(exc.message, exc.code) from exc
     db.commit()
     return Response(status_code=204)
+
+
+class BulkDelete(BaseModel):
+    trip_ids: list[uuid.UUID] = Field(min_length=1, max_length=500)
+
+
+class BulkDeleteError(BaseModel):
+    trip_id: str
+    code: str
+    message: str
+
+
+class BulkDeleteOut(BaseModel):
+    deleted: int
+    errors: list[BulkDeleteError]
+
+
+@router.post("/trips/bulk-delete", response_model=BulkDeleteOut, summary="Ta bort flera importerade eller manuellt inlagda resor")
+def bulk_delete(body: BulkDelete, principal: WebPrincipalDep, db: DbDep) -> BulkDeleteOut:
+    owned = set(owned_vehicle_ids(db, principal.user.id))
+    trips = list(
+        db.execute(
+            select(LogicalTrip).where(LogicalTrip.id.in_(body.trip_ids), LogicalTrip.vehicle_id.in_(owned))
+            .options(selectinload(LogicalTrip.segments).selectinload(TripSegment.raw_trip))
+        ).scalars()
+    )
+    if len(trips) != len(set(body.trip_ids)):
+        raise not_found("En eller flera resor")
+    recompute.defer(db)
+    deleted, errors = removal.delete_trips(db, trips, user_id=principal.user.id, actor=principal.actor)
+    db.commit()
+    return BulkDeleteOut(deleted=deleted, errors=[BulkDeleteError(**e) for e in errors])
 
 
 @router.get("/journeys", summary="Överordnade tjänsteresor (flera körningar, hotell, hemresa)")

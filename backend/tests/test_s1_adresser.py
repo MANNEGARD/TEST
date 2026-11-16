@@ -221,7 +221,7 @@ def test_run_pending_fills_address_kind_and_company(db, user, vehicle, monkeypat
     assert len(rec.requests) == 1
 
 
-def test_request_contains_only_the_cell_and_a_neutral_user_agent(db, user, vehicle, monkeypatch, no_dns):
+def test_request_contains_only_the_position_and_a_neutral_user_agent(db, user, vehicle, monkeypatch, no_dns):
     enable(db, user)
     home(db, user)
     pending_place(db, user, (59.123456, 15.987654))
@@ -232,8 +232,9 @@ def test_request_contains_only_the_cell_and_a_neutral_user_agent(db, user, vehic
     (req,) = rec.requests
     assert req.method == "GET" and req.url.scheme == "https" and req.url.host == "nominatim.example.org"
     assert req.url.path == "/reverse"
+    # 1.3.0: platsens egen position (6 decimaler) i stället för kartcellens mittpunkt.
     assert dict(req.url.params) == {
-        "lat": "59.1235", "lon": "15.9877", "format": "jsonv2", "zoom": "18",
+        "lat": "59.123456", "lon": "15.987654", "format": "jsonv2", "zoom": "18",
         "addressdetails": "1", "accept-language": "sv",
     }
     ua = req.headers["user-agent"]

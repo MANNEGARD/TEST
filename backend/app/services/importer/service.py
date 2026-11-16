@@ -59,6 +59,44 @@ def _existing_keys(db: Session, vehicle_id: uuid.UUID) -> dict[str, RawTrip]:
     return {r.source_key: r for r in rows}  # type: ignore[misc]
 
 
+def _deleted_keys(db: Session, vehicle_id: uuid.UUID) -> dict[str, RawTrip]:
+    """Importerade resor som ägaren har tagit bort (och som inte finns kvar i en annan form).
+
+    En sådan rad är inte en dubblett: importeras samma resa igen kommer den tillbaka
+    ("Om jag importerar igen så vill jag att en raderad resa kommer tillbaka"). Vid flera
+    borttagna med samma nyckel gäller den som togs bort sist.
+    """
+    from app.services.trips.removal import VOID_REASON_DELETED
+
+    active = set(_existing_keys(db, vehicle_id))
+    out: dict[str, RawTrip] = {}
+    for raw in db.execute(
+        select(RawTrip)
+        .where(
+            RawTrip.vehicle_id == vehicle_id,
+            RawTrip.voided_at.is_not(None),
+            RawTrip.void_reason == VOID_REASON_DELETED,
+            RawTrip.import_batch_id.is_not(None),
+            RawTrip.source_key.is_not(None),
+        )
+        .order_by(RawTrip.voided_at)
+    ).scalars():
+        if raw.source_key not in active:
+            out[raw.source_key] = raw  # type: ignore[index]
+    return out
+
+
+_MONTHS = ("januari", "februari", "mars", "april", "maj", "juni", "juli", "augusti", "september", "oktober",
+           "november", "december")
+
+
+def _restored_message(raw: RawTrip, tz: ZoneInfo) -> str:
+    when = raw.started_at or raw.ended_at
+    local = when.astimezone(tz) if when is not None else None
+    day = f" {local.day} {_MONTHS[local.month - 1]} {local.year}" if local is not None else ""
+    return f"Du tog bort resan{day}. Den kommer tillbaka när du bekräftar importen."
+
+
 def _differs(existing: RawTrip, values: dict[str, Any]) -> list[str]:
     diffs = []
     if (existing.original_notes or "") != (values.get("original_notes") or ""):
@@ -116,6 +154,7 @@ def create_preview(
     db.flush()
 
     known = _existing_keys(db, vehicle.id)
+    deleted = _deleted_keys(db, vehicle.id)
     seen_in_batch: dict[str, tuple[str, int]] = {}
     seen_files: set[str] = set()
 
@@ -186,6 +225,10 @@ def create_preview(
                 messages.append(f"Dubblett av rad {other_row} i {other_file}.")
             elif key:
                 seen_in_batch[key] = (safe_name, pr.row_number)
+                if key in deleted:
+                    # Ägaren har tagit bort resan: den kommer tillbaka (filen kan vara importerad
+                    # förut – "duplicate_file" är bara en upplysning och stoppar inga rader).
+                    messages.append(_restored_message(deleted[key], tz))
             db.add(
                 ImportRow(
                     file_id=f.id,
@@ -198,14 +241,19 @@ def create_preview(
                 )
             )
     db.flush()
-    batch.summary = _summarize(db, batch, vehicle, settings_svc.get_section(db, user_id, "merge"))
+    batch.summary = _summarize(
+        db, batch, vehicle, settings_svc.get_section(db, user_id, "merge"), restored_keys=set(deleted)
+    )
     batch.coverage = batch.summary["suggested_coverage"]
     audit.record(db, actor, "import.preview", "import_batch", batch.id, after={"files": len(files)})
     db.flush()
     return batch
 
 
-def _summarize(db: Session, batch: ImportBatch, vehicle: Vehicle, merge_settings: dict[str, Any]) -> dict[str, Any]:
+def _summarize(
+    db: Session, batch: ImportBatch, vehicle: Vehicle, merge_settings: dict[str, Any],
+    *, restored_keys: set[str] | None = None,
+) -> dict[str, Any]:
     files = db.execute(select(ImportedFile).where(ImportedFile.batch_id == batch.id)).scalars().all()
     rows = (
         db.execute(
@@ -261,6 +309,8 @@ def _summarize(db: Session, batch: ImportBatch, vehicle: Vehicle, merge_settings
         ],
         "rows_total": len(rows),
         "rows_new": len(new_rows),
+        # Av de nya: resor som ägaren har tagit bort tidigare och som kommer tillbaka.
+        "rows_restored": sum(1 for r in new_rows if r.natural_key and r.natural_key in (restored_keys or set())),
         "rows_duplicate": status_counts.get(ImportRowStatus.DUPLICATE, 0),
         "rows_duplicate_differs": status_counts.get(ImportRowStatus.DUPLICATE_DIFFERS, 0),
         "rows_error": status_counts.get(ImportRowStatus.ERROR, 0),
@@ -377,6 +427,8 @@ def commit(
     vehicle = db.get(Vehicle, batch.vehicle_id)
     assert vehicle is not None
     known = _existing_keys(db, vehicle.id)
+    deleted = _deleted_keys(db, vehicle.id)
+    restored = 0
     rows = (
         db.execute(
             select(ImportRow)
@@ -484,6 +536,11 @@ def commit(
         row.raw_trip_id = raw.id
         new_trips.append(trip)
         imported += 1
+        if key and key in deleted:
+            # En borttagen resa kommer tillbaka – som den står i filen, bedömd på nytt.
+            restored += 1
+            audit.record(db, actor, "trip.import_restored", "logical_trip", trip.id,
+                         after={"previous_raw_trip_id": str(deleted[key].id)})
 
     batch.status = BatchStatus.COMMITTED
     batch.committed_at = utcnow()
@@ -512,6 +569,7 @@ def commit(
     summary.update(
         {
             "imported": imported,
+            "restored": restored,
             "auto_merged": result.get("auto_merged", 0),
             "merge_questions": result.get("merge_questions", 0),
             "open_gaps": result.get("open_gaps", 0),
@@ -524,7 +582,8 @@ def commit(
     )
     batch.summary = summary
     audit.record(
-        db, actor, "import.commit", "import_batch", batch.id, after={"imported": imported, "coverage": batch.coverage}
+        db, actor, "import.commit", "import_batch", batch.id,
+        after={"imported": imported, "restored": restored, "coverage": batch.coverage},
     )
     db.flush()
     return {"batch_id": str(batch.id), "already_committed": False, **summary}

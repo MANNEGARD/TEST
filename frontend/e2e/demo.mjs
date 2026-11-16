@@ -183,6 +183,17 @@ const ALL_PAGES = [
 const SETTINGS = ["fordon", "ersattning", "sammanslagning", "automatik", "forslag", "notiser", "kalender", "tjanstestalle", "forkortningar", "sekretess", "sakerhet", "sakerhetskopia"];
 const trips = Object.values(seed.trips).map((d) => d.trip);
 const questions = Object.values(seed.notifications);
+// Demots importerade resor (1.3.0) har de sista id:na i den förbyggda uppsättningen (state.ts).
+const poolTripId = (n) => `00000000-0000-4000-8000-${String(n + 1).padStart(12, "0")}`;
+const importedTripId = (n) => poolTripId(40 - 1 - n);
+/** Antal rader texten i elementet bryts på (1 = får plats på en rad). */
+const lineCount = (locator) =>
+  locator.evaluate((el) => {
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const tops = new Set([...range.getClientRects()].filter((r) => r.width > 0).map((r) => Math.round(r.top)));
+    return tops.size;
+  });
 
 // ----------------------------------------------------------------------------- körning
 
@@ -480,6 +491,103 @@ try {
     if (auto.mode !== "self_driving" || auto.assumption_veto_hours !== 72) fail(`automatiken sparades fel: ${JSON.stringify(auto)}`);
   });
 
+
+  await section("sammanslagning", async () => {
+    step("Inställningar → Sammanslagning: grupperna Tjänsteresor och Privata resor, spara privatgränsen");
+    await visit(page, "/settings/?sektion=sammanslagning", "sammanslagning");
+    const panel = page.getByTestId("settings-panel-sammanslagning");
+    for (const t of ["Tjänsteresor", "Privata resor", "Så här avgörs ett stopp"]) {
+      if (!(await panel.getByText(t, { exact: true }).count())) fail(`"${t}" saknas i sammanslagningen`);
+    }
+    if (!(await panel.getByText("Stopp hemma eller vid en privat plats slås aldrig ihop.").count())) fail("regeln om stopp hemma saknas");
+    if (await page.getByTestId("merge-legacy").count()) fail("demot visar det tidigare sättet trots by_category");
+    await page.locator("#merge-private-auto").fill("10");
+    await page.locator("#merge-private-ask").fill("5");
+    await expectText(page, "Gränsen för fråga för privata resor måste vara minst lika stor");
+    await page.locator("#merge-private-ask").fill("20");
+    await panel.getByRole("button", { name: "Spara" }).click();
+    await expectText(page, "Reglerna för sammanslagning är sparade.");
+    const merge = (await api(page, "GET", "/settings")).settings.merge;
+    if (merge.private_auto_max_minutes !== 10 || merge.private_ask_max_minutes !== 20 || merge.by_category !== true) {
+      fail(`sammanslagningen sparades fel: ${JSON.stringify(merge)}`);
+    }
+  });
+
+  await section("uppehåll", async () => {
+    step("Resans sida: uppehåll i hämtningen från Volvo – när, hur många km och vad man gör");
+    const all = (await api(page, "GET", "/trips?page_size=500")).items;
+    const gap = all.find((t) => t.collection_gap);
+    if (!gap) throw new Error("ingen demoresa med uppehåll i hämtningen");
+    await visit(page, `/journal/${gap.id}/`, "resa-uppehall");
+    const note = page.getByTestId("collection-gap-note").locator("visible=true");
+    await note.first().waitFor({ timeout: 8000 });
+    const text = await note.first().innerText();
+    if (!text.includes("Uppehåll i hämtningen från Volvo")) fail("rubriken för uppehållet saknas");
+    if (!/ökade mätaren med 7 km/.test(text)) fail(`uppehållet säger inte hur mycket mätaren ökade: ${text.slice(0, 160)}`);
+    if (!(await note.first().getByRole("link", { name: "Importera körjournal" }).count())) fail("knappen Importera körjournal saknas");
+    await note.first().getByRole("button", { name: "Dela upp" }).click();
+    await page.getByRole("dialog").waitFor({ timeout: 5000 });
+    await page.keyboard.press("Escape");
+  });
+
+  await section("importerade resor", async () => {
+    step("Importerad resa utan positioner: Positionen slås upp; platsen visar samma läge");
+    await visit(page, `/journal/${importedTripId(2)}/`, "resa-importerad-utan-karta");
+    await expectText(page, "Positionen slås upp");
+    if (await page.getByText("Inga koordinater för resan").count()) fail("den gamla texten Inga koordinater visas");
+    await visit(page, "/places/");
+    await page.getByTestId("place-row").filter({ hasText: "Exempel Snickeri AB" }).first().click();
+    await page.getByTestId("place-position-lookup").waitFor({ timeout: 8000 }).catch(() => fail("platsen visar inte att positionen slås upp"));
+    await page.keyboard.press("Escape");
+
+    step("Ta bort en importerad resa: bekräftelsen, kvittot och resan försvinner ur körjournalen");
+    const id = importedTripId(1);
+    await visit(page, `/journal/${id}/`);
+    await page.getByTestId("delete-trip").click();
+    const dialog = page.getByTestId("delete-trip-dialog");
+    await dialog.waitFor({ timeout: 5000 });
+    const text = await dialog.innerText();
+    if (!text.includes("kommer resan tillbaka")) fail("bekräftelsen säger inte att resan kommer tillbaka vid ny import");
+    if (!text.includes("Kilometrarna räknas därefter som övrig körning")) fail("bekräftelsen säger inte vad kilometrarna blir");
+    await page.screenshot({ path: path.join(SHOTS, "ta-bort-resa.png"), fullPage: true });
+    await page.getByTestId("delete-trip-confirm").click();
+    await expectText(page, "Resan är borttagen.");
+    await page.waitForURL(/\/journal\/?$/, { timeout: 8000 }).catch(() => fail("borttagningen ledde inte till körjournalen"));
+    const left = (await api(page, "GET", "/trips?page_size=500")).items;
+    if (left.some((t) => t.id === id)) fail("den borttagna resan finns kvar i körjournalen");
+    const history = (await api(page, "GET", `/trips/${id}`)).history;
+    if (history[0]?.action !== "trip.import_delete") fail("borttagningen syns inte i resans historik");
+
+    step("Körjournalen: Ta bort med en resa från bilen vald – den kan inte tas bort");
+    await visit(page, "/journal/");
+    const row = page.getByTestId("trip-row").first();
+    await row.getByRole("checkbox").click();
+    await page.getByTestId("bulk-delete").click();
+    const bulk = page.getByTestId("bulk-delete-dialog");
+    await bulk.waitFor({ timeout: 5000 });
+    if (!(await bulk.innerText()).includes("kan inte tas bort")) fail("massfältet säger inte att resor från bilen inte kan tas bort");
+    await page.screenshot({ path: path.join(SHOTS, "ta-bort-flera.png"), fullPage: true });
+    await bulk.getByTestId("bulk-delete-close").click();
+  });
+
+  await section("förhandsvisning", async () => {
+    step("Export → oktober: Adress saknas i cellen och tiden bryts aldrig");
+    await visit(page, "/export/?manad=2026-10", "export-oktober");
+    const missing = page.getByTestId("preview-address-missing").locator("visible=true");
+    await missing.first().waitFor({ timeout: 8000 }).catch(() => fail("förhandsvisningen visar inte Adress saknas"));
+    if ((await missing.count()) && !(await missing.first().innerText()).includes("Adress saknas – lägg till under Platser")) fail("texten för saknad adress stämmer inte");
+    const times = page.getByTestId("preview-time");
+    const n = await times.count();
+    if (!n) fail("förhandsvisningen har inga tidsceller");
+    for (let i = 0; i < n; i++) {
+      const lines = await lineCount(times.nth(i));
+      if (lines > 1) {
+        fail(`tiden "${await times.nth(i).innerText()}" bryts på ${lines} rader`);
+        break;
+      }
+    }
+  });
+
   await section("export", async () => {
     step("Export: Skapa Excel ger exempelfilen, månadskortet och nedladdningslänkarna");
     await visit(page, "/export/", "export");
@@ -542,6 +650,50 @@ try {
     }
   });
 
+
+  await section("månad i förväg", async () => {
+    step("Export: Skapa underlaget nu – samma kontroller (väntar något skapas ingen fil), sedan Skapat innan månaden var slut");
+    await visit(page, "/export/");
+    const row = page.getByTestId("month-row").filter({ has: page.getByTestId("month-create-now") });
+    await row.first().waitFor({ timeout: 8000 });
+    if ((await row.first().getAttribute("data-month")) !== "2026-11") fail("knappen finns inte på innevarande månad");
+    await expectText(page, "Månaden pågår. Underlaget skapas av sig självt när den är slut.");
+    // Minst en obesvarad resa i november, oavsett vad tidigare avsnitt har besvarat.
+    const novTrips = (await api(page, "GET", "/trips?page_size=500&from=2026-11-01&to=2026-11-30")).items;
+    const reopen = novTrips.find((t) => t.category === "work" && t.review_status === "approved" && t.approval_source === "user") ?? novTrips[0];
+    await api(page, "PATCH", `/trips/${reopen.id}`, { category: "undecided" });
+    await visit(page, "/export/");
+    await page.getByTestId("month-create-now").click();
+    const dialog = page.getByTestId("month-create-now-dialog");
+    await dialog.waitFor({ timeout: 5000 });
+    const text = await dialog.innerText();
+    if (!text.includes("Skapa underlaget för november nu?")) fail("dialogens rubrik stämmer inte");
+    if (!text.includes("Vid månadsskiftet kontrollerar DriveLog")) fail("dialogen säger inte vad som händer vid månadsskiftet");
+    await page.screenshot({ path: path.join(SHOTS, "manad-skapa-nu.png"), fullPage: true });
+    await page.getByTestId("month-create-now-confirm").click();
+    await expectText(page, "Underlaget kan inte skapas än – se vad som väntar.");
+    if ((await api(page, "GET", `/exports?vehicle_id=${seed.vehicleId}`)).some((e) => e.origin === "month_close" && e.params?.label === "2026-11")) {
+      fail("en fil skapades trots obesvarade frågor");
+    }
+    // Det som väntar besvaras (som ägaren gör i Granskning och månadens genomgång).
+    const open = (await api(page, "GET", "/trips?page_size=500&needs_review=true&from=2026-11-01&to=2026-11-30")).items.map((t) => t.id);
+    if (open.length) await api(page, "POST", "/trips/bulk", { trip_ids: open, category: "private" });
+    const nov = (await api(page, "GET", "/month-close?month=2026-11")).months[0];
+    for (const r of nov.review_rows.filter((x) => x.approval_source === "assumed")) await api(page, "POST", `/notifications/review-rows/${r.trip_id}`, { verdict: "ok" });
+    await visit(page, "/export/");
+    await page.getByTestId("month-create-now").click();
+    await page.getByTestId("month-create-now-confirm").click();
+    await expectText(page, "Underlaget för november är skapat.");
+    const state = page.getByTestId("month-row").filter({ hasText: "November 2026" }).getByTestId("month-state-text");
+    await state.waitFor({ timeout: 8000 });
+    const said = await state.innerText();
+    if (!/^Skapat .+, innan månaden var slut\./.test(said)) fail(`månadskortet säger "${said}"`);
+    const after = (await api(page, "GET", "/month-close?month=2026-11")).months[0];
+    if (after.state !== "exported" || !after.closed_early) fail(`månaden blev ${after.state} (closed_early ${after.closed_early})`);
+    if (await page.getByTestId("month-create-now").count()) fail("knappen finns kvar när underlaget är skapat");
+    await page.screenshot({ path: path.join(SHOTS, "manad-skapad-i-forvag.png"), fullPage: true });
+  });
+
   await section("återställ", async () => {
     step("Återställ demot: tillbaka till startdatat");
     await visit(page, "/");
@@ -562,6 +714,11 @@ try {
     watch(p);
     for (const [route, name] of ALL_PAGES) await visit(p, route, `mork-${name}`);
     await visit(p, `/journal/${trips[0].id}/`, "mork-resa");
+    await visit(p, `/journal/${importedTripId(2)}/`, "mork-resa-importerad");
+    const gap = (await api(p, "GET", "/trips?page_size=500")).items.find((t) => t.collection_gap);
+    if (gap) await visit(p, `/journal/${gap.id}/`, "mork-resa-uppehall");
+    await visit(p, "/export/?manad=2026-10", "mork-export-oktober");
+    await visit(p, "/settings/?sektion=sammanslagning", "mork-sammanslagning");
     await visit(p, `/m/q/${questions[0].public_id}/`, "mork-snabbfraga");
     if ((await p.locator("html").getAttribute("data-theme")) !== "dark") fail("temat blev inte mörkt");
     await dark.close();
@@ -577,6 +734,28 @@ try {
       await visit(p, route, `mobil-${name}`);
       const wide = await p.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
       if (wide > 2) fail(`${route}: sidan är ${wide} px för bred i mobilen`);
+    }
+    await visit(p, "/export/?manad=2026-10", "mobil-export-oktober");
+    const mTimes = p.getByTestId("preview-time-mobile");
+    for (let i = 0; i < (await mTimes.count()); i++) {
+      if ((await lineCount(mTimes.nth(i))) > 1) {
+        fail(`mobil: tiden "${await mTimes.nth(i).innerText()}" bryts`);
+        break;
+      }
+    }
+    if (!(await p.getByTestId("preview-address-missing").locator("visible=true").count())) fail("mobil: Adress saknas visas inte");
+    for (const [route, name] of [
+      [`/journal/${importedTripId(1)}/`, "mobil-resa-importerad"],
+      ["/settings/?sektion=sammanslagning", "mobil-sammanslagning"],
+    ]) {
+      await visit(p, route, name);
+      const wide = await p.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+      if (wide > 2) fail(`${route}: sidan är ${wide} px för bred i mobilen`);
+    }
+    const gapTrip = (await api(p, "GET", "/trips?page_size=500")).items.find((t) => t.collection_gap);
+    if (gapTrip) {
+      await visit(p, `/journal/${gapTrip.id}/`, "mobil-resa-uppehall");
+      if (!(await p.getByTestId("collection-gap-note").locator("visible=true").count())) fail("mobil: uppehållet visas inte på resan");
     }
     const q = questions.find((n) => n.kind === "classify");
     await visit(p, `/m/q/${q.public_id}/`, "mobil-snabbfraga");

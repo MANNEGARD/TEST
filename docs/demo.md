@@ -53,7 +53,8 @@ vanlig takt, så att "i dag", vetotiden och månadskortet stämmer med uppgifter
   *Integrationer → Home Assistant*: kategori och ärende, *Alltid privat här*, företagsnamn,
   *Stämmer*/*Fel – privat* på antaget kundbesök, *Senare*. Nästa fråga skickas till telefonen.
 - Godkänna och ändra resor (kategori, ärende, *Ange starttid* och ta bort den), lägga till en
-  manuell resa. *Ångra* i kvittot och *Ångra ändring* i resans ändringshistorik (och under
+  manuell resa. Ta bort en importerad eller manuellt inlagd resa, en i taget (*Ta bort resan*)
+  eller flera i körjournalen (*Ta bort*); resor från bilen ger beskedet att de inte kan tas bort. *Ångra* i kvittot och *Ångra ändring* i resans ändringshistorik (och under
   *Platser → AI-minne*) återställer resan; besluten syns i ändringshistoriken.
 - *Stämmer*/*Fel* i månadens genomgång (`/m/month/<månad>`).
 - *Bilen står hemma nu* i Kom igång (det enda steget som återstår).
@@ -65,8 +66,17 @@ vanlig takt, så att "i dag", vetotiden och månadskortet stämmer med uppgifter
 - Integrationer: *Synka nu* (inga nya resor sedan sist), *Testa* och *Skicka testnotis* (notisen
   syns i demotelefonen).
 - Export: förhandsvisningen och kontrollerna räknas om ur resorna för vilken månad eller period
-  som helst; *Skapa Excel* och *Hämta underlaget* ger exempelfilen; *Stäng alla nedladdningslänkar*.
+  som helst (i oktober visar en rad *Adress saknas*); *Skapa underlaget nu* på november prövar
+  samma kontroller som månadsskiftet (öppna frågor och vetotid) och skapar annars underlaget,
+  märkt *innan månaden var slut*; *Skapa Excel* och *Hämta underlaget* ger exempelfilen; *Stäng alla nedladdningslänkar*.
 - Import: förhandsgranskningen visar ett inspelat exempel oavsett vilken fil som väljs.
+- Inställningar → Sammanslagning: gränser för tjänsteresor och privata resor sparas.
+
+Utöver inspelningen lägger demot till det som 1.3.0 visar: tre importerade resor i början av
+oktober (Exempel Snickeri AB och Exempel Lager AB) med adresser men utan positioner – kartan
+visar *Positionen slås upp*, och Exempel Lager AB saknar adress i underlaget – samt ett uppehåll
+i hämtningen från Volvo på resan till Ekvägen 14 den 14 november. De importerade resorna har de
+tre sista av de 40 reserverade id:na, så att deras sidor är förbyggda.
 
 Följderna syns som i appen: listor, granskningens räknare, översikten (sträckor, ersättning, att
 granska, diagrammet) och månadskortets *N resor väntar på ditt svar*. Allt sparas i webbläsarens
@@ -82,7 +92,9 @@ som inte står ovan. Statistik som inte räknas om (resvägar, energi, månadsj�
 korthet*) visar de inspelade siffrorna; destinationerna följer platsernas namn och resornas
 kategori. Alla Excel-filer är samma exempelfil (oktober), och importens förhandsgranskning är
 samma inspelade exempel oavsett fil. Sådant som backenden gör av sig själv efter ett svar (till
-exempel att godkänna hemresan eller skapa *Oktober uppdaterad*) simuleras inte. *Logga ut* leder
+exempel att godkänna hemresan, skapa *Oktober uppdaterad*, slå upp adresser eller kontrollera en
+månad igen vid månadsskiftet) simuleras inte. Importens *Bekräfta* går inte att prova, så att en
+borttagen resa kommer tillbaka vid ny import syns inte i demot. *Logga ut* leder
 till den vanliga inloggningssidan, där vilka uppgifter som helst släpper in.
 
 Kalenderlänken (ICS) i Outlook-panelen visas alltid i läget *ingen länk*. *Spara* svarar

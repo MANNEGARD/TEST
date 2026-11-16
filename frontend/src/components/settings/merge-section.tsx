@@ -52,7 +52,7 @@ function RuleStrip({ auto, ask, label }: { auto: number | null; ask: number | nu
           Resorna blir en resa automatiskt.
         </Rule>
         {noQuestion ? (
-          <Rule letter="B" title="Ingen fråga" when="Inga frågor" tone="bg-surface-3 text-fg-muted">
+          <Rule letter="B" title="Ingen fråga" when={`Frågegräns ${minutes(ask)}`} tone="bg-surface-3 text-fg-muted">
             Frågegränsen är densamma som gränsen för automatisk sammanslagning.
           </Rule>
         ) : (

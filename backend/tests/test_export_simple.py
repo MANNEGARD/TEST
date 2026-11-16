@@ -454,7 +454,7 @@ def test_preview_has_the_same_rows_and_totals_as_the_file(client, db, user, vehi
     assert preview["period_label"] == "September 2026"
     assert preview["filename"] == "Underlag milersättning - Test Förare - ABC123 - september 2026.xlsx"
     assert set(preview["rows"][0]) == {"trip_id", "date", "time", "from", "to", "purpose", "odometer_start",
-                                       "odometer_end", "km"}
+                                       "odometer_end", "km", "address_missing"}
     assert set(preview["totals"]) >= {"trips", "km", "mil", "rate_per_mil", "show_amount", "amount"}
     assert preview["excluded"]["pending_approval"]["count"] == 1
     assert preview["excluded"]["undecided"]["count"] == 1
@@ -471,7 +471,8 @@ def test_preview_has_the_same_rows_and_totals_as_the_file(client, db, user, vehi
          "odometer_end": row["Mätarställning slut"], "km": row["Km"]}
         for row in table(ws)
     ]
-    assert [{k: v for k, v in row.items() if k != "trip_id"} for row in preview["rows"]] == file_rows
+    assert [{k: v for k, v in row.items() if k not in ("trip_id", "address_missing")}
+            for row in preview["rows"]] == file_rows
     pos = summary_rows(ws)
     totals = preview["totals"]
     assert ws.cell(pos["total"], 2).value == totals["trips"] == 3

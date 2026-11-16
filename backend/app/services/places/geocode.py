@@ -1,4 +1,5 @@
-"""Adresser för bilens stopp (omvänd geokodning mot OpenStreetMap/Nominatim).
+"""Adresser för bilens stopp (omvänd geokodning mot OpenStreetMap/Nominatim), och
+positioner för platser som bara har en adress (adressuppslag, 1.3.0).
 
 Flödet (byggkontraktet C.1 och E.1):
 
@@ -6,8 +7,15 @@ Flödet (byggkontraktet C.1 och E.1):
   den, annars skapas en ny obekräftad plats med status "väntar på adress". Inget nätverk.
 * ``run_pending`` körs i ``tick``. Den läser väntande platser i en kort session, gör
   uppslagen utan öppen transaktion och skriver svaren i en ny kort session.
-* ``reverse`` är den rena nätverksdelen. Bara kartcellens mittpunkt skickas (4 decimaler),
-  aldrig resa, tid eller id.
+* ``reverse`` är den rena nätverksdelen. Platsens position skickas (6 decimaler), aldrig
+  resa, tid eller id. Cachen nycklas fortfarande per kartcell (4 decimaler).
+* ``run_forward`` (från ``run_pending``, efter de omvända uppslagen och inom samma
+  dygnsgräns) slår upp positionen för platser som har adress men saknar position, t.ex.
+  platser från en importerad körjournal – högst ``FORWARD_PER_TICK`` per användare och
+  körning. Positionen märks ``coordinate_source="geocoded"`` (ungefärlig, ur adressen).
+  Ägarens egna och bilens positioner skrivs aldrig över. Tvetydiga och ohittade adresser
+  lämnas utan position och prövas inte om, förrän ägaren ändrar adressen.
+* Bostaden får sin adress uppslagen automatiskt som övriga platser (bara adress och ort).
 
 Skydd: adressen prövas vid varje anrop (bara https på port 443, DNS-svaret och motpartens
 adress måste vara globala), inga omdirigeringar, total deadline 4 s, högst 64 kB svar och
@@ -45,12 +53,23 @@ from app.models.enums import GeocodeStatus, LocationType, PlaceKind, TripSource
 from app.services import audit
 from app.services import settings as settings_svc
 from app.services.places import registry as places
-from app.services.places.normalize import address_key, valid_coordinates
+from app.services.places.normalize import address_key, haversine_m, valid_coordinates
 from app.services.text_safety import sanitize_text
 
 logger = logging.getLogger(__name__)
 
 USER_AGENT = f"SMGD-DriveLog/{__version__} (self-hosted logbook; reverse geocoding)"
+
+# Adress → position (1.3.0).
+FORWARD_PER_TICK = 3  # högst så många adressuppslag per användare och körning
+FORWARD_SAME_PLACE_M = 300  # två träffar närmare än så räknas som samma plats
+FORWARD_MERGE_MIN_M = 150  # en uppslagen plats inom så här långt från bostaden/kontoret är samma plats
+FORWARD_QUERY_LIMIT = 200
+FORWARD_OK = "ok"
+FORWARD_NOT_FOUND = "not_found"
+FORWARD_AMBIGUOUS = "ambiguous"
+FORWARD_FAILED = "failed"
+COORDINATE_GEOCODED = "geocoded"
 
 # Namnet på en plats som ännu saknar adress. Ingenting hittas på.
 UNRESOLVED_NAME = "Okänd plats"
@@ -243,6 +262,10 @@ class _Job:
     lat_key: int
     lon_key: int
     cached: tuple[str, dict[str, Any] | None] | None = None  # (status, result) från cachen
+    # Platsens egen position (skickas med 6 decimaler; cachen nycklas per cell).
+    lat: float | None = None
+    lon: float | None = None
+    home: bool = False  # bostaden: bara adress och ort sätts
 
     @property
     def cell(self) -> tuple[uuid.UUID, str, int, int]:
@@ -269,6 +292,7 @@ def run_pending(now: datetime | None = None, limit: int = 5) -> dict[str, Any]:
     with session_scope() as db:
         plan = _collect(db, now=now, limit=limit, out=out)
     if not plan.jobs:
+        _forward_into(out, now)
         return _nonzero(out)
 
     # Nätverket: ingen databastransaktion är öppen här.
@@ -276,7 +300,8 @@ def run_pending(now: datetime | None = None, limit: int = 5) -> dict[str, Any]:
     for cell, job in plan.fetch.items():
         out["looked_up"] += 1
         try:
-            addr = reverse(provider_url=job.provider_url, lat_key=job.lat_key, lon_key=job.lon_key)
+            addr = reverse(provider_url=job.provider_url, lat_key=job.lat_key, lon_key=job.lon_key,
+                           lat=job.lat, lon=job.lon)
         except (GeocodeError, ValueError) as exc:
             logger.warning("Adressuppslaget misslyckades: %s", exc)
             results[cell] = (GeocodeStatus.FAILED, None)
@@ -299,7 +324,17 @@ def run_pending(now: datetime | None = None, limit: int = 5) -> dict[str, Any]:
                     autopilot.reconsider(db, user_id=user_id, trip_ids=sorted(trip_ids), actor=audit.SYSTEM)
             except Exception:
                 logger.exception("Omprövningen efter adressuppslaget misslyckades.")
+    _forward_into(out, now)
     return _nonzero(out)
+
+
+def _forward_into(out: dict[str, Any], now: datetime) -> None:
+    """Adressuppslagen (adress → position) efter de omvända, inom samma dygnsgräns."""
+    try:
+        for key, value in run_forward(now=now).items():
+            out[f"forward_{key}"] = out.get(f"forward_{key}", 0) + value
+    except Exception:  # adressuppslagen får aldrig stoppa resten av körningen
+        logger.exception("Adressuppslagen (adress → position) misslyckades.")
 
 
 def _nonzero(out: dict[str, Any]) -> dict[str, Any]:
@@ -309,20 +344,33 @@ def _nonzero(out: dict[str, Any]) -> dict[str, Any]:
 
 def _collect(db: Session, *, now: datetime, limit: int, out: dict[str, Any]) -> _Plan:
     plan = _Plan()
+    from_vehicle = (KnownLocation.created_from == "api") & (
+        (KnownLocation.geocode_status == GeocodeStatus.PENDING)
+        | (
+            (KnownLocation.geocode_status == GeocodeStatus.FAILED)
+            & (KnownLocation.created_at >= now - FAILED_RETRY_WINDOW)
+        )
+    )
+    # Bostaden slås upp automatiskt som övriga platser (precision före integritet, 1.3.0):
+    # en bekräftad bostad med position men utan adress, oavsett hur den skapades.
+    home_without_address = (
+        (KnownLocation.type == LocationType.HOME)
+        & KnownLocation.confirmed.is_(True)
+        & (KnownLocation.address.is_(None) | (KnownLocation.address == ""))
+        & (
+            KnownLocation.geocode_status.is_(None)
+            | KnownLocation.geocode_status.in_((GeocodeStatus.PENDING, GeocodeStatus.FAILED))
+        )
+    )
     rows = list(
         db.execute(
             select(KnownLocation)
             .where(
-                KnownLocation.created_from == "api",
                 KnownLocation.is_demo.is_(False),
                 KnownLocation.merged_into_id.is_(None),
                 KnownLocation.latitude.is_not(None),
                 KnownLocation.longitude.is_not(None),
-                (KnownLocation.geocode_status == GeocodeStatus.PENDING)
-                | (
-                    (KnownLocation.geocode_status == GeocodeStatus.FAILED)
-                    & (KnownLocation.created_at >= now - FAILED_RETRY_WINDOW)
-                ),
+                from_vehicle | home_without_address,
             )
             .order_by(KnownLocation.created_at)
             .limit(max(limit, 1) * 20)
@@ -336,7 +384,10 @@ def _collect(db: Session, *, now: datetime, limit: int, out: dict[str, Any]) -> 
         if loc.owner_user_id not in users:
             users[loc.owner_user_id] = _user_provider(db, loc.owner_user_id)
         provider = users[loc.owner_user_id]
+        home = loc.type == LocationType.HOME and bool(loc.confirmed) and not (loc.address or "").strip()
         if provider is None:
+            if home:
+                continue  # bostaden väntar tills uppslag är tillåtna (dess läge ändras inte)
             if not geocoding_enabled(db, loc.owner_user_id):
                 loc.geocode_status = GeocodeStatus.OFF
                 out["off"] += 1
@@ -344,7 +395,8 @@ def _collect(db: Session, *, now: datetime, limit: int, out: dict[str, Any]) -> 
                 out["waiting_for_home"] += 1
             continue
         url, host = provider
-        job = _Job(loc.id, loc.owner_user_id, url, host, cell_key(loc.latitude), cell_key(loc.longitude))  # type: ignore[arg-type]
+        job = _Job(loc.id, loc.owner_user_id, url, host, cell_key(loc.latitude), cell_key(loc.longitude),  # type: ignore[arg-type]
+                   lat=loc.latitude, lon=loc.longitude, home=home)
         cache = _cache_row(db, job.user_id, host, job.lat_key, job.lon_key)
         if cache is not None and cache.status in (GeocodeStatus.OK, GeocodeStatus.NOT_FOUND):
             job.cached = (cache.status, cache.result if isinstance(cache.result, dict) else None)
@@ -410,7 +462,7 @@ def lookup_for_place(
     """
     now = now or utcnow()
     job = _Job(uuid.uuid4(), user_id, provider_url, (urlsplit(provider_url).hostname or "").lower(),
-               cell_key(lat), cell_key(lon))
+               cell_key(lat), cell_key(lon), lat=lat, lon=lon)
     cache = _cache_row(db, user_id, job.host, job.lat_key, job.lon_key)
     if cache is not None and cache.status == GeocodeStatus.NOT_FOUND:
         return None
@@ -421,7 +473,7 @@ def lookup_for_place(
     if _calls_last_day(db, now) >= DAILY_LIMIT:
         raise DailyLimitReached("Dygnets gräns för adressuppslag är nådd.")
     try:
-        found = reverse(provider_url=provider_url, lat_key=job.lat_key, lon_key=job.lon_key)
+        found = reverse(provider_url=provider_url, lat_key=job.lat_key, lon_key=job.lon_key, lat=lat, lon=lon)
     except (GeocodeError, ValueError):
         _store_result(db, job, GeocodeStatus.FAILED, None, now)
         raise
@@ -430,10 +482,17 @@ def lookup_for_place(
 
 
 def _calls_last_day(db: Session, now: datetime) -> int:
-    return int(
-        db.execute(select(func.count()).select_from(GeocodeCache).where(GeocodeCache.fetched_at >= now - timedelta(days=1))).scalar_one()
-        or 0
-    )
+    """Anrop till karttjänsten det senaste dygnet: omvända uppslag (en cachepost per ruta) och
+    adressuppslag (platsens senaste försök, ``forward_at``). Ett adressuppslag som prövas om
+    flera gånger samma dygn räknas en gång – gränsen är en artighetsgräns, inget exakt tak."""
+    since = now - timedelta(days=1)
+    reverse_calls = db.execute(
+        select(func.count()).select_from(GeocodeCache).where(GeocodeCache.fetched_at >= since)
+    ).scalar_one()
+    forward_calls = db.execute(
+        select(func.count()).select_from(KnownLocation).where(KnownLocation.forward_at >= since)
+    ).scalar_one()
+    return int(reverse_calls or 0) + int(forward_calls or 0)
 
 
 def _cache_row(db: Session, user_id: uuid.UUID, host: str, lat_key: int, lon_key: int) -> GeocodeCache | None:
@@ -486,6 +545,9 @@ def _apply(
         loc = db.get(KnownLocation, job.loc_id)
         if loc is None or loc.merged_into_id is not None:
             continue
+        if job.home:
+            _apply_home(db, loc, job, results, now=now, out=out)
+            continue
         if loc.geocode_status not in (GeocodeStatus.PENDING, GeocodeStatus.FAILED):
             continue
         if job.cached is not None:
@@ -513,6 +575,52 @@ def _apply(
         if before != loc.geocode_status:
             touched[loc.owner_user_id].update(_trip_ids_for_location(db, loc.id))
     return {uid: ids for uid, ids in touched.items() if ids}
+
+
+def _apply_home(
+    db: Session,
+    loc: KnownLocation,
+    job: _Job,
+    results: dict[tuple[uuid.UUID, str, int, int], tuple[str, GeoAddress | None]],
+    *,
+    now: datetime,
+    out: dict[str, Any],
+) -> None:
+    """Bostaden: bara adress, ort och uppslagets läge sätts – aldrig namn, kartans typ,
+    förslag eller sammanslagning med en annan plats. Adressalias läggs till som vanligt."""
+    if loc.type != LocationType.HOME or (loc.address or "").strip():
+        return  # ägaren hann skriva adressen (eller ändra platsen) under tiden
+    if job.cached is not None:
+        out["from_cache"] += 1
+        status, result = job.cached
+        addr = _from_cache(result) if status == GeocodeStatus.OK else None
+        if status == GeocodeStatus.OK and addr is None:
+            status = GeocodeStatus.NOT_FOUND
+    else:
+        status, addr = results.get(job.cell, (GeocodeStatus.FAILED, None))
+    if status == GeocodeStatus.OK and addr is not None:
+        out["ok"] += 1
+        loc.address, loc.city = addr.label, addr.city
+        loc.geocode_status, loc.geocoded_at = GeocodeStatus.OK, now
+        if addr.house_number:
+            _add_aliases(db, loc, addr)
+    elif status == GeocodeStatus.NOT_FOUND:
+        out["not_found"] += 1
+        loc.geocode_status, loc.geocoded_at = GeocodeStatus.NOT_FOUND, now
+    else:
+        out["failed"] += 1
+        loc.geocode_status = GeocodeStatus.FAILED
+    db.flush()
+
+
+def _add_aliases(db: Session, loc: KnownLocation, addr: GeoAddress) -> None:
+    for text in _address_variants(addr):
+        key = address_key(text)
+        exists = db.execute(
+            select(LocationAlias.id).where(LocationAlias.owner_user_id == loc.owner_user_id, LocationAlias.address_key == key)
+        ).first()
+        if key and exists is None:
+            db.add(LocationAlias(owner_user_id=loc.owner_user_id, location_id=loc.id, address_key=key, raw_address=text))
 
 
 def _from_cache(result: dict[str, Any] | None) -> GeoAddress | None:
@@ -557,13 +665,7 @@ def _apply_address(db: Session, loc: KnownLocation, addr: GeoAddress, now: datet
         loc.suggestion_reason = _SUGGESTION_REASONS[suggested]
     if addr.house_number:
         # Bara exakta gatuadresser blir alias; en gata utan nummer kan vara lång.
-        for text in _address_variants(addr):
-            key = address_key(text)
-            exists = db.execute(
-                select(LocationAlias.id).where(LocationAlias.owner_user_id == loc.owner_user_id, LocationAlias.address_key == key)
-            ).first()
-            if key and exists is None:
-                db.add(LocationAlias(owner_user_id=loc.owner_user_id, location_id=loc.id, address_key=key, raw_address=text))
+        _add_aliases(db, loc, addr)
     db.flush()
     return loc
 
@@ -719,24 +821,100 @@ def _real_transport() -> httpx.BaseTransport:
 
 
 def reverse(
-    *, provider_url: str, lat_key: int, lon_key: int, transport: httpx.BaseTransport | None = None
+    *,
+    provider_url: str,
+    lat_key: int,
+    lon_key: int,
+    lat: float | None = None,
+    lon: float | None = None,
+    transport: httpx.BaseTransport | None = None,
 ) -> GeoAddress | None:
     """Själva nätverksanropet. Ger None när kartan inte har någon adress, och kastar
     GeocodeError (eller ValueError för en otillåten adress) när uppslaget inte gick att göra.
 
+    Frågan skickar platsens egen position (``lat``/``lon``, 6 decimaler) så att rätt hus
+    hittas; utan den kartcellens mittpunkt (``lat_key``/``lon_key``, 4 decimaler). Cachen
+    nycklas alltid per cell.
+
     En utbytt transport (tester) hoppar över DNS-kontrollen, eftersom inget riktigt namn
     slås upp, men motpartens adress kontrolleras om transporten anger den.
     """
-    injected = transport or default_transport()
-    base = validate_runtime_url(provider_url, resolve=injected is None)
+    exact = lat is not None and lon is not None and valid_coordinates(lat, lon)
     params = {
-        "lat": f"{lat_key / 1e4:.4f}",
-        "lon": f"{lon_key / 1e4:.4f}",
+        "lat": f"{lat:.6f}" if exact else f"{lat_key / 1e4:.4f}",
+        "lon": f"{lon:.6f}" if exact else f"{lon_key / 1e4:.4f}",
         "format": "jsonv2",
         "zoom": "18",
         "addressdetails": "1",
         "accept-language": "sv",
     }
+    data = _get_json(provider_url, "reverse", params, transport)
+    if not isinstance(data, dict):
+        raise GeocodeError("Geokodarens svar hade fel form.")
+    return parse_response(data)
+
+
+@dataclass(frozen=True)
+class GeoHit:
+    """En träff från adressuppslaget (adress → position)."""
+
+    lat: float
+    lon: float
+    osm_class: str | None
+    place_kind: Literal["work", "never", "unclear"]
+
+
+def search(*, provider_url: str, query: str, transport: httpx.BaseTransport | None = None) -> list[GeoHit]:
+    """Adressuppslaget: adress → högst två träffar. Samma skydd som ``reverse``.
+
+    Bara adresstexten skickas (tvättad, högst 200 tecken), aldrig resa, tid eller id.
+    Kastar GeocodeError när uppslaget inte gick att göra.
+    """
+    q = sanitize_text(query, FORWARD_QUERY_LIMIT)
+    if not q:
+        return []
+    params = {
+        "q": q,
+        "format": "jsonv2",
+        "limit": "2",
+        "addressdetails": "1",
+        "countrycodes": "se",
+        "accept-language": "sv",
+    }
+    data = _get_json(provider_url, "search", params, transport)
+    if not isinstance(data, list):
+        raise GeocodeError("Geokodarens svar hade fel form.")
+    return parse_search(data)
+
+
+def parse_search(data: list[Any]) -> list[GeoHit]:
+    """Tolkar Nominatims jsonv2-svar på en sökning. Bara position och kartans typ sparas."""
+    hits: list[GeoHit] = []
+    for item in data[:2]:
+        if not isinstance(item, dict):
+            continue
+        try:
+            lat, lon = float(item.get("lat")), float(item.get("lon"))  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            continue
+        if not valid_coordinates(lat, lon):
+            continue
+        category, typ = _token(item.get("category")), _token(item.get("type"))
+        hits.append(GeoHit(
+            lat=round(lat, 6), lon=round(lon, 6),
+            osm_class=f"{category}={typ}" if category and typ else None,
+            place_kind=classify_place(category, typ),  # type: ignore[arg-type]
+        ))
+    return hits
+
+
+def _get_json(
+    provider_url: str, path: str, params: dict[str, str], transport: httpx.BaseTransport | None
+) -> Any:
+    """GET mot geokodaren med alla skydd: adressen prövas, inga omdirigeringar, deadline,
+    storleksgräns, bara okomprimerad JSON och strypning (högst ett anrop per 1,1 s)."""
+    injected = transport or default_transport()
+    base = validate_runtime_url(provider_url, resolve=injected is None)
     headers = {"User-Agent": USER_AGENT, "Accept": "application/json", "Accept-Encoding": "identity"}
     _throttle()
     deadline = _monotonic() + DEADLINE_S
@@ -750,7 +928,7 @@ def reverse(
             timeout=httpx.Timeout(DEADLINE_S),
             headers=headers,
         ) as client:
-            with client.stream("GET", f"{base}/reverse", params=params) as resp:
+            with client.stream("GET", f"{base}/{path}", params=params) as resp:
                 _check_peer(resp, required=injected is None)
                 if _monotonic() > deadline:
                     raise GeocodeError("Geokodaren svarade inte i tid.")
@@ -770,12 +948,9 @@ def reverse(
     except httpx.HTTPError as exc:
         raise GeocodeError(f"Geokodaren gick inte att nå ({type(exc).__name__}).") from exc
     try:
-        data = json.loads(bytes(body).decode("utf-8"))
+        return json.loads(bytes(body).decode("utf-8"))
     except (UnicodeDecodeError, ValueError, RecursionError) as exc:
         raise GeocodeError("Geokodarens svar var inte giltig JSON.") from exc
-    if not isinstance(data, dict):
-        raise GeocodeError("Geokodarens svar hade fel form.")
-    return parse_response(data)
 
 
 def _text(value: Any, limit: int) -> str | None:
@@ -820,3 +995,261 @@ def parse_response(data: dict[str, Any]) -> GeoAddress | None:
         osm_class=osm_class,
         place_kind=classify_place(category, typ),  # type: ignore[arg-type]
     )
+
+
+# --------------------------------------------------------------------------- adress → position (1.3.0)
+
+
+@dataclass
+class _ForwardJob:
+    loc_id: uuid.UUID
+    user_id: uuid.UUID
+    provider_url: str
+    query: str
+    address: str
+
+
+def forward_query(loc: KnownLocation) -> str:
+    """Frågan till adressuppslaget: platsens adress, och orten om den inte redan står där."""
+    address = (loc.address or "").strip()
+    city = (loc.city or "").strip()
+    if city and fold_text(city) not in fold_text(address):
+        address = f"{address}, {city}" if address else city
+    return sanitize_text(address, FORWARD_QUERY_LIMIT)
+
+
+def fold_text(value: str) -> str:
+    return " ".join(value.casefold().split())
+
+
+def position_lookup_state(loc: KnownLocation, *, enabled: Any) -> str | None:
+    """Läget för adress → position som webben visar: ``pending`` (adressen slås upp i
+    bakgrunden), ``not_found``, ``ambiguous`` eller None (positionen finns, platsen saknar
+    adress, demoplats). ``enabled`` är en funktion som säger om geokodningen är på; den
+    anropas bara när svaret beror på den."""
+    if loc.latitude is not None or loc.is_demo or not (loc.address or "").strip() or loc.merged_into_id is not None:
+        return None
+    if loc.forward_status == FORWARD_NOT_FOUND:
+        return FORWARD_NOT_FOUND
+    if loc.forward_status == FORWARD_AMBIGUOUS:
+        return FORWARD_AMBIGUOUS
+    if loc.forward_status in (None, FORWARD_FAILED) and enabled():
+        return "pending"
+    return None
+
+
+def reset_forward(loc: KnownLocation) -> None:
+    """Ägaren har ändrat adressen: den nya adressen prövas, och en position som bara var
+    uppslagen ur den gamla adressen tas bort."""
+    loc.forward_status = None
+    loc.forward_at = None
+    loc.forward_attempts = 0
+    loc.forward_next_at = None
+    if loc.coordinate_source == COORDINATE_GEOCODED:
+        loc.latitude = loc.longitude = None
+        loc.coordinate_source = None
+
+
+def run_forward(db_factory: Any = None, *, now: datetime | None = None,
+                limit_per_user: int = FORWARD_PER_TICK) -> dict[str, int]:
+    """Slår upp positionen för platser som har adress men saknar position.
+
+    Högst ``limit_per_user`` per användare och körning, inom dygnets gräns (``DAILY_LIMIT``,
+    delad med de omvända uppslagen) och med samma skydd och strypning. Läser i en kort
+    session, gör uppslagen utan öppen transaktion och skriver i en ny kort session.
+    """
+    factory = db_factory or session_scope
+    now = now or utcnow()
+    out: dict[str, int] = defaultdict(int)
+    with factory() as db:
+        jobs = _collect_forward(db, now=now, limit_per_user=limit_per_user)
+    if not jobs:
+        return {}
+    results: dict[uuid.UUID, tuple[str, GeoHit | None]] = {}
+    for job in jobs:
+        try:
+            hits = search(provider_url=job.provider_url, query=job.query)
+        except (GeocodeError, ValueError) as exc:
+            logger.warning("Adressuppslaget (adress → position) misslyckades: %s", exc)
+            results[job.loc_id] = (FORWARD_FAILED, None)
+            continue
+        except Exception as exc:  # ett oväntat svar får inte fälla hela körningen
+            logger.warning("Adressuppslaget misslyckades oväntat (%s).", type(exc).__name__)
+            results[job.loc_id] = (FORWARD_FAILED, None)
+            continue
+        out["looked_up"] += 1
+        if not hits:
+            results[job.loc_id] = (FORWARD_NOT_FOUND, None)
+        elif len(hits) > 1 and haversine_m(hits[0].lat, hits[0].lon, hits[1].lat, hits[1].lon) > FORWARD_SAME_PLACE_M:
+            results[job.loc_id] = (FORWARD_AMBIGUOUS, None)
+        else:
+            results[job.loc_id] = (FORWARD_OK, hits[0])
+    with factory() as db:
+        _apply_forward(db, jobs, results, now=now, out=out)
+    return {k: v for k, v in out.items() if v}
+
+
+def _collect_forward(db: Session, *, now: datetime, limit_per_user: int) -> list[_ForwardJob]:
+    rows = list(
+        db.execute(
+            select(KnownLocation)
+            .where(
+                KnownLocation.address.is_not(None),
+                KnownLocation.address != "",
+                KnownLocation.latitude.is_(None),
+                KnownLocation.is_demo.is_(False),
+                KnownLocation.merged_into_id.is_(None),
+                KnownLocation.forward_status.is_(None)
+                | (
+                    (KnownLocation.forward_status == FORWARD_FAILED)
+                    & (KnownLocation.forward_next_at.is_(None) | (KnownLocation.forward_next_at <= now))
+                ),
+            )
+            .order_by(KnownLocation.created_at)
+            .limit(500)
+        ).scalars()
+    )
+    if not rows:
+        return []
+    budget = DAILY_LIMIT - _calls_last_day(db, now)
+    providers: dict[uuid.UUID, tuple[str, str] | None] = {}
+    per_user: dict[uuid.UUID, int] = defaultdict(int)
+    jobs: list[_ForwardJob] = []
+    for loc in rows:
+        if budget <= 0:
+            break
+        if loc.owner_user_id not in providers:
+            providers[loc.owner_user_id] = _user_provider(db, loc.owner_user_id)
+        provider = providers[loc.owner_user_id]
+        if provider is None or per_user[loc.owner_user_id] >= limit_per_user:
+            continue
+        query = forward_query(loc)
+        if not query:
+            continue
+        per_user[loc.owner_user_id] += 1
+        budget -= 1
+        jobs.append(_ForwardJob(loc.id, loc.owner_user_id, provider[0], query, loc.address or ""))
+    return jobs
+
+
+def _apply_forward(
+    db: Session, jobs: list[_ForwardJob], results: dict[uuid.UUID, tuple[str, GeoHit | None]], *,
+    now: datetime, out: dict[str, int],
+) -> None:
+    merged_users: set[uuid.UUID] = set()
+    for job in jobs:
+        loc = db.get(KnownLocation, job.loc_id)
+        # Ägaren kan ha satt ut positionen, ändrat adressen eller slagit ihop platsen under tiden.
+        if loc is None or loc.merged_into_id is not None or loc.latitude is not None or (loc.address or "") != job.address:
+            continue
+        status, hit = results.get(job.loc_id, (FORWARD_FAILED, None))
+        loc.forward_at = now
+        if status == FORWARD_OK and hit is not None:
+            out["ok"] += 1
+            loc.latitude, loc.longitude, loc.coordinate_source = hit.lat, hit.lon, COORDINATE_GEOCODED
+            loc.forward_status, loc.forward_next_at = FORWARD_OK, None
+            if not loc.osm_class and hit.osm_class:
+                loc.osm_class = hit.osm_class
+            if not loc.place_kind:
+                loc.place_kind = hit.place_kind
+            db.flush()
+            if _merge_with_known(db, loc, now=now):
+                out["merged"] += 1
+                merged_users.add(loc.owner_user_id)
+        elif status in (FORWARD_NOT_FOUND, FORWARD_AMBIGUOUS):
+            out[status] += 1
+            loc.forward_status, loc.forward_next_at = status, None
+        else:
+            out["failed"] += 1
+            loc.forward_attempts = int(loc.forward_attempts or 0) + 1
+            if loc.forward_attempts >= MAX_ATTEMPTS:
+                loc.forward_status, loc.forward_next_at = FORWARD_NOT_FOUND, None  # ger upp
+            else:
+                loc.forward_status = FORWARD_FAILED
+                loc.forward_next_at = now + RETRY_DELAYS[min(loc.forward_attempts, len(RETRY_DELAYS)) - 1]
+        db.flush()
+    if merged_users:
+        _after_merge(db, merged_users)
+
+
+def _merge_candidate(db: Session, loc: KnownLocation) -> KnownLocation | None:
+    """Bekräftad bostad eller bekräftat kontor, med position från bilen eller ägaren, inom
+    ``max(radie, 150 m)`` från den uppslagna platsen. Närmast vinner."""
+    best: tuple[float, KnownLocation] | None = None
+    for known in db.execute(
+        select(KnownLocation).where(
+            KnownLocation.owner_user_id == loc.owner_user_id,
+            KnownLocation.id != loc.id,
+            KnownLocation.merged_into_id.is_(None),
+            KnownLocation.is_demo.is_(loc.is_demo),
+            KnownLocation.confirmed.is_(True),
+            KnownLocation.type.in_((LocationType.HOME, LocationType.REGULAR_WORKPLACE, LocationType.OFFICE)),
+            KnownLocation.coordinate_source.in_(("api", "user")),
+            KnownLocation.latitude.is_not(None),
+            KnownLocation.longitude.is_not(None),
+        )
+    ).scalars():
+        d = haversine_m(loc.latitude, loc.longitude, known.latitude, known.longitude)  # type: ignore[arg-type]
+        if d <= max(float(known.radius_m or 0), FORWARD_MERGE_MIN_M) and (best is None or d < best[0]):
+            best = (d, known)
+    return best[1] if best is not None else None
+
+
+def _merge_with_known(db: Session, loc: KnownLocation, *, now: datetime) -> bool:
+    """En uppslagen plats vid bostaden eller ett kontor utan adress slås ihop med den (så får
+    bostaden sin adress ur den importerade platsen). Har båda adress och adresserna skiljer
+    sig blir det bara ett förslag (``registry.merge_suggestions``). Andra platser rörs inte."""
+    known = _merge_candidate(db, loc)
+    if known is None or (known.address or "").strip():
+        return False
+    address, city = loc.address, loc.city
+    places.merge_locations(db, known, loc)
+    if not (known.address or "").strip():
+        known.address = address
+    if not (known.city or "").strip():
+        known.city = city
+    db.flush()
+    audit.record(
+        db, audit.SYSTEM, "location.merged_by_address", "known_location", known.id,
+        after={"merged": str(loc.id), "address": known.address}, user_id=known.owner_user_id,
+    )
+    return True
+
+
+def address_merge_suggestions(db: Session, user_id: uuid.UUID) -> list[dict[str, Any]]:
+    """Förslag: en plats vars position är uppslagen ur adressen ligger vid bostaden eller ett
+    kontor som redan har en annan adress – kan vara samma plats (visas under Platser)."""
+    out: list[dict[str, Any]] = []
+    for loc in db.execute(
+        select(KnownLocation).where(
+            KnownLocation.owner_user_id == user_id,
+            KnownLocation.merged_into_id.is_(None),
+            KnownLocation.coordinate_source == COORDINATE_GEOCODED,
+            KnownLocation.latitude.is_not(None),
+        )
+    ).scalars():
+        known = _merge_candidate(db, loc)
+        if known is None or not (known.address or "").strip() or not (loc.address or "").strip():
+            continue
+        if address_key(known.address) == address_key(loc.address):
+            continue
+        out.append({
+            "street_key": f"address:{loc.id}",
+            "locations": [
+                {"id": str(m.id), "name": m.name, "address": m.address, "visit_count": m.visit_count}
+                for m in (known, loc)
+            ],
+            "reason": f"Adressen {loc.address} ligger vid {known.name} – kan vara samma plats.",
+        })
+    return out
+
+
+def _after_merge(db: Session, user_ids: set[uuid.UUID]) -> None:
+    """Efter en sammanslagning: mönstren och förslagen räknas om i bakgrunden."""
+    from app.models import Vehicle
+    from app.services.learning import patterns, recompute
+
+    for user_id in user_ids:
+        patterns.rebuild(db, user_id)
+        for vehicle_id in db.execute(select(Vehicle.id).where(Vehicle.owner_user_id == user_id)).scalars():
+            recompute.request(db, vehicle_id)

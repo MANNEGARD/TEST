@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.models import CalendarMatch, KnownLocation, LogicalTrip, RawTrip, ReviewItem, TripSegment, Vehicle
 from app.models.enums import ReviewState, TimeQuality, TripSource
-from app.schemas.common import LocationBrief, LocationOut, TripOut, VehicleOut
+from app.schemas.common import CollectionGapOut, LocationBrief, LocationOut, TripOut, VehicleOut
 from app.services import settings as settings_svc
 from app.services import vehicles as vehicles_svc
 from app.services.trips import start_time
@@ -90,6 +90,29 @@ def trips_out(db: Session, trips: Sequence[LogicalTrip]) -> list[TripOut]:
                 bounds.setdefault(tid, (lo, hi))
             if tid in estimated:
                 bases.setdefault(tid, basis if isinstance(basis, dict) else None)
+    # Delresornas källa (vilka resor som kan tas bort) och sparade uppehåll i hämtningen.
+    sources: dict[uuid.UUID, list[tuple[str, bool]]] = defaultdict(list)
+    gaps: dict[uuid.UUID, CollectionGapOut] = {}
+    flagged = {t.id for t in trips if "collection_gap" in (t.quality_flags or [])}
+    for tid, source, batch_id in db.execute(
+        select(TripSegment.logical_trip_id, RawTrip.source, RawTrip.import_batch_id)
+        .join(RawTrip, RawTrip.id == TripSegment.raw_trip_id)
+        .where(TripSegment.logical_trip_id.in_(ids))
+        .order_by(TripSegment.logical_trip_id, TripSegment.seq, TripSegment.part)
+    ).all():
+        sources[tid].append((source, batch_id is not None))
+    if flagged:
+        from app.services.volvo import detection
+
+        for tid, value in db.execute(
+            select(TripSegment.logical_trip_id, RawTrip.collection_gap)
+            .join(RawTrip, RawTrip.id == TripSegment.raw_trip_id)
+            .where(TripSegment.logical_trip_id.in_(flagged))
+            .order_by(TripSegment.logical_trip_id, TripSegment.seq, TripSegment.part)
+        ).all():
+            gap = detection.parse_collection_gap(value)
+            if gap is not None and tid not in gaps:
+                gaps[tid] = CollectionGapOut(from_=gap.start, to=gap.end, odometer_km=gap.odometer_km)
     # Tidszon per fordonsägare för den färdiga starttidstexten.
     zones: dict[uuid.UUID, object] = {}
     owners = dict(
@@ -99,8 +122,8 @@ def trips_out(db: Session, trips: Sequence[LogicalTrip]) -> list[TripOut]:
     for t in trips:
         item = TripOut.model_validate(t)
         s, e = locs.get(t.start_location_id), locs.get(t.end_location_id)  # type: ignore[arg-type]
-        item.start_location = LocationBrief.model_validate(s) if s else None
-        item.end_location = LocationBrief.model_validate(e) if e else None
+        item.start_location = location_brief(db, s) if s else None
+        item.end_location = location_brief(db, e) if e else None
         item.open_review_kinds = sorted(kinds.get(t.id, []))
         item.has_calendar_match = t.id in matched
         item.start_earliest, item.start_latest = bounds.get(t.id, (None, None))
@@ -112,15 +135,47 @@ def trips_out(db: Session, trips: Sequence[LogicalTrip]) -> list[TripOut]:
         item.start_time_text = start_time.display(t, tz) if tz is not None else ""  # type: ignore[arg-type]
         item.start_estimate_basis = bases.get(t.id)
         item.approval_reason = approval_reason(t)
+        item.collection_gap = gaps.get(t.id)
+        item.deletable = _deletable(sources.get(t.id, []))  # type: ignore[assignment]
         out.append(item)
     return out
+
+
+def _deletable(parts: list[tuple[str, bool]]) -> str | None:
+    """Samma regel som trips.removal.deletable_kind, ur delresornas (källa, importerad)."""
+    if not parts:
+        return None
+    if all(imported for _, imported in parts):
+        return "imported"
+    if all(source == TripSource.MANUAL and not imported for source, imported in parts):
+        return "manual"
+    return None
+
+
+def location_brief(db: Session, loc: KnownLocation) -> LocationBrief:
+    out = LocationBrief.model_validate(loc)
+    out.position_lookup = position_lookup(db, loc)  # type: ignore[assignment]
+    return out
+
+
+def position_lookup(db: Session, loc: KnownLocation) -> str | None:
+    """pending | not_found | ambiguous | None – läget för adress → position (places.geocode)."""
+    from app.services.places import geocode
+
+    def enabled() -> bool:
+        cache: dict[uuid.UUID, bool] = db.info.setdefault("drivelog_geocoding_enabled", {})
+        if loc.owner_user_id not in cache:
+            cache[loc.owner_user_id] = geocode.geocoding_enabled(db, loc.owner_user_id)
+        return cache[loc.owner_user_id]
+
+    return geocode.position_lookup_state(loc, enabled=enabled)
 
 
 def trip_out(db: Session, trip: LogicalTrip) -> TripOut:
     return trips_out(db, [trip])[0]
 
 
-def location_out(loc: KnownLocation, stats: dict | None = None) -> LocationOut:
+def location_out(loc: KnownLocation, stats: dict | None = None, *, db: Session | None = None) -> LocationOut:
     out = LocationOut.model_validate(
         {
             **{c.name: getattr(loc, c.name) for c in loc.__table__.columns},
@@ -128,4 +183,6 @@ def location_out(loc: KnownLocation, stats: dict | None = None) -> LocationOut:
             "stats": stats or {},
         }
     )
+    if db is not None:
+        out.position_lookup = position_lookup(db, loc)  # type: ignore[assignment]
     return out

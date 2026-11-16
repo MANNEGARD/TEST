@@ -276,4 +276,9 @@ def merge_suggestions(db: Session, user_id: uuid.UUID) -> list[dict[str, Any]]:
             }
         )
     out.sort(key=lambda g: -sum(m["visit_count"] for m in g["locations"]))
+    # En plats vars position slagits upp ur adressen och som ligger vid bostaden eller ett
+    # kontor med en annan adress (1.3.0, places.geocode).
+    from app.services.places import geocode
+
+    out += geocode.address_merge_suggestions(db, user_id)
     return out

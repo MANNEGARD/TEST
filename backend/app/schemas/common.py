@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ORM(BaseModel):
@@ -40,6 +40,19 @@ class LocationBrief(ORM):
     confirmed: bool
     latitude: float | None = None
     longitude: float | None = None
+    # Adress → position (1.3.0): pending = adressen slås upp i bakgrunden, not_found/ambiguous =
+    # kartan hittade den inte eller gav flera platser; null = positionen finns eller ingen adress.
+    position_lookup: Literal["pending", "not_found", "ambiguous"] | None = None
+
+
+class CollectionGapOut(BaseModel):
+    """Uppehåll i hämtningen från Volvo före resan: när och hur mycket mätaren ökade."""
+
+    model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)
+
+    from_: datetime = Field(alias="from")
+    to: datetime
+    odometer_km: float | None = None
 
 
 class TripOut(ORM):
@@ -108,6 +121,10 @@ class TripOut(ORM):
     # private_place, assumed); NULL = ägaren före 1.1.0. approval_reason är skälet i klartext.
     approval_source: str | None = None
     approval_reason: str | None = None
+    # Uppehåll i hämtningen före resan (1.3.0), när det finns sparat.
+    collection_gap: CollectionGapOut | None = None
+    # Kan resan tas bort? imported | manual efter källan (spärrarna ges som fel vid borttagning).
+    deletable: Literal["imported", "manual"] | None = None
 
 
 class TripListOut(BaseModel):
@@ -161,6 +178,7 @@ class LocationOut(ORM):
     coordinate_source: str | None
     confirmed: bool
     is_demo: bool
+    position_lookup: Literal["pending", "not_found", "ambiguous"] | None = None
     suggested_type: str | None
     suggested_name: str | None
     suggestion_reason: str | None

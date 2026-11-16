@@ -133,7 +133,7 @@ def list_locations(
              "recent": KnownLocation.last_visited_at.desc().nulls_last()}[sort]
     rows = list(db.execute(stmt.order_by(order).limit(limit)).scalars())
     stats = suggest.location_stats(db, principal.user.id)
-    return [location_out(loc, stats.get(loc.id)) for loc in rows]
+    return [location_out(loc, stats.get(loc.id), db=db) for loc in rows]
 
 
 @router.get("/locations/meta", response_model=LocationMetaOut, summary="Platstyper och sammanfattning")
@@ -170,7 +170,7 @@ def suggestions(principal: PrincipalDep, db: DbDep) -> dict[str, Any]:
         ).order_by(KnownLocation.visit_count.desc())
     ).scalars()
     return {
-        "types": [location_out(loc).model_dump(mode="json") for loc in typed],
+        "types": [location_out(loc, db=db).model_dump(mode="json") for loc in typed],
         "merges": places.merge_suggestions(db, principal.user.id),
     }
 
@@ -197,7 +197,7 @@ def create_location(body: LocationIn, principal: WebPrincipalDep, db: DbDep) -> 
         places.add_alias(db, loc, address)
     audit.record(db, principal.actor, "location.create", "known_location", loc.id, after={"name": loc.name, "type": loc.type})
     db.commit()
-    return location_out(loc)
+    return location_out(loc, db=db)
 
 
 def _latest_position(db, principal, vehicle_id: uuid.UUID | None) -> tuple[VehicleObservation, Vehicle]:
@@ -310,6 +310,8 @@ def home_from_vehicle(body: HomeFromVehicleIn, principal: WebPrincipalDep, db: D
         home.suggested_type, home.suggested_name, home.suggestion_reason = None, None, None
     home.latitude, home.longitude, home.coordinate_source = obs.latitude, obs.longitude, "user"
     if address:
+        if address != (home.address or None):
+            geocode.reset_forward(home)
         home.address, home.city = address, parse_address(address).city
     db.flush()
     if address:
@@ -331,7 +333,7 @@ def home_from_vehicle(body: HomeFromVehicleIn, principal: WebPrincipalDep, db: D
     _reevaluate(db, principal)  # hemmet styr klassningen av oavgjorda resor
     db.commit()
     return HomeFromVehicleOut(
-        location=location_out(home, suggest.location_stats(db, uid).get(home.id)),
+        location=location_out(home, suggest.location_stats(db, uid).get(home.id), db=db),
         position_reported_at=reported, vehicle_id=vehicle.id, vehicle_name=vehicle.name, action=action,
         absorbed=absorbed, geocoding_unlocked=geocode._user_provider(db, uid) is not None,
     )
@@ -340,7 +342,7 @@ def home_from_vehicle(body: HomeFromVehicleIn, principal: WebPrincipalDep, db: D
 @router.get("/locations/{location_id}", response_model=LocationOut, summary="En plats")
 def get_location(location_id: uuid.UUID, principal: PrincipalDep, db: DbDep) -> LocationOut:
     loc = _owned(db, principal, location_id)
-    return location_out(loc, suggest.location_stats(db, principal.user.id).get(loc.id))
+    return location_out(loc, suggest.location_stats(db, principal.user.id).get(loc.id), db=db)
 
 
 @router.patch("/locations/{location_id}", response_model=LocationOut, summary="Ändra namn, typ, geofence m.m.")
@@ -367,6 +369,8 @@ def update_location(location_id: uuid.UUID, body: LocationIn, principal: WebPrin
                     "address_exists", {"location_id": str(owner.id)},
                 )
         before["address"] = loc.address
+        if (address or None) != (loc.address or None):
+            geocode.reset_forward(loc)  # den nya adressen slås upp på kartan (en uppslagen position tas bort)
         loc.address, loc.city = address, parse_address(address).city if address else None
         if address:
             places.add_alias(db, loc, address)
@@ -399,7 +403,7 @@ def update_location(location_id: uuid.UUID, body: LocationIn, principal: WebPrin
     db.flush()
     _reevaluate(db, principal)  # platstyper påverkar klassningen av oavgjorda resor
     db.commit()
-    return location_out(loc, suggest.location_stats(db, principal.user.id).get(loc.id))
+    return location_out(loc, suggest.location_stats(db, principal.user.id).get(loc.id), db=db)
 
 
 class AddressLookupOut(BaseModel):
@@ -414,8 +418,7 @@ class AddressLookupOut(BaseModel):
 def lookup_address(location_id: uuid.UUID, principal: WebPrincipalDep, db: DbDep) -> AddressLookupOut:
     """Slår upp just den här platsens adress hos användarens geokodare (standard OpenStreetMap).
 
-    Bara platsens position (avrundad till fyra decimaler) skickas, och bara när ägaren trycker
-    på knappen. Samma skydd som uppslagen i bakgrunden: svaret sparas per ruta (ett nytt tryck
+    Bara platsens position skickas, och bara när ägaren trycker på knappen. Samma skydd som uppslagen i bakgrunden: svaret sparas per ruta (ett nytt tryck
     skickar ingenting) och anropet räknas mot dygnets gräns. Förslaget sparas inte på platsen:
     ägaren ser det i adressfältet och sparar platsen.
     """
@@ -468,7 +471,7 @@ def accept_suggestion(location_id: uuid.UUID, principal: WebPrincipalDep, db: Db
     db.flush()
     _reevaluate(db, principal)
     db.commit()
-    return location_out(loc)
+    return location_out(loc, db=db)
 
 
 @router.post("/locations/{location_id}/reject-suggestion", response_model=LocationOut, summary="Avvisa förslaget")
@@ -477,7 +480,7 @@ def reject_suggestion(location_id: uuid.UUID, principal: WebPrincipalDep, db: Db
     loc.suggested_type, loc.suggested_name, loc.suggestion_reason = None, None, None
     loc.confirmed = True  # användaren har tagit ställning: typen förblir som den är
     db.commit()
-    return location_out(loc)
+    return location_out(loc, db=db)
 
 
 @router.post("/locations/{location_id}/merge", response_model=LocationOut, summary="Slå ihop med en annan plats")
@@ -495,7 +498,7 @@ def merge_location(location_id: uuid.UUID, body: MergeIn, principal: WebPrincipa
     patterns.rebuild(db, principal.user.id)
     _reevaluate(db, principal)
     db.commit()
-    return location_out(keep, suggest.location_stats(db, principal.user.id).get(keep.id))
+    return location_out(keep, suggest.location_stats(db, principal.user.id).get(keep.id), db=db)
 
 
 @router.post("/locations/{location_id}/aliases", response_model=LocationOut, summary="Lägg till en adress som alias")
@@ -506,7 +509,7 @@ def add_alias(location_id: uuid.UUID, body: AliasIn, principal: WebPrincipalDep,
         raise conflict("Adressen tillhör redan en annan plats. Slå ihop platserna i stället.", "address_exists")
     places.add_alias(db, loc, body.address)
     db.commit()
-    return location_out(loc)
+    return location_out(loc, db=db)
 
 
 @router.delete("/locations/{location_id}", status_code=204, summary="Ta bort en plats som inte används")

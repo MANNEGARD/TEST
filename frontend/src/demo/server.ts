@@ -614,8 +614,13 @@ function locationOut(loc: Json): Json {
 function mapOut(map: Json): Json {
   for (const stop of map?.stops ?? []) {
     const loc = stop.location ? S().locations.find((l) => l.id === stop.location.id) : null;
-    const lookup = stop.lat == null ? lookupOf(loc) : null;
-    stop.position_lookup = lookup;
+    // Som routes/trips.py point(): utan bilens position används platsens (även en uppslagen).
+    if (stop.lat == null && loc?.latitude != null) {
+      stop.lat = loc.latitude;
+      stop.lon = loc.longitude;
+      stop.coordinate_basis = loc.coordinate_source === "geocoded" ? "address_lookup" : "known_location";
+    }
+    stop.position_lookup = stop.lat == null ? lookupOf(loc) : null;
     if (stop.location) stop.location.position_lookup = lookupOf(loc);
   }
   return map;
@@ -684,7 +689,7 @@ function applyV130(s: DemoState): void {
   const rows: [string, string, Json, Json, number, number, string][] = [
     ["2026-10-01T05:40:00Z", "2026-10-01T06:05:00Z", home, snickeri, 48120, 48148, "Kundbesök Exempel Snickeri AB"],
     ["2026-10-01T13:10:00Z", "2026-10-01T13:38:00Z", snickeri, home, 48148, 48176, "Hemresa efter kundbesök Exempel Snickeri AB"],
-    ["2026-10-02T07:00:00Z", "2026-10-02T07:20:00Z", home, lager, 48176, 48195, "Leverans till Exempel Lager AB"],
+    ["2026-10-02T07:00:00Z", "2026-10-02T07:20:00Z", snickeri, lager, 48190, 48205, "Leverans till Exempel Lager AB"],
   ];
   const brief = (l: Json) => ({ id: l.id, name: l.name, type: l.type, city: l.city, confirmed: l.confirmed, latitude: l.latitude, longitude: l.longitude });
   const label = (l: Json) => l.address ?? l.name;

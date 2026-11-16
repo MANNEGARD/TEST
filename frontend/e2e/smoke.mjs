@@ -724,6 +724,84 @@ print(json.dumps({"sheets": wb.sheetnames, "rows": rows, "km": round(km, 2), "to
       await expectText(page, "Alla nedladdningslänkar är stängda", "månadskort");
     });
 
+    // ---------------------------------------------------------------- 1.3.0: resor
+    await section("ta bort resa", async () => {
+      step("Resedetalj: ta bort en importerad resa (bekräftelse, kvitto, borta ur körjournalen)");
+      const list = await api(page, "GET", "/trips?page_size=500");
+      if (!list.items.length || !("deletable" in list.items[0])) {
+        fail("ta bort resa", "resorna saknar fältet deletable – backend har inte borttagningen");
+        return;
+      }
+      const target = list.items.find((t) => t.deletable === "imported" && t.segment_count === 1 && !t.journey_id);
+      if (!target) {
+        fail("ta bort resa", "ingen importerad resa som går att ta bort");
+        return;
+      }
+      await page.goto(`${BASE}/journal/${target.id}`);
+      await page.getByTestId("delete-trip").click();
+      const dialog = page.getByTestId("delete-trip-dialog");
+      await dialog.waitFor({ timeout: 10000 });
+      if (!(await dialog.innerText()).includes("kommer resan tillbaka")) fail("ta bort resa", "bekräftelsen nämner inte återimporten");
+      const del = responseTo(page, "DELETE", /\/api\/v1\/trips\/[^/]+$/);
+      await page.getByTestId("delete-trip-confirm").click();
+      if ((await del).status() !== 204) fail("ta bort resa", "borttagningen misslyckades");
+      await expectText(page, "Resan är borttagen.", "ta bort resa");
+      await page.waitForURL(/\/journal\/?$/, { timeout: 10000 });
+      const after = await api(page, "GET", "/trips?page_size=500");
+      if (after.items.some((t) => t.id === target.id)) fail("ta bort resa", "resan finns kvar i körjournalen");
+
+      step("Körjournalen: Ta bort i massfältet visar bekräftelsen");
+      await page.goto(`${BASE}/journal`);
+      await page.getByTestId("trip-row").first().getByRole("checkbox").click();
+      await page.getByTestId("bulk-delete").click();
+      await page.getByTestId("bulk-delete-dialog").waitFor({ timeout: 10000 });
+      await shot(page, "journal-bulk-delete-light");
+      await page.keyboard.press("Escape");
+    });
+
+    await section("sammanslagning", async () => {
+      step("Inställningar → Sammanslagning: Tjänsteresor och Privata resor");
+      await page.goto(`${BASE}/settings?sektion=sammanslagning`);
+      const panel = page.getByTestId("settings-panel-sammanslagning");
+      await panel.waitFor({ timeout: 15000 });
+      for (const t of ["Tjänsteresor", "Privata resor", "Så här avgörs ett stopp"]) {
+        if (!(await panel.getByText(t, { exact: true }).count())) fail("sammanslagning", `saknar "${t}"`);
+      }
+      await shot(page, "settings-merge-light");
+    });
+
+    await section("skapa underlaget nu", async () => {
+      step("Export: Skapa underlaget nu på den pågående månaden (bara i självgående läge)");
+      await page.goto(`${BASE}/export`);
+      await page.getByTestId("month-card").waitFor({ timeout: 15000 });
+      const mode = (await api(page, "GET", "/settings")).settings.automation?.mode;
+      const button = page.getByTestId("month-create-now");
+      if (mode !== "self_driving") {
+        if (await button.count()) fail("skapa underlaget nu", "knappen visas utanför självgående läge");
+        step("  (inte självgående läge – knappen ska inte visas)");
+        return;
+      }
+      if (!(await button.count())) {
+        fail("skapa underlaget nu", "knappen saknas på den pågående månaden");
+        return;
+      }
+      await button.click();
+      const dialog = page.getByTestId("month-create-now-dialog");
+      await dialog.waitFor({ timeout: 10000 });
+      if (!(await dialog.innerText()).includes("Vid månadsskiftet kontrollerar DriveLog")) fail("skapa underlaget nu", "dialogen saknar texten om månadsskiftet");
+      const run = responseTo(page, "POST", /\/api\/v1\/month-close\/[^/]+\/run$/);
+      await page.getByTestId("month-create-now-confirm").click();
+      const res = await run;
+      if (res.status() !== 200) fail("skapa underlaget nu", `svaret gav ${res.status()}`);
+      else {
+        const body = await res.json();
+        const toast = { exported: "är skapat", waiting: "kan inte skapas än", empty: "ingen fil behövs" }[body.state];
+        if (!toast) fail("skapa underlaget nu", `oväntat läge ${body.state}`);
+        else await expectText(page, toast, "skapa underlaget nu");
+      }
+      await shot(page, "export-create-now-light");
+    });
+
     // ---------------------------------------------------------------- Platser
     await section("platser", async () => {
       step("Platser: förslag, byt namn, AI-minne");

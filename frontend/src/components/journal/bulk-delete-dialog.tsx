@@ -92,7 +92,7 @@ export function BulkDeleteDialog({
               <DialogDescription>{blockedText ?? "Inga av de valda resorna kan tas bort."} Bara importerade och manuellt inlagda resor kan tas bort.</DialogDescription>
             </DialogHeader>
             <DialogFooter>
-              <Button variant="primary" onClick={() => onOpenChange(false)}>
+              <Button variant="primary" onClick={() => onOpenChange(false)} data-testid="bulk-delete-close">
                 Stäng
               </Button>
             </DialogFooter>
