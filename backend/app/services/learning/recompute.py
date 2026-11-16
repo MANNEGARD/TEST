@@ -38,7 +38,7 @@ from typing import Any
 from sqlalchemy import event, or_, select, update
 from sqlalchemy.orm import Session, selectinload
 
-from app.db import session_scope, utcnow
+from app.db import _is_sqlite_memory, session_scope, utcnow
 from app.models import LogicalTrip, TripSegment, Vehicle
 from app.models.enums import LogicalState
 from app.services import audit
@@ -210,8 +210,8 @@ def _step(vehicle_id: uuid.UUID, trip_ids: list[uuid.UUID] | None = None) -> Ite
                 LogicalTrip.state == LogicalState.ACTIVE)
             db.execute(q.order_by(LogicalTrip.id).with_for_update()).all()
         yield db
-    if sqlite:
-        # SQLite: ett anrop som väntar på skrivlåset sover i upp till 100 ms åt gången mellan
+    if sqlite and not _is_sqlite_memory(str(db.get_bind().url)):
+        # SQLite-fil: ett anrop som väntar på skrivlåset sover i upp till 100 ms åt gången mellan
         # försöken. Utan paus skulle nästa steg hinna ta låset först varje gång.
         time.sleep(SQLITE_PAUSE_SECONDS)
 

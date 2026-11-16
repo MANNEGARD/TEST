@@ -565,7 +565,6 @@ try {
         step("  (inget förslag att godkänna i kön – hoppar över)");
         return;
       }
-      const item = await card.getAttribute("data-item-id");
       const trip = await card.getAttribute("data-trip-id");
       await api(page, "PATCH", `/trips/${trip}`, { category: "undecided" }); // förslaget ändras under tiden
       const approveRes = responseTo(page, "POST", /\/trips\/[^/]+\/approve$/);
@@ -573,7 +572,8 @@ try {
       const res = await approveRes;
       if (res.status() !== 409) fail("granskning i rask takt", `godkännandet gav ${res.status()}, väntade 409`);
       await page.getByTestId("review-failed").waitFor({ timeout: 5000 });
-      if ((await card.getAttribute("data-item-id")) !== item) fail("granskning i rask takt", "ärendet lades inte tillbaka först");
+      // Ärendet (eller resans nya ärende, t.ex. kategori i stället för syfte) ligger först igen.
+      if ((await card.getAttribute("data-trip-id")) !== trip) fail("granskning i rask takt", "ärendet lades inte tillbaka först");
       await expectText(page, "Förslaget för resan har ändrats", "granskning i rask takt");
       await shot(page, "review-failed-light");
     });

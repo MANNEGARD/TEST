@@ -203,7 +203,33 @@ export function ReviewView() {
   // nästa ärende visas (svaret binds till ärendet som visades när det gavs).
   const answered = React.useRef(new Set<string>());
 
-  const all = React.useMemo(() => (list.data?.items ?? []).filter((i) => !HIDDEN_REVIEW_KINDS.includes(i.kind) && !done.has(i.id)), [list.data, done]);
+  // Kön hålls stilla medan ägaren svarar: listan hämtas om efter varje svar och medan
+  // förslagen räknas om, men nya ärenden läggs sist (i den ordning de först syntes) och
+  // ärendet som visas byts aldrig ut under muspekaren – inte ens om det hinner stängas av
+  // omräkningen. Ett svar hamnar därför alltid på ärendet som visades.
+  const [seen, setSeen] = React.useState<{ data: typeof list.data; order: string[]; byId: Record<string, ReviewItem> }>({
+    data: undefined,
+    order: [],
+    byId: {},
+  });
+  if (list.data && list.data !== seen.data) {
+    const byId = { ...seen.byId };
+    const order = [...seen.order];
+    for (const i of list.data.items) {
+      if (!(i.id in byId)) order.push(i.id);
+      byId[i.id] = i;
+    }
+    setSeen({ data: list.data, order, byId });
+  }
+  const [shown, setShown] = React.useState<string | null>(null);
+
+  const all = React.useMemo(() => {
+    const live = new Set((seen.data?.items ?? []).map((i) => i.id));
+    return seen.order
+      .filter((id) => live.has(id) && !done.has(id))
+      .map((id) => seen.byId[id])
+      .filter((i) => !HIDDEN_REVIEW_KINDS.includes(i.kind));
+  }, [seen, done]);
   const counts = React.useMemo(() => {
     const c: Record<string, number> = {};
     for (const i of all) c[i.kind] = (c[i.kind] ?? 0) + 1;
@@ -212,47 +238,60 @@ export function ReviewView() {
   const effectiveKind = kind !== "all" && !counts[kind] ? "all" : kind;
   const queue = React.useMemo(() => {
     const items = all.filter((i) => effectiveKind === "all" || i.kind === effectiveKind);
-    const first = front.map((id) => items.find((i) => i.id === id)).filter(Boolean) as ReviewItem[];
-    const rest = items.filter((i) => !front.includes(i.id));
-    return [...first, ...rest.filter((i) => !skipped.includes(i.id)), ...skipped.map((id) => rest.find((i) => i.id === id)).filter(Boolean)] as ReviewItem[];
-  }, [all, effectiveKind, skipped, front]);
+    // Ett ärende som lagts tillbaka kan ha bytts mot ett nytt för samma resa (t.ex. syfte → kategori).
+    const isFront = (i: ReviewItem) => front.includes(i.id) || (!!i.trip && front.includes(i.trip.id));
+    const first = items.filter(isFront);
+    const rest = items.filter((i) => !isFront(i));
+    const ordered = [...first, ...rest.filter((i) => !skipped.includes(i.id)), ...skipped.map((id) => rest.find((i) => i.id === id)).filter(Boolean)] as ReviewItem[];
+    // Ärendet som visas ligger kvar först tills ägaren svarar eller hoppar över det.
+    const pinned = shown && !done.has(shown) && !skipped.includes(shown) && !front.length ? seen.byId[shown] : undefined;
+    if (!pinned || (effectiveKind !== "all" && pinned.kind !== effectiveKind)) return ordered;
+    return [pinned, ...ordered.filter((i) => i.id !== pinned.id)];
+  }, [all, effectiveKind, skipped, front, shown, done, seen]);
   const current = queue[0];
+  if ((current?.id ?? null) !== shown) setShown(current?.id ?? null);
 
   /** Tar ärendet ur kön. Returnerar false om det redan är besvarat. */
-  const finish = React.useCallback((id: string) => {
-    if (answered.current.has(id)) return false;
-    answered.current.add(id);
-    setDone((d) => new Set(d).add(id));
-    setSkipped((s) => s.filter((x) => x !== id));
-    setFront((f) => f.filter((x) => x !== id));
+  const finish = React.useCallback((item: ReviewItem) => {
+    if (answered.current.has(item.id)) return false;
+    answered.current.add(item.id);
+    const keys = [item.id, item.trip?.id].filter(Boolean) as string[];
+    setDone((d) => new Set(d).add(item.id));
+    setSkipped((s) => s.filter((x) => x !== item.id));
+    setFront((f) => f.filter((x) => !keys.includes(x)));
     setFailed((f) => {
-      if (!(id in f)) return f;
+      if (!keys.some((k) => k in f)) return f;
       const n = { ...f };
-      delete n[id];
+      for (const k of keys) delete n[k];
       return n;
     });
     return true;
   }, []);
 
-  /** Lägger tillbaka ärendet först i kön – efter ett fel från servern (med felet) eller vid Ångra. */
-  const restore = React.useCallback((id: string, error?: unknown) => {
-    answered.current.delete(id);
+  /** Lägger tillbaka ärendet (eller resans nya ärende) först i kön – efter ett fel från
+   *  servern (med felet synligt) eller vid Ångra. */
+  const restore = React.useCallback((item: ReviewItem, error?: unknown) => {
+    answered.current.delete(item.id);
+    const keys = [item.id, item.trip?.id].filter(Boolean) as string[];
     setDone((d) => {
       const n = new Set(d);
-      n.delete(id);
+      n.delete(item.id);
       return n;
     });
-    setFront((f) => [id, ...f.filter((x) => x !== id)]);
-    if (error !== undefined) setFailed((f) => ({ ...f, [id]: errorMessage(error) }));
+    setFront((f) => [...keys, ...f.filter((x) => !keys.includes(x))]);
+    if (error !== undefined) {
+      const message = errorMessage(error);
+      setFailed((f) => ({ ...f, ...Object.fromEntries(keys.map((k) => [k, message])) }));
+    }
   }, []);
 
-  const undoReopen = (id: string) => ({
+  const undoReopen = (item: ReviewItem) => ({
     label: "Ångra",
     onClick: () =>
       api
-        .post(`/review/${id}/reopen`)
+        .post(`/review/${item.id}/reopen`)
         .then(() => {
-          restore(id);
+          restore(item);
           void invalidateJournalData(qc);
         })
         .catch((e) => toast.error(errorMessage(e))),
@@ -260,41 +299,41 @@ export function ReviewView() {
 
   const skip = React.useCallback(() => {
     if (!current) return;
-    setFront((f) => f.filter((x) => x !== current.id));
+    setFront((f) => f.filter((x) => x !== current.id && x !== current.trip?.id));
     setSkipped((s) => [...s.filter((x) => x !== current.id), current.id]);
   }, [current]);
 
   const decideCategory = React.useCallback(
     (c: "work" | "private") => {
       const item = current;
-      if (!item?.trip || !finish(item.id)) return;
-      actions.setCategory(item.trip.id, c, { onUndone: () => restore(item.id) }).catch((e) => restore(item.id, e));
+      if (!item?.trip || !finish(item)) return;
+      actions.setCategory(item.trip.id, c, { onUndone: () => restore(item) }).catch((e) => restore(item, e));
     },
     [current, actions, finish, restore],
   );
 
   const approve = React.useCallback(() => {
     const item = current;
-    if (!item?.trip || !hasProposal(item.trip) || !finish(item.id)) return;
+    if (!item?.trip || !hasProposal(item.trip) || !finish(item)) return;
     // Förslaget som visades: har det hunnit räknas om sedan dess godkänns ingenting.
     actions
-      .approve(item.trip.id, { expectedCategory: item.trip.category as CategoryCode, onUndone: () => restore(item.id) })
-      .catch((e) => restore(item.id, e));
+      .approve(item.trip.id, { expectedCategory: item.trip.category as CategoryCode, onUndone: () => restore(item) })
+      .catch((e) => restore(item, e));
   }, [current, actions, finish, restore]);
 
   const savePurpose = (text: string) => {
     const item = current;
     if (!item?.trip) return;
-    if (item.kind === "purpose" && !finish(item.id)) return;
+    if (item.kind === "purpose" && !finish(item)) return;
     actions.setPurpose(item.trip.id, text).catch((e) => {
-      if (item.kind === "purpose") restore(item.id, e);
+      if (item.kind === "purpose") restore(item, e);
     });
   };
 
   const answerMerge = React.useCallback(
     (accept: boolean) => {
       const item = current;
-      if (!item || item.kind !== "merge" || !finish(item.id)) return;
+      if (!item || item.kind !== "merge" || !finish(item)) return;
       answer.mutate(
         { itemId: item.id, accept },
         {
@@ -310,10 +349,10 @@ export function ReviewView() {
                           .then(() => invalidateJournalData(qc))
                           .catch((e) => toast.error(errorMessage(e))),
                     }
-                  : undoReopen(item.id),
+                  : undoReopen(item),
             }),
           onError: (e) => {
-            restore(item.id, e);
+            restore(item, e);
             toast.error(errorMessage(e));
           },
         },
@@ -325,16 +364,16 @@ export function ReviewView() {
 
   const itemAction = (action: "dismiss" | "snooze" | "resolve") => {
     const item = current;
-    if (!item || !finish(item.id)) return;
+    if (!item || !finish(item)) return;
     reviewAction.mutate(
       { itemId: item.id, action },
       {
         onSuccess: () =>
           toast.success(action === "dismiss" ? "Ärendet är avfärdat." : action === "snooze" ? "Uppskjutet ett dygn." : "Markerat som hanterat.", {
-            action: undoReopen(item.id),
+            action: undoReopen(item),
           }),
         onError: (e) => {
-          restore(item.id, e);
+          restore(item, e);
           toast.error(errorMessage(e));
         },
       },
@@ -441,11 +480,11 @@ export function ReviewView() {
                       {queue.length > 1 ? `${formatNumber(queue.length - 1, 0)} till efter detta` : "Sista ärendet"}
                     </span>
                   </div>
-                  {failed[current.id] ? (
+                  {failed[current.id] ?? (current.trip ? failed[current.trip.id] : undefined) ? (
                     <p role="alert" className="mb-4 flex items-start gap-2 rounded-lg border border-err/40 bg-err-soft p-3 text-sm text-err-ink" data-testid="review-failed">
                       <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
                       <span>
-                        Ditt svar kunde inte sparas: {failed[current.id]} Ärendet ligger kvar – svara igen.
+                        Ditt svar kunde inte sparas: {failed[current.id] ?? failed[current.trip?.id ?? ""]} Ärendet ligger kvar – svara igen.
                       </span>
                     </p>
                   ) : null}
