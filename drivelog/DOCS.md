@@ -48,8 +48,7 @@ Appen sparar inte lösenordet, bara ett kontrollvärde som inte går att räkna 
 3. Fliken **Logg**: där ska stå `Lösenordet för <din adress> sattes från appens inställningar.`
 4. Logga in med det nya lösenordet. Alla som var inloggade på kontot har loggats ut.
 5. Töm gärna fältet igen och tryck **Spara** (ingen omstart behövs).
-6. Nedladdningslänkar i tidigare notiser gäller fortfarande. Vill du stänga dem: tryck
-   *Stäng alla nedladdningslänkar* på exportsidan.
+6. Nedladdningslänkar i tidigare notiser har slutat gälla.
 
 Står det i stället att lösenordet **inte** ändrades:
 
@@ -104,9 +103,8 @@ Från 1.1.0 sköter körjournalen sig själv utan Excel-uppladdning när Volvo �
 **Om nedladdningslänken:** den gäller i 7 dagar och för högst 10 hämtningar. Notisen går via
 Home Assistant, så den som har en Home Assistant-token eller kommer åt Home Assistants
 historik kan hämta underlaget så länge länken gäller. Stäng alla länkar med *Stäng alla
-nedladdningslänkar* på exportsidan. Länkarna stängs också när du byter lösenord inne i
-DriveLog – men **inte** när lösenordet återställs från fliken Konfiguration (se *Glömt
-lösenordet*). Tryck då på knappen efteråt om du vill vara säker.
+nedladdningslänkar* på exportsidan. Länkarna stängs också när du byter lösenord, både inne i
+DriveLog och när lösenordet återställs från fliken Konfiguration (se *Glömt lösenordet*).
 
 Mer om läget, platsantagandet och månadsskiftet finns i
 [docs/anvandning.md](https://github.com/SMGD-MP/TEST/blob/HEAD/docs/anvandning.md).

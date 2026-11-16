@@ -11,6 +11,19 @@ import type { DemoPhoneNotification, NotificationAction } from "@/lib/integratio
 import { useDemoInbox, useDemoRespond } from "@/lib/queries/integrations";
 import { DemoTag, notifyError, TimeAgo } from "./shared";
 
+/** Sökvägen som ett tryck på själva notisen öppnar (data.url i tjänstedatan), utan värdnamn. */
+function notificationTapPath(n: DemoPhoneNotification): string | null {
+  const data = n.ha_payload?.data;
+  const url = data && typeof data === "object" ? (data as Record<string, unknown>).url : undefined;
+  if (typeof url !== "string" || !url) return null;
+  try {
+    const parsed = new URL(url, "http://localhost");
+    return parsed.pathname.startsWith("/") ? parsed.pathname + parsed.search : null;
+  } catch {
+    return null;
+  }
+}
+
 function PhoneNotification({
   notification: n,
   onSend,
@@ -25,6 +38,7 @@ function PhoneNotification({
 }) {
   const [replyFor, setReplyFor] = React.useState<NotificationAction | null>(null);
   const [reply, setReply] = React.useState("");
+  const tapPath = notificationTapPath(n);
 
   return (
     <li className="rounded-xl border border-border bg-surface p-3 shadow-sm" data-testid="demo-notification" data-kind={n.kind}>
@@ -34,7 +48,15 @@ function PhoneNotification({
           <TimeAgo value={n.sent_at} empty="" />
         </span>
       </div>
-      <h4 className="mt-1.5 text-sm font-semibold text-fg">{n.title}</h4>
+      <h4 className="mt-1.5 text-sm font-semibold text-fg">
+        {tapPath ? (
+          <a href={tapPath} target="_blank" rel="noreferrer" className="rounded-sm hover:underline focus-visible:outline-2 focus-visible:outline-ring">
+            {n.title}
+          </a>
+        ) : (
+          n.title
+        )}
+      </h4>
       <p className="mt-0.5 text-[13px] leading-snug text-fg">{n.message}</p>
 
       <div className="mt-2.5 grid grid-cols-2 gap-1.5">

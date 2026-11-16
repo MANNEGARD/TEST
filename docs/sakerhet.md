@@ -12,8 +12,8 @@ uppgifterna skyddas och vad som lämnar din server.
 - Inloggning är hastighetsbegränsad per IP-adress och per konto, och felmeddelandet avslöjar
   inte om kontot finns.
 - Byte av lösenord loggar ut övriga sessioner och stänger alla nedladdningslänkar (se
-  *Export* nedan). En återställning från kommandoraden eller från tilläggets inställningar
-  stänger inte länkarna.
+  *Export* nedan). Det gäller också en återställning från kommandoraden eller från
+  tilläggets inställningar.
 - Det första kontot skapas vid första besöket; därefter kan konton bara skapas från servern.
 
 ## Maskinåtkomst (Home Assistant)
@@ -69,7 +69,8 @@ Månadsnotisen i självgående läge har en länk som hämtar underlaget utan in
 - **Risken:** notisen går via Home Assistant. Den som har en Home Assistant-token, eller kommer
   åt Home Assistants historik eller loggar, kan hämta underlaget så länge länken gäller.
 - **Stäng länkarna** med *Stäng alla nedladdningslänkar* på exportsidan, genom att byta
-  lösenord inne i DriveLog eller genom att radera exporten. Byt aldrig `DRIVELOG_SECRET_KEY`
+  lösenord (också med en återställning från kommandoraden eller tilläggets inställningar)
+  eller genom att radera exporten. Byt aldrig `DRIVELOG_SECRET_KEY`
   för att stänga länkar – krypteringsnyckeln kan vara härledd ur den.
 
 ## Vad lämnar servern?

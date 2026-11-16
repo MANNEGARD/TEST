@@ -42,6 +42,10 @@ def cmd_create_admin(args: argparse.Namespace) -> int:
         if not created:
             # Som vid lösenordsbyte i webbappen: alla inloggade sessioner för kontot avslutas.
             sessions.destroy_all_for_user(db, user.id)
+            # Nedladdningslänkar till underlaget slutar gälla, som vid lösenordsbyte i webbappen.
+            from app.services.export import links
+
+            links.revoke_all(db, user)
         audit.record(db, audit.SYSTEM, "auth.admin_created" if created else "auth.password_reset", "user", user.id)
         vehicles.default_vehicle(db, user.id)
         vehicles.default_driver(db, user.id, user.display_name)

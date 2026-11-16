@@ -720,7 +720,8 @@ print(json.dumps({"sheets": wb.sheetnames, "rows": rows, "km": round(km, 2), "to
         const calls = [];
         mq.on("request", (r) => r.url().includes("/api/v1/trips/") && calls.push(r.url()));
         await mq.goto(new URL(href, BASE).toString());
-        await expectText(mq, "Arbete eller privat?", "snabbvy");
+        // Självgående läge är standard i en ny databas: frågan heter då "Tjänst eller privat?".
+        await expectText(mq, "Tjänst eller privat?", "snabbvy");
         await mq.waitForLoadState("networkidle").catch(() => {});
         if (calls.length) fail("snabbvy", `extra anrop för resan: ${calls.join(", ")}`);
         await shot(mq, "quick-question-light");

@@ -18,6 +18,7 @@ NYTT = "ett-helt-nytt-losenord-42"
 
 def test_aterstallning_avslutar_sessioner_och_byter_losenord(client, anon_client, db, user, monkeypatch, capsys):
     assert client.get(f"{API}/auth/me").status_code == 200
+    epoch = db.get(M.User, user.id).link_epoch or 0
     monkeypatch.setenv("DRIVELOG_ADMIN_PASSWORD", NYTT)
     assert cli.main(["create-admin", user.email.upper()]) == 0
     utdata = capsys.readouterr()
@@ -27,6 +28,8 @@ def test_aterstallning_avslutar_sessioner_och_byter_losenord(client, anon_client
     assert client.get(f"{API}/auth/me").status_code == 401
     db.expire_all()
     assert passwords.verify_password(db.get(M.User, user.id).password_hash, NYTT)
+    # 1.1.0: nedladdningslänkarna stängs också (link_epoch räknas upp).
+    assert db.get(M.User, user.id).link_epoch == epoch + 1
     assert db.scalar(select(func.count()).select_from(M.AuthSession).where(M.AuthSession.user_id == user.id)) == 0
     assert db.scalar(select(func.count()).select_from(M.AuditEvent).where(M.AuditEvent.action == "auth.password_reset")) == 1
     # Det gamla lösenordet fungerar inte längre, det nya gör det.

@@ -8,7 +8,7 @@ inloggning. Inga nätverksanrop. Alla adresser och namn är påhittade.
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -29,7 +29,7 @@ from app.services.places import registry as places
 from app.services.stats import common
 from tests.test_ha_support import setup_pull
 from tests.test_s1_adresser import DAGAB, PROVIDER, Recorder
-from tests.test_volvo_support import T0, A, B, C_, FakeCar, connect, poll, poll_every
+from tests.test_volvo_support import C_, T0, A, B, FakeCar, connect, poll, poll_every
 
 pytestmark = pytest.mark.new_defaults
 
@@ -177,30 +177,39 @@ def test_whole_chain_with_phone_answers(db, user, vehicle, engine, monkeypatch):
     assert "3 senaste" in (h_trip.approval_basis or {}).get("reason", "")
     drive(db, vehicle, car, day(8, 13), A)
 
-    # 6. Fredag: en ny plats; svaret "Gör alltid så här" från webben ger en egen regel (R).
+    # 6. Fredag: en ny plats och ett nytt ärende från telefonen.
     arrived = drive(db, vehicle, car, day(9), C_)
     lookup(db, monkeypatch, OFFICE_SUPPLY, arrived + timedelta(minutes=5))
     req = ask(db, user, arrived + timedelta(minutes=30))
-    res = answer(db, user, req, "WORKTEXT", arrived + timedelta(minutes=40), RULE_PURPOSE, source="web", always=True)
-    assert res["outcome"] == "applied", res
+    assert "WORKA0" not in [a["key"] for a in req.actions]  # inget bekräftat ärende här än
+    assert answer(db, user, req, "WORKTEXT", arrived + timedelta(minutes=40), RULE_PURPOSE)["outcome"] == "applied"
     drive(db, vehicle, car, day(9, 13), A)
-    # Måndagen därpå avgör regeln resan dit.
+    # Måndag: frågan erbjuder nu "Alltid: …"; trycket sparar en egen regel.
     arrived = drive(db, vehicle, car, day(12), C_)
+    lookup(db, monkeypatch, OFFICE_SUPPLY, arrived + timedelta(minutes=5))
+    req = ask(db, user, arrived + timedelta(minutes=30))
+    always_btn = next(a for a in req.actions if a["key"] == "WORKA0")
+    assert RULE_PURPOSE in always_btn["title"]
+    res = answer(db, user, req, "WORKA0", arrived + timedelta(minutes=40))
+    assert res["outcome"] == "applied" and "Regeln sparades" in res["message"], res
+    drive(db, vehicle, car, day(12, 13), A)
+    # Tisdag: regeln (R) avgör resan dit utan fråga.
+    arrived = drive(db, vehicle, car, day(13), C_)
     lookup(db, monkeypatch, OFFICE_SUPPLY, arrived + timedelta(minutes=5))
     r_trip = last_trip(db)
     assert r_trip.review_status == ReviewStatus.APPROVED and r_trip.approval_source == ApprovalSource.RULE
     assert (r_trip.category, r_trip.purpose) == (Category.WORK, RULE_PURPOSE)
-    drive(db, vehicle, car, day(12, 13), A)
+    drive(db, vehicle, car, day(13, 13), A)
 
-    # 7. Tisdag: ett lager med namn inom kontorstid → antaget kundbesök (A).
-    arrived = drive(db, vehicle, car, day(13), D_)
+    # 7. Onsdag: ett lager med namn inom kontorstid → antaget kundbesök (A).
+    arrived = drive(db, vehicle, car, day(14), D_)
     lookup(db, monkeypatch, DAGAB, arrived + timedelta(minutes=5))
     a_trip = last_trip(db)
     assert a_trip.approval_source == ApprovalSource.ASSUMED and a_trip.purpose == "Kundbesök Dagab"
-    drive(db, vehicle, car, day(13, 13), A)
+    drive(db, vehicle, car, day(14, 13), A)
 
     # Inga frågor står öppna: allt annat är avgjort.
-    notifier.ensure_open_questions(db, day(13, 15))
+    notifier.ensure_open_questions(db, day(14, 15))
     open_q = db.execute(
         select(M.NotificationRequest).where(
             M.NotificationRequest.kind.in_((NotificationKind.CLASSIFY, NotificationKind.PURPOSE,
@@ -214,7 +223,7 @@ def test_whole_chain_with_phone_answers(db, user, vehicle, engine, monkeypatch):
     tz = settings_svc.user_timezone(db, user.id)
     end = common.local_midnight(date(2026, 11, 1), tz)
     trips = list(db.execute(select(M.LogicalTrip).order_by(M.LogicalTrip.sort_time)).scalars())
-    assert len(trips) == 14 and all(t.review_status == ReviewStatus.APPROVED for t in trips)
+    assert len(trips) == 16 and all(t.review_status == ReviewStatus.APPROVED for t in trips)
     vetoes = [datetime.fromisoformat(t.approval_basis["veto_until"]) for t in trips
               if t.approval_source == ApprovalSource.ASSUMED]
     check_at = max(end + timedelta(hours=7), *(v + timedelta(minutes=1) for v in vetoes))
@@ -222,11 +231,11 @@ def test_whole_chain_with_phone_answers(db, user, vehicle, engine, monkeypatch):
     status = month_close.run_for(db, user_id=user.id, vehicle=vehicle, month=date(2026, 10, 1), now=check_at)
     assert status.state == "exported", status.blockers
     job = db.get(M.ExportJob, status.export_id)
-    assert job.origin == "month_close" and job.summary["trips"] == 14
+    assert job.origin == "month_close" and job.summary["trips"] == 16
 
     rows = openpyxl.load_workbook(export_path(job)).active.iter_rows(values_only=True)
     purposes = [r[4] for r in rows if r and isinstance(r[4], str)]
-    assert purposes.count(PURPOSE) == 4 and purposes.count(RULE_PURPOSE) == 2
+    assert purposes.count(PURPOSE) == 4 and purposes.count(RULE_PURPOSE) == 3
     assert "Kundbesök Dagab" in purposes
 
     # Oförändrat avtryck ger ingen ny fil.
@@ -235,7 +244,8 @@ def test_whole_chain_with_phone_answers(db, user, vehicle, engine, monkeypatch):
     assert again.export_id == job.id
 
     # 9. Den signerade länken öppnas utan inloggning; en ändrad token avvisas.
-    token = links.make_token(job, db.get(M.User, user.id), end + timedelta(days=7))
+    # Routen prövar mot systemets klocka, så länken gäller 7 dagar från nu.
+    token = links.make_token(job, db.get(M.User, user.id), datetime.now(UTC) + links.LINK_VALID)
     assert token and autopilot.is_active(db, user.id)
     db.commit()
     from app.main import create_app
@@ -245,3 +255,24 @@ def test_whole_chain_with_phone_answers(db, user, vehicle, engine, monkeypatch):
         assert r.status_code == 200, r.text
         assert "attachment" in r.headers["content-disposition"] and r.content[:2] == b"PK"
         assert anon.get(f"{API}/public/exports/{token[:-2]}xx").status_code == 404
+
+
+def test_demo_phone_shows_question_directly_in_self_driving_mode(db, user):
+    """Demotelefonen visar frågan direkt efter en simulerad resa, utan att vänta på tick."""
+    from app.services.ha import demo as ha_demo
+    from app.services.volvo import demo as volvo_demo
+
+    now = datetime.now(UTC)
+    settings_svc.update_section(db, user.id, "automation", {"active_since": (now - timedelta(days=2)).isoformat()},
+                                allow_read_only=True)
+    volvo_demo.enable(db, user.id, now=now - timedelta(days=1))
+    ha_demo.enable(db, user.id, now - timedelta(days=1))
+    shown: list[M.NotificationRequest] = []
+    for _ in range(6):
+        volvo_demo.simulate_trip(db, user.id)
+        shown = [r for r in ha_demo.inbox(db, user.id) if r.kind == NotificationKind.CLASSIFY]
+        if shown:
+            break
+    assert shown, "ingen fråga visades på demotelefonen"
+    # Högst en obesvarad fråga åt gången.
+    assert len(shown) == 1

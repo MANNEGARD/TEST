@@ -44,7 +44,7 @@ för den som vill använda den.
   uppdaterad*), och den gamla länken slutar gälla. En saknad starttid stoppar inte underlaget
   men står i notisen och på exportsidan. Exportsidan har ett nytt månadskort.
 - **Nedladdningslänken** gäller 7 dagar och högst 10 hämtningar. Den stängs med *Stäng alla
-  nedladdningslänkar* på exportsidan och när du byter lösenord inne i DriveLog. Den som har
+  nedladdningslänkar* på exportsidan och när du byter eller återställer lösenordet. Den som har
   Home Assistants token eller kommer åt Home Assistants historik kan hämta filen så länge
   länken gäller.
 - **Larm i telefonen** när något har slutat fungera: Volvo-inloggningen går snart ut eller

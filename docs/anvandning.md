@@ -179,11 +179,9 @@ Notisen går via Home Assistant. Den som har en Home Assistant-token eller komme
 Assistants historik kan därför hämta underlaget så länge länken gäller. Länken stängs när:
 
 - filen ersätts av en nyare ("En nyare fil finns – öppna senaste notisen") eller raderas,
-- du byter lösenord inne i DriveLog,
+- du byter lösenord, inne i DriveLog eller genom en återställning från kommandoraden eller
+  tilläggets inställningar,
 - du trycker **Stäng alla nedladdningslänkar** på exportsidan.
-
-Ett lösenord som återställs från kommandoraden eller från tilläggets inställningar stänger
-inte länkarna – tryck på knappen efteråt.
 
 ## Import
 

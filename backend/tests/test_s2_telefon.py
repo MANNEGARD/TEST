@@ -110,6 +110,12 @@ def questions(db, kind: str | None = None) -> list[M.NotificationRequest]:
     return list(db.execute(q.order_by(M.NotificationRequest.created_at)).scalars())
 
 
+def sent_first(reqs: list[M.NotificationRequest]) -> list[M.NotificationRequest]:
+    """Den levererade frågan först. Frågor med samma created_at kommer i godtycklig ordning
+    i PostgreSQL, så ordningen bestäms av vilken som skickades."""
+    return sorted(reqs, key=lambda r: r.status != NotificationStatus.SENT)
+
+
 def keys(req: M.NotificationRequest) -> list[str]:
     return [a["key"] for a in req.actions]
 
@@ -521,7 +527,7 @@ def test_one_question_at_a_time_reminder_and_expiry(db, user, trips, sd, monkeyp
     assert notifier.ensure_open_questions(db, NOW)["created"] == 2
     stats = notifier.deliver_due(db, NOW)
     assert stats["sent"] == 1 and stats["digests"] == 0
-    first, second = questions(db)
+    first, second = sent_first(questions(db))
     assert first.status == NotificationStatus.SENT and second.status == NotificationStatus.PENDING
     assert first.expires_at == NOW + timedelta(hours=48)  # 48 timmar från leveransen
     # Ingen ny fråga medan den första väntar.
@@ -545,7 +551,7 @@ def test_answer_releases_next_question(db, user, trips, sd, monkeypatch):
     live_trip(db, trips, OREBRO, JONKOPING, hours_ago=2)
     notifier.ensure_open_questions(db, NOW)
     notifier.deliver_due(db, NOW)
-    first, second = questions(db)
+    first, second = sent_first(questions(db))
     answer(db, user, first, "PRIVATE")
     assert notifier.deliver_due(db, NOW + timedelta(minutes=2))["sent"] == 1
     db.refresh(second)
