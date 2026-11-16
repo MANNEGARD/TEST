@@ -9,11 +9,8 @@ ger den vanliga "väntar"-notisen.
 Klockan i testerna: måndag 16 november 2026 kl. 10:12 svensk tid.
 """
 
-# ruff: noqa: F811  (fixturen fake_ha importeras inte här, men samma mönster som S1e)
-
 from __future__ import annotations
 
-import io
 import uuid
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
@@ -25,9 +22,8 @@ from sqlalchemy import select
 import app.models as M
 from app.models.enums import Category, NotificationKind, ReviewKind, ReviewState, ReviewStatus, TripSource
 from app.services import settings as settings_svc
-from app.services.export import month_close
+from app.services.export import month_close, simple
 from app.services.export import service as export_svc
-from app.services.export import simple
 from tests.conftest import reload_trip
 from tests.test_ha_support import setup_pull
 
@@ -290,4 +286,3 @@ def test_closed_after_month_end_gets_no_waiting_notice(db, user, vehicle, trips,
     due(db, at(1, 9))
     due(db, at(2, 9))
     assert [n.title for n in monthly(db)] == ["November klart"]
-    del io
