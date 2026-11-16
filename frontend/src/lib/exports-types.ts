@@ -20,6 +20,11 @@ export interface ExportRow {
   odometer_start: number | null;
   odometer_end: number | null;
   km: number;
+  /**
+   * Start- och/eller målplatsen saknar den adress som underlaget kräver (place_text.needs_address,
+   * samma regel som kontrollen place_address_missing). Tom lista när allt finns. Valfritt (1.3.0).
+   */
+  address_missing?: ("from" | "to")[];
 }
 
 export interface ExportTotals {
@@ -128,8 +133,15 @@ export interface ExportJob {
 }
 
 /** GET /month-close → innevarande och föregående månad (routes/month_close.py). */
-export type MonthClose = components["schemas"]["MonthCloseOut"];
-export type MonthStatus = components["schemas"]["MonthStatusOut"];
+export type MonthClose = Omit<components["schemas"]["MonthCloseOut"], "months"> & { months: MonthStatus[] };
+/**
+ * Månadens läge. `closed_early`/`export_created_at` (1.3.0): underlaget skapades innan månaden
+ * var slut ("Skapa underlaget nu"). Valfria så att typen fungerar före och efter omgenereringen.
+ */
+export type MonthStatus = components["schemas"]["MonthStatusOut"] & {
+  closed_early?: boolean;
+  export_created_at?: string | null;
+};
 export type MonthBlocker = components["schemas"]["BlockerOut"];
 export type MonthReviewRow = components["schemas"]["ReviewRowOut"];
 

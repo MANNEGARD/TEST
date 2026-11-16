@@ -89,11 +89,13 @@ def build_simple_journal(
     end: datetime | None,
     tz: ZoneInfo,
     trip_ids: Iterable[uuid.UUID] | None = None,
+    generated_at: datetime | None = None,
 ) -> tuple[SimpleJournal, list[LogicalTrip]]:
     """Den enkla körjournalens innehåll (ingen fil skrivs) samt alla periodens resor.
 
     Förhandsvisningen och exportfilen byggs båda härifrån och innehåller därför alltid
-    samma rader och summor.
+    samma rader och summor. ``generated_at`` (filens tid) ger raden "Skapad" i sidhuvudet
+    när filen skapas innan perioden är slut.
     """
     user_id = vehicle.owner_user_id
     ids = list(trip_ids) if trip_ids is not None else None
@@ -113,6 +115,7 @@ def build_simple_journal(
         rate_per_mil=rate,
         show_amount=show_amount,
         show_via=settings_svc.export_show_via(db, user_id),
+        generated_at=generated_at,
     )
     return journal, trips
 
@@ -136,13 +139,18 @@ def simple_summary(journal: SimpleJournal) -> dict[str, Any]:
     }
 
 
+# Fält i förhandsvisningens rader som inte står i filen och därför inte ingår i avtrycket.
+_NOT_FINGERPRINTED = frozenset({"address_missing"})
+
+
 def rows_fingerprint(journal: SimpleJournal) -> str:
     """sha256 över underlagets rader (``SimpleRow.as_dict``) och summor.
 
     Avtrycket ändras bara när något som står i filen ändras; månadsskiftet skapar aldrig en
     ny fil för ett oförändrat avtryck.
     """
-    payload = {"rows": [r.as_dict() for r in journal.rows], "totals": journal.totals()}
+    rows = [{k: v for k, v in r.as_dict().items() if k not in _NOT_FINGERPRINTED} for r in journal.rows]
+    payload = {"rows": rows, "totals": journal.totals()}
     text = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"), default=str)
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
@@ -356,6 +364,7 @@ def create_export(
         period = Period("export", None, None, label)
 
     job = ExportJob(
+        created_at=now,  # filens tid (visas i underlaget när den skapas före periodens slut)
         user_id=user_id,
         vehicle_id=vehicle.id,
         params={
@@ -374,7 +383,9 @@ def create_export(
         cfg.exports_dir.mkdir(parents=True, exist_ok=True)
         path = cfg.exports_dir / f"{crypto.random_token(18)}.xlsx"
         if layout == settings_svc.LAYOUT_SIMPLE:
-            journal, trips = build_simple_journal(db, vehicle=vehicle, start=start, end=end, tz=tz, trip_ids=ids)
+            journal, trips = build_simple_journal(
+                db, vehicle=vehicle, start=start, end=end, tz=tz, trip_ids=ids, generated_at=now
+            )
             if ids is not None and len(trips) != len(set(ids)):
                 raise ExportError("En eller flera valda resor finns inte eller tillhör ett annat fordon.", "not_found")
             checks = checks_mod.run_checks(

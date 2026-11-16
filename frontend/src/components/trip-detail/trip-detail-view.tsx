@@ -15,6 +15,7 @@ import {
   Route,
   Scissors,
   Split,
+  Trash2,
   Undo2,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -74,6 +75,8 @@ import type { RawTrip, TripDetail } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { AllocationDialog } from "./allocation-dialog";
 import { ClassificationCard } from "./classification-card";
+import { CollectionGapNote } from "./collection-gap-note";
+import { DeleteTripDialog } from "./delete-trip-dialog";
 
 function energyExplanation(kind: "fuel" | "el", quality: string): string | undefined {
   if (quality === "estimated") return kind === "fuel" ? "Uppskattad bensinförbrukning – inte uppmätt av bilen." : "Uppskattad elförbrukning – inte uppmätt av bilen.";
@@ -645,6 +648,7 @@ function JourneySection({ d }: { d: TripDetail }) {
 export function TripDetailView({ id }: { id: string }) {
   const q = useTripDetail(id);
   const [allocRaw, setAllocRaw] = React.useState<RawTrip | null>(null);
+  const [deleting, setDeleting] = React.useState(false);
 
   if (q.isError) {
     const notFound = q.error instanceof ApiError && q.error.status === 404;
@@ -671,6 +675,8 @@ export function TripDetailView({ id }: { id: string }) {
   const d = q.data;
   const t = d.trip;
   const when = t.started_at ?? t.sort_time;
+  const onlyRaw = d.raw_trips.length === 1 ? d.raw_trips[0] : null;
+  const gapNote = <CollectionGapNote trip={t} onSplit={onlyRaw ? () => setAllocRaw(onlyRaw) : undefined} />;
   return (
     <>
       <BackLink />
@@ -691,13 +697,15 @@ export function TripDetailView({ id }: { id: string }) {
             <TripMap map={d.map} />
           </Card>
           {/* Mobil: klassning direkt under kartan (överst: karta, sträcka, kategori, syfte). */}
-          <div className="lg:hidden">
+          <div className="space-y-5 lg:hidden">
+            {gapNote}
             <ClassificationCard detail={d} />
           </div>
           <Facts d={d} />
         </div>
         <div className="space-y-5">
-          <div className="hidden lg:block">
+          <div className="hidden space-y-5 lg:block">
+            {gapNote}
             <ClassificationCard detail={d} />
           </div>
           <Card>
@@ -724,7 +732,15 @@ export function TripDetailView({ id }: { id: string }) {
           </CollapsibleSection>
         ) : null}
         <HistorySection d={d} />
+        {t.deletable ? (
+          <div className="flex justify-end pt-2">
+            <Button variant="danger-ghost" size="sm" onClick={() => setDeleting(true)} data-testid="delete-trip">
+              <Trash2 aria-hidden /> Ta bort resan
+            </Button>
+          </div>
+        ) : null}
       </div>
+      {t.deletable ? <DeleteTripDialog trip={t} open={deleting} onOpenChange={setDeleting} /> : null}
       {allocRaw ? (
         <AllocationDialog
           key={allocRaw.id}

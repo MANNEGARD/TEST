@@ -306,9 +306,30 @@ def after_decisions(db: Session, *, user_id: uuid.UUID, vehicle_id: uuid.UUID, a
     from app.services.classify import autopilot
 
     autopilot.run_vehicle(db, user_id=user_id, vehicle=vehicle, actor=audit.SYSTEM)
+    # Kategoriregler för sammanslagning: en resa som just blivit avgjord kan slås ihop med
+    # grannen av samma kategori (byggkontraktet 2.A.3).
+    merge_questions = merge_after_decisions(db, user_id=user_id, vehicle=vehicle)
     for trip in seg.active_trips(db, vehicle_id):
         pipeline.sync_trip_review_items(db, trip, by=actor.label)
+    notify_merge_questions(db, user_id=user_id, vehicle=vehicle, questions=merge_questions)
     db.flush()
+
+
+def merge_after_decisions(db: Session, *, user_id: uuid.UUID, vehicle: Vehicle) -> list[Any]:
+    """Sammanslagning med kategoriregler efter beslut (gör inget med det tidigare regelverket)."""
+    from app.services.trips import merge
+
+    return merge.evaluate_after_decisions(db, vehicle, audit.SYSTEM)
+
+
+def notify_merge_questions(db: Session, *, user_id: uuid.UUID, vehicle: Vehicle, questions: list[Any]) -> None:
+    """Frågor om sammanslagning efter beslut går till telefonen som i pipelinen (notifier
+    gör urvalet: notistypen, resor från de senaste 48 timmarna, tysta timmar)."""
+    if not questions:
+        return
+    from app.services.ha import notifier
+
+    notifier.enqueue_for_changes(db, user_id=user_id, vehicle=vehicle, merge_items=questions, trip_items=[])
 
 
 def reclassify(

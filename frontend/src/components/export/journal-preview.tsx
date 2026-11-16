@@ -3,7 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, TriangleAlert } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { formatNumber, plural } from "@/lib/format";
 import type { ExportPreview, ExportRow } from "@/lib/exports-types";
@@ -26,6 +26,28 @@ function splitTo(to: string): { dest: string; via: string | null } {
 
 function Odo({ value }: { value: number | null }) {
   return value == null ? <span className="text-fg-subtle">–</span> : <>{formatNumber(value, 0)}</>;
+}
+
+/**
+ * Platsen saknar den adress som underlaget kräver (raden `address_missing`, samma regel som
+ * kontrollen place_address_missing). Texten står kvar; varningen visas under den.
+ */
+function AddressMissing({ link = true }: { link?: boolean }) {
+  return (
+    <span className="mt-0.5 flex items-start gap-1 text-xs font-medium text-warn-ink" data-testid="preview-address-missing">
+      <TriangleAlert className="mt-px size-3.5 shrink-0" aria-hidden />
+      <span>
+        Adress saknas –{" "}
+        {link ? (
+          <Link href="/places" className="underline underline-offset-2 hover:no-underline focus-visible:outline-2 focus-visible:outline-ring">
+            lägg till under Platser
+          </Link>
+        ) : (
+          "lägg till under Platser"
+        )}
+      </span>
+    </span>
+  );
 }
 
 function Purpose({ row, flagged }: { row: ExportRow; flagged: boolean }) {
@@ -105,7 +127,7 @@ function DesktopTable({ rows, flaggedIds }: { rows: ExportRow[]; flaggedIds: Rea
         <caption className="sr-only">Tjänsteresor. Välj en rad för att öppna resan.</caption>
         <colgroup>
           <col className="w-[5.6rem]" />
-          <col className="w-[7.9rem]" />
+          <col className="w-[9.6rem] min-w-[9.6rem]" />
           <col />
           <col />
           <col />
@@ -151,12 +173,16 @@ function DesktopTable({ rows, flaggedIds }: { rows: ExportRow[]; flaggedIds: Rea
                     {r.date ?? "–"}
                   </Link>
                 </td>
-                <td className="px-2 py-2.5 whitespace-nowrap text-fg-muted tabular-nums">{r.time || <span className="text-fg-subtle">okänd</span>}</td>
-                <td className="px-2 py-2.5 break-words text-fg">{r.from || <span className="text-fg-subtle">–</span>}</td>
+                <td className="px-2 py-2.5 whitespace-nowrap text-fg-muted tabular-nums" data-testid="preview-time">{r.time || <span className="text-fg-subtle">okänd</span>}</td>
+                <td className="px-2 py-2.5 break-words text-fg">
+                  {r.from || <span className="text-fg-subtle">–</span>}
+                  {r.address_missing?.includes("from") ? <AddressMissing /> : null}
+                </td>
                 <td className="px-2 py-2.5 break-words text-fg">
                   {dest ? <span className="block">{dest}</span> : null}
                   {via ? <span className="block text-xs text-fg-muted">{via}</span> : null}
                   {!dest && !via ? <span className="text-fg-subtle">–</span> : null}
+                  {r.address_missing?.includes("to") ? <AddressMissing /> : null}
                 </td>
                 <td className="px-2 py-2.5 break-words text-fg">
                   <Purpose row={r} flagged={flagged} />
@@ -183,6 +209,7 @@ function MobileList({ rows, flaggedIds }: { rows: ExportRow[]; flaggedIds: Reado
       {rows.map((r) => {
         const { dest, via } = splitTo(r.to);
         const flagged = flaggedIds.has(r.trip_id);
+        const missing = r.address_missing ?? [];
         return (
           <li key={r.trip_id} className="border-b border-border last:border-b-0">
             <Link
@@ -195,12 +222,22 @@ function MobileList({ rows, flaggedIds }: { rows: ExportRow[]; flaggedIds: Reado
               <div className="min-w-0 flex-1">
                 <div className="num text-xs text-fg-muted">
                   {r.date ?? "–"}
-                  {r.time ? <span className="ml-2">{r.time}</span> : null}
+                  {r.time ? (
+                    <span className="ml-2 whitespace-nowrap" data-testid="preview-time-mobile">
+                      {r.time}
+                    </span>
+                  ) : null}
                 </div>
                 <div className="mt-1 text-sm leading-snug text-fg">
                   {r.from || "–"} <ArrowRight className="mx-0.5 inline size-3.5 text-fg-subtle" aria-label="till" /> {dest || "–"}
                 </div>
                 {via ? <div className="mt-0.5 text-xs text-fg-muted">{via}</div> : null}
+                {missing.length ? (
+                  <div className="mt-0.5">
+                    <AddressMissing link={false} />
+                    <span className="sr-only">{missing.includes("from") && missing.includes("to") ? " (start och mål)" : missing.includes("from") ? " (start)" : " (mål)"}</span>
+                  </div>
+                ) : null}
                 <div className="mt-1 text-[13px] text-fg-muted">
                   <Purpose row={r} flagged={flagged} />
                 </div>

@@ -90,13 +90,21 @@ export function useMonthClose() {
   });
 }
 
-/** "Kontrollera nu": prövar månaden och skapar underlaget om den är klar (POST /month-close/{månad}/run). */
+/**
+ * "Kontrollera nu": prövar månaden och skapar underlaget om den är klar (POST /month-close/{månad}/run).
+ * `force` ("Skapa underlaget nu", innevarande månad) hoppar bara över väntan på månadsslutet –
+ * övriga kontroller gäller som vanligt (services/export/month_close.py run_for).
+ */
 export function useRunMonthClose() {
   const qc = useQueryClient();
   const { vehicleId } = useVehicle();
   return useMutation({
-    mutationFn: (month: string) =>
-      api.post<MonthStatus>(`/month-close/${encodeURIComponent(month)}/run`, undefined, { query: { vehicle_id: vehicleId } }),
+    mutationFn: (arg: string | { month: string; force?: boolean }) => {
+      const { month, force } = typeof arg === "string" ? { month: arg, force: false } : arg;
+      return api.post<MonthStatus>(`/month-close/${encodeURIComponent(month)}/run`, undefined, {
+        query: { vehicle_id: vehicleId, ...(force ? { force: true } : {}) },
+      });
+    },
     onSettled: () =>
       Promise.all([
         qc.invalidateQueries({ queryKey: exportKeys.monthClose(vehicleId) }),

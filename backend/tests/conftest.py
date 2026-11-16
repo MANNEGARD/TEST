@@ -63,6 +63,8 @@ LEGACY_DEFAULTS: dict[tuple[str, str], Any] = {
     ("notifications", "hide_locations_on_lock_screen"): True,
     ("notifications", "reminder_after_hours"): 20,
     ("notifications", "expire_after_hours"): 72,
+    # 1.3.0: befintliga installationer behåller det tidigare regelverket för sammanslagning.
+    ("merge", "by_category"): False,
 }
 
 

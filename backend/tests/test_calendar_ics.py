@@ -1494,8 +1494,10 @@ def test_existing_110_database_needs_no_migration(tmp_path, monkeypatch):
     try:
         cfg = alembic_config(url)
         # 1.2.2 lade till 0003 (omräkning efter beslut); 1.2.0 i sig behövde ingen migrering.
+        # 1.3.0 (0004) lägger till kalenderdeltagare, så databasen uppgraderas till huvudet.
         assert ScriptDirectory.from_config(cfg).get_revision("0003").down_revision == "0002"
-        command.upgrade(cfg, "0002")
+        assert ScriptDirectory.from_config(cfg).get_revision("0004").down_revision == "0003"
+        command.upgrade(cfg, "head")
         with dbm.session_scope() as db:
             u = M.User(email="forare@example.com", display_name="Förare", password_hash="x", is_admin=True)
             db.add(u)

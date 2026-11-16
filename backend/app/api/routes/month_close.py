@@ -54,6 +54,9 @@ class MonthStatusOut(BaseModel):
     blockers: list[BlockerOut]
     notes: list[BlockerOut]
     export_id: uuid.UUID | None
+    # Underlaget skapades innan månaden var slut ("Skapa underlaget nu"), och när.
+    closed_early: bool = False
+    export_created_at: datetime | None = None
     # Antagna och automatiskt godkända rader i månaden, för ägarens genomgång.
     review_rows: list[ReviewRowOut] = []
 

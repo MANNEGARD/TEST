@@ -650,6 +650,9 @@ def evaluate(ctx: TripContext) -> RuleResult:
     if flags & {"possible_missed_trips", "start_time_uncertain", "missing_odometer"}:
         caps.append("Osäker datakvalitet")
         confidence = min(confidence, 0.7)
+    if "possible_missed_trips" in flags:
+        # Resan kan vara flera körningar: aldrig en tyst preliminär klassning (F2).
+        requires_review = True
 
     if tax_note and not manual:
         requires_review = bool(ctx.tax.get("require_approval_when_uncertain", True)) or requires_review

@@ -197,11 +197,42 @@ export function useCreateManualTrip() {
   });
 }
 
-export function useDeleteManualTrip() {
+/**
+ * Efter borttagning: allt som beror på resorna hämtas om, utom detaljvyn för de borttagna
+ * resorna – den markeras bara som inaktuell så att vyn inte hinner visa "Resan finns inte"
+ * innan webbappen har gått vidare till körjournalen.
+ */
+function invalidateAfterDelete(qc: QueryClient, ids: string[]): void {
+  const gone = new Set(ids);
+  const isGone = (key: readonly unknown[]) => key[1] === "detail" && gone.has(key[2] as string);
+  void qc.invalidateQueries({ queryKey: qk.trips.details, predicate: (q) => isGone(q.queryKey), refetchType: "none" });
+  void qc.invalidateQueries({ queryKey: qk.trips.all, predicate: (q) => !isGone(q.queryKey) });
+  for (const key of [qk.review.all, qk.dashboard.all, qk.gaps.all, qk.learning.feedback, qk.exports.all, qk.places.all, qk.energy.all]) {
+    void qc.invalidateQueries({ queryKey: key });
+  }
+}
+
+/** Ta bort en importerad eller manuellt inlagd resa (DELETE /trips/{id}). Resan makuleras, den raderas inte. */
+export function useDeleteTrip() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => api.del(`/trips/${id}`),
-    onSuccess: () => invalidateJournalData(qc),
+    onSuccess: (_d, id) => invalidateAfterDelete(qc, [id]),
+  });
+}
+
+/** Svar från POST /trips/bulk-delete. */
+export interface BulkDeleteResult {
+  deleted: number;
+  errors: { trip_id: string; code: string; message: string }[];
+}
+
+/** Ta bort flera valda resor. Varje resa prövas för sig; de som inte går ger ett fel var. */
+export function useBulkDeleteTrips() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (tripIds: string[]) => api.post<BulkDeleteResult>("/trips/bulk-delete", { trip_ids: tripIds }),
+    onSuccess: (_d, ids) => invalidateAfterDelete(qc, ids),
   });
 }
 

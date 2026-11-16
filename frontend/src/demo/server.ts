@@ -12,6 +12,8 @@ import {
   type DemoState,
   type Json,
   type Seed,
+  importedTripId,
+  IMPORTED_TRIPS,
   loadState,
   localDay,
   localMonth,
@@ -55,6 +57,7 @@ function boot(): Promise<void> {
     state.undo ??= {};
     state.workplaces ??= rec("/settings/workplaces/list");
     state.odometer ??= rec(`/vehicles/${state.vehicleId}/odometer`);
+    if (!state.v130) applyV130(state);
     // Körtiden saknas på de rekonstruerade resorna i inspelningen; räkna den ur start- och sluttid.
     // Med en uträknad starttid lämnas den tom som i den riktiga servern, så resans sida visar "≈".
     for (const d of Object.values(state.trips)) {
@@ -395,6 +398,7 @@ function tripDetail(id: string): Json {
   if (!d) throw new HttpError(404, "Resan hittades inte.", "not_found");
   const out = clone(d);
   delete out.demo_original_start;
+  out.map = mapOut(out.map);
   out.trip.open_review_kinds = S()
     .review.filter((r) => r.trip_id === id && r.status === "open")
     .map((r) => r.kind)
@@ -433,7 +437,7 @@ function setStartTime(id: string, value: string | null): void {
 /** "Lägg till resa": en manuell resa med ett id ur demots förbyggda uppsättning. */
 function createManualTrip(body: Json): Json {
   const s = S();
-  if (s.nextTrip >= POOL_SIZE) throw new HttpError(400, "Demot rymmer inte fler nya resor. Återställ demot för att börja om.");
+  if (s.nextTrip >= POOL_SIZE - IMPORTED_TRIPS) throw new HttpError(400, "Demot rymmer inte fler nya resor. Återställ demot för att börja om.");
   const started = new Date(body.started_at);
   const ended = new Date(body.ended_at);
   if (Number.isNaN(started.getTime()) || Number.isNaN(ended.getTime())) throw new HttpError(400, "Ange start- och sluttid.");
@@ -508,6 +512,8 @@ function createManualTrip(body: Json): Json {
     start_estimate_basis: null,
     approval_source: decided ? "user" : null,
     approval_reason: null,
+    collection_gap: null,
+    deletable: "manual",
   };
   splitKm(t);
   const rawId = crypto.randomUUID();
@@ -583,6 +589,285 @@ function createManualTrip(body: Json): Json {
   }
   persist();
   return clone(t);
+}
+
+// ----------------------------------------------------------------------------- 1.3.0
+
+const IMPORT_FILE = "Volvo_korjournal_exempel.xlsx";
+
+/** Platsens adressuppslag (1.3.0): adress men ingen position → slås upp i bakgrunden. */
+function lookupOf(loc: Json | null | undefined): string | null {
+  if (!loc || loc.latitude != null) return null;
+  if (S().settings.settings.privacy?.geocoding_enabled === false) return null;
+  if (loc.demo_lookup) return loc.demo_lookup;
+  return loc.address ? "pending" : null;
+}
+
+function locationOut(loc: Json): Json {
+  const out = clone(loc);
+  delete out.demo_lookup;
+  out.position_lookup = lookupOf(loc);
+  return out;
+}
+
+/** Resans karta med adressuppslagets läge för punkter utan position. */
+function mapOut(map: Json): Json {
+  for (const stop of map?.stops ?? []) {
+    const loc = stop.location ? S().locations.find((l) => l.id === stop.location.id) : null;
+    const lookup = stop.lat == null ? lookupOf(loc) : null;
+    stop.position_lookup = lookup;
+    if (stop.location) stop.location.position_lookup = lookupOf(loc);
+  }
+  return map;
+}
+
+function deletableOf(t: Json): string | null {
+  return t.source === "volvo_import" ? "imported" : t.source === "manual" ? "manual" : null;
+}
+
+/**
+ * Det som 1.3.0 tillför startdatat: de nya inställningarna, `deletable`, ett uppehåll i
+ * hämtningen på en resa och tre importerade resor (adresser utan positioner) med egna platser.
+ * Körs en gång per tillstånd (även för ett tillstånd som sparats av ett äldre demobygge).
+ */
+function applyV130(s: DemoState): void {
+  const merge = { by_category: true, category_rules_since: "", private_auto_max_minutes: 15, private_ask_max_minutes: 15 };
+  s.settings.settings.merge = { ...merge, ...s.settings.settings.merge, by_category: true };
+  s.settings.defaults.merge = { ...merge, ...s.settings.defaults.merge };
+  for (const d of Object.values(s.trips)) {
+    d.trip.deletable = deletableOf(d.trip);
+    d.trip.collection_gap ??= null;
+  }
+
+  // Uppehåll i hämtningen: bilen rapporterade inte under resan till Ekvägen 14 (lördag 14/11).
+  const gap = Object.values(s.trips).find((d) => d.trip.start_address?.startsWith("Björkvägen 7") && d.trip.end_address?.startsWith("Ekvägen 14"));
+  if (gap) {
+    const t = gap.trip;
+    t.collection_gap = {
+      from: new Date(Date.parse(t.started_at) - 100 * 60_000).toISOString(),
+      to: new Date(Date.parse(t.ended_at) + 2 * 60_000).toISOString(),
+      odometer_km: Number(t.distance_km),
+    };
+    t.quality_flags = [...new Set([...(t.quality_flags ?? []), "collection_gap", "possible_missed_trips"])];
+    for (const r of gap.raw_trips ?? []) r.quality_flags = t.quality_flags;
+  }
+
+  // Importerade resor (Volvos körjournal) med adresser men utan positioner.
+  const home = s.locations.find((l) => l.type === "home");
+  const place = (id: string, name: string, type: string, confirmed: boolean, address: string | null, city: string | null): Json => ({
+    id,
+    name,
+    type,
+    address,
+    city,
+    company: type === "customer" ? name : null,
+    latitude: null,
+    longitude: null,
+    radius_m: 150,
+    coordinate_source: null,
+    confirmed,
+    is_demo: false,
+    suggested_type: null,
+    suggested_name: null,
+    suggestion_reason: null,
+    notes: null,
+    visit_count: 1,
+    last_visited_at: null,
+    created_from: "import",
+    aliases: address ? [address] : [],
+    stats: { arrivals: 1, work: 1, private: 0, undecided: 0, km: 0, most_common_category: "work", top_purposes: [] },
+  });
+  const snickeri = place("00000000-0000-4000-8000-0000000a0001", "Exempel Snickeri AB", "customer", false, "Hyvelvägen 8, 345 12 Sågby", "345 12 Sågby");
+  const lager = place("00000000-0000-4000-8000-0000000a0002", "Exempel Lager AB", "customer", true, null, null);
+  s.locations.push(snickeri, lager);
+  const template = Object.values(s.trips).find((d) => d.trip.source === "volvo_api");
+  const rows: [string, string, Json, Json, number, number, string][] = [
+    ["2026-10-01T05:40:00Z", "2026-10-01T06:05:00Z", home, snickeri, 48120, 48148, "Kundbesök Exempel Snickeri AB"],
+    ["2026-10-01T13:10:00Z", "2026-10-01T13:38:00Z", snickeri, home, 48148, 48176, "Hemresa efter kundbesök Exempel Snickeri AB"],
+    ["2026-10-02T07:00:00Z", "2026-10-02T07:20:00Z", home, lager, 48176, 48195, "Leverans till Exempel Lager AB"],
+  ];
+  const brief = (l: Json) => ({ id: l.id, name: l.name, type: l.type, city: l.city, confirmed: l.confirmed, latitude: l.latitude, longitude: l.longitude });
+  const label = (l: Json) => l.address ?? l.name;
+  rows.slice(0, IMPORTED_TRIPS).forEach(([start, end, from, to, odoStart, odoEnd, purpose], n) => {
+    if (!template || !from || !to) return;
+    const id = importedTripId(n);
+    const km = odoEnd - odoStart;
+    const rawId = `00000000-0000-4000-8000-0000000b000${n + 1}`;
+    const t = {
+      ...clone(template.trip),
+      id,
+      state: "active",
+      category: "work",
+      subcategory: null,
+      category_source: "import",
+      purpose,
+      purpose_source: "import",
+      purpose_confirmed: true,
+      review_status: "imported",
+      confidence: null,
+      notes: null,
+      is_favorite: false,
+      merge_kind: "none",
+      journey_id: null,
+      started_at: start,
+      ended_at: end,
+      sort_time: start,
+      start_time_quality: "exact",
+      end_time_quality: "exact",
+      start_earliest: null,
+      start_latest: null,
+      odometer_start: odoStart,
+      odometer_end: odoEnd,
+      distance_km: km,
+      driving_seconds: Math.round((Date.parse(end) - Date.parse(start)) / 1000),
+      start_address: label(from),
+      end_address: label(to),
+      start_location_id: from.id,
+      end_location_id: to.id,
+      start_location: brief(from),
+      end_location: brief(to),
+      via: [],
+      segment_count: 1,
+      source: "volvo_import",
+      is_complete: true,
+      has_gap: false,
+      gap_km: 0,
+      quality_flags: [],
+      updated_at: "2026-11-02T18:12:00Z",
+      updated_by: `user:${s.me.user.id}`,
+      open_review_kinds: [],
+      has_calendar_match: false,
+      start_time_source: "import",
+      start_time_text: localTime(start),
+      start_estimate_basis: null,
+      approval_source: null,
+      approval_reason: null,
+      collection_gap: null,
+      deletable: "imported",
+    };
+    splitKm(t);
+    const stop = (l: Json, at: string) => ({ address: label(l), location: brief(l), lat: null, lon: null, coordinate_basis: null, at });
+    s.trips[id] = {
+      ...clone(template),
+      trip: t,
+      segments: [{ id: `00000000-0000-4000-8000-0000000c000${n + 1}`, raw_trip_id: rawId, seq: 0, part: 0, distance_km: km, category: "work", category_override: null, note: null }],
+      raw_trips: [
+        {
+          ...clone(template.raw_trips?.[0] ?? {}),
+          id: rawId,
+          source: "volvo_import",
+          started_at: start,
+          ended_at: end,
+          start_time_quality: "exact",
+          end_time_quality: "exact",
+          start_earliest: null,
+          start_latest: null,
+          odometer_start: odoStart,
+          odometer_end: odoEnd,
+          odometer_source: "import",
+          distance_km: km,
+          distance_quality: "odometer",
+          duration_seconds: t.driving_seconds,
+          start_address: t.start_address,
+          end_address: t.end_address,
+          start_position: null,
+          end_position: null,
+          position_source: "export_address",
+          original_category: "Arbete",
+          original_title: null,
+          original_notes: purpose,
+          is_complete: true,
+          possible_missed_trips: false,
+          quality_flags: [],
+          import_origin: { file: IMPORT_FILE, row_number: n + 2, format: "volvo_xlsx_v1_14col", batch_id: "00000000-0000-4000-8000-0000000d0001" },
+        },
+      ],
+      map: { stops: [stop(from, start), stop(to, end)], observations: [], route_is_actual: false, route_note: template.map?.route_note ?? null },
+      assessment: null,
+      assessment_meta: null,
+      decision: { source: "import", category: "work", created_at: t.updated_at, created_by: t.updated_by },
+      evidence: [],
+      purpose_history: [{ text: purpose, source: "import", rationale: null, needs_confirmation: false, is_current: true, created_at: t.updated_at }],
+      purpose_suggestions: [],
+      calendar_matches: [],
+      similar_trips: [],
+      merged_from: [],
+      merge_operations: [],
+      journey: null,
+      history: [],
+      feedback: [],
+    };
+  });
+  s.v130 = true;
+  recountLocations();
+}
+
+/** Spärrarna för borttagning (services/trips/removal.py → delete_trip, kontraktets 4.A.1). */
+function deleteBlocker(d: Json): HttpError | null {
+  const t = d.trip;
+  if (t.state !== "active") return new HttpError(400, "Resan finns inte längre i körjournalen.", "not_active");
+  if (!deletableOf(t)) return new HttpError(400, "Resor från bilen kan inte tas bort. Bara importerade och manuellt inlagda resor kan tas bort.", "not_deletable");
+  if ((d.raw_trips ?? []).length > 1 || Number(t.segment_count ?? 1) > 1 || (d.merged_from ?? []).length) {
+    return new HttpError(400, "Resan är sammanslagen av flera körningar. Dela upp den först under Sammanslagning på resan, och ta sedan bort den del du vill.", "merged_trip");
+  }
+  if (t.journey_id) {
+    const name = d.journey?.name ?? d.journey?.title ?? "";
+    return new HttpError(400, `Resan ingår i tjänsteresan "${name}". Lös upp tjänsteresan först (på resan under Tjänsteresa), och ta sedan bort resan.`, "in_journey");
+  }
+  return null;
+}
+
+/** Tar bort (makulerar) en importerad eller manuellt inlagd resa – raden finns kvar i historiken. */
+function deleteTrip(id: string): void {
+  const s = S();
+  const d = s.trips[id];
+  if (!d) throw notFound("Resan");
+  const blocked = deleteBlocker(d);
+  if (blocked) throw blocked;
+  const t = d.trip;
+  const now = nowIso();
+  closeFollowUps(id);
+  t.state = "voided";
+  t.updated_at = now;
+  t.updated_by = `user:${s.me.user.id}`;
+  for (const r of d.raw_trips ?? []) {
+    r.voided_at = now;
+    r.void_reason = "Borttagen av användaren";
+  }
+  for (const f of s.feedback ?? []) if (f.logical_trip_id === id && !f.undone_at) f.undone_at = now;
+  d.history = [
+    {
+      id: crypto.randomUUID(),
+      at: now,
+      actor_type: "user",
+      actor_id: s.me.user.id,
+      action: t.source === "manual" ? "trip.manual_delete" : "trip.import_delete",
+      entity_type: "logical_trip",
+      entity_id: id,
+      before: { started_at: t.started_at, ended_at: t.ended_at, distance_km: t.distance_km, category: t.category, purpose: t.purpose },
+      after: null,
+    },
+    ...(d.history ?? []),
+  ];
+}
+
+function bulkDelete(ids: string[]): Json {
+  const s = S();
+  if (!ids.length || ids.length > 500) throw new HttpError(400, "Välj mellan 1 och 500 resor.");
+  if (ids.some((id) => !s.trips[id])) throw new HttpError(404, "En eller flera resor hittades inte.", "not_found");
+  let deleted = 0;
+  const errors: Json[] = [];
+  for (const id of ids) {
+    try {
+      deleteTrip(id);
+      deleted += 1;
+    } catch (err) {
+      if (!(err instanceof HttpError)) throw err;
+      errors.push({ trip_id: id, code: err.code, message: err.detail });
+    }
+  }
+  persist();
+  return { deleted, errors };
 }
 
 // ----------------------------------------------------------------------------- granskning
@@ -949,6 +1234,7 @@ const LOCATION_FIELDS = ["name", "type", "address", "company", "latitude", "long
 function patchLocation(id: string, body: Json): Json {
   const loc = S().locations.find((l) => l.id === id);
   if (!loc) throw notFound("Platsen");
+  if ("address" in body && body.address !== loc.address) delete loc.demo_lookup;
   for (const k of LOCATION_FIELDS) if (k in body && body[k] !== undefined) loc[k] = body[k];
   if (body.clear_coordinates) {
     loc.latitude = null;
@@ -957,7 +1243,7 @@ function patchLocation(id: string, body: Json): Json {
   if (body.latitude != null) loc.coordinate_source = "user";
   syncLocation(loc);
   persist();
-  return clone(loc);
+  return locationOut(loc);
 }
 
 function createLocation(body: Json): Json {
@@ -988,7 +1274,7 @@ function createLocation(body: Json): Json {
   S().locations.push(loc);
   recountLocations();
   persist();
-  return clone(loc);
+  return locationOut(loc);
 }
 
 function homeFromVehicle(body: Json): Json {
@@ -1154,9 +1440,40 @@ function monthClose(q: URLSearchParams): Json {
   return { ...clone(s.monthClose), months: want ? months.filter((m: Json) => m.month === want) : months };
 }
 
-function runMonth(month: string): Json {
-  const m = S().monthClose.months.find((x: Json) => x.month === month);
+/** Blockerare som stoppar underlaget (allt utom väntan på månadsslutet). */
+const NOT_BLOCKING = new Set(["month_not_over"]);
+
+/**
+ * "Kontrollera nu" och "Skapa underlaget nu" (`force`, innevarande månad): samma kontroller som
+ * vid månadsskiftet – väntar något skapas ingen fil. Annars skapas underlaget nu, märkt med att
+ * det skapades innan månaden var slut. (Demot simulerar inte kontrollen vid månadsskiftet.)
+ */
+function runMonth(month: string, force: boolean): Json {
+  const s = S();
+  const m = s.monthClose.months.find((x: Json) => x.month === month);
   if (!m) throw new HttpError(400, "Månaden går inte att kontrollera i demot.", "demo_unavailable");
+  const status = monthStatus(m);
+  const notOver = status.blockers.some((b: Json) => b.code === "month_not_over");
+  if (!force || !notOver || m.state === "exported") return status;
+  if (status.blockers.some((b: Json) => !NOT_BLOCKING.has(b.code))) return { ...status, state: "waiting" };
+  const from = `${month}-01`;
+  const last = new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).getUTCDate();
+  const created = createExport({ from, to: `${month}-${String(last).padStart(2, "0")}` });
+  const job = s.exports.find((e) => e.id === created.id) ?? created;
+  if (!job.summary?.trips) {
+    s.exports = s.exports.filter((e) => e.id !== job.id);
+    m.state = "empty";
+    m.blockers = (m.blockers ?? []).filter((b: Json) => b.code !== "month_not_over");
+    persist();
+    return monthStatus(m);
+  }
+  job.origin = "month_close";
+  m.state = "exported";
+  m.export_id = job.id;
+  m.closed_early = true;
+  m.export_created_at = job.created_at;
+  m.blockers = [];
+  persist();
   return monthStatus(m);
 }
 
@@ -1295,10 +1612,17 @@ function exportPreview(q: URLSearchParams): Json {
     out.header.vehicle = S().vehicles[0]?.name ?? out.header.vehicle;
     out.header.registration_number = S().vehicles[0]?.registration_number ?? out.header.registration_number;
   }
+  // Platser som saknar den adress underlaget kräver (som place_text.needs_address).
+  const missing = (locId: string | null): boolean => {
+    const loc = S().locations.find((l) => l.id === locId);
+    if (!loc || !(loc.type === "home" || loc.confirmed)) return false;
+    return !loc.address || !(loc.city || String(loc.address).includes(","));
+  };
   out.rows = included.map((t) => {
     const r = rec.get(t.id);
     const overridden = !!S().trips[t.id]?.demo_original_start;
     return {
+      address_missing: [...(missing(t.start_location_id) ? ["from"] : []), ...(missing(t.end_location_id) ? ["to"] : [])],
       trip_id: t.id,
       date: localDay(t.sort_time),
       time: r && !overridden ? r.time : timeText(t),
@@ -1403,6 +1727,7 @@ function importPreview(): Json {
   const s = S();
   const batch = clone(s.importPreview);
   batch.created_at = nowIso();
+  batch.summary.rows_restored ??= 0;
   s.imports = [batch, ...s.imports.filter((b) => b.id !== batch.id)];
   persist();
   return batch;
@@ -1590,12 +1915,11 @@ on("POST", "/trips/bulk", ({ body }) => {
 
 on("POST", "/trips/manual", ({ body }) => createManualTrip(body));
 on("DELETE", "/trips/:id", ({ m }) => {
-  const t = trip(m[1]);
-  if (t.source !== "manual") throw new HttpError(400, "Bara manuellt inlagda resor kan tas bort.", "not_manual");
-  t.state = "deleted";
+  deleteTrip(m[1]);
   persist();
   return ok204;
 });
+on("POST", "/trips/bulk-delete", ({ body }) => bulkDelete(Array.isArray(body.trip_ids) ? body.trip_ids : []));
 
 // Granskning
 on("GET", "/review", ({ query }) => reviewList(query));
@@ -1619,10 +1943,10 @@ on("POST", "/notifications/:id/snooze", ({ m }) => respond(m[1], { action: "LATE
 on("POST", "/notifications/review-rows/:id", ({ m, body }) => reviewRow(m[1], body.verdict));
 
 // Platser
-on("GET", "/locations", () => clone(S().locations.filter((l) => !l.merged_into_id)));
+on("GET", "/locations", () => S().locations.filter((l) => !l.merged_into_id).map(locationOut));
 on("GET", "/locations/meta", () => clone(S().locationMeta));
 on("GET", "/locations/suggestions", () => ({
-  types: clone(S().locations.filter((l) => !l.merged_into_id && l.suggested_type && !l.confirmed && l.suggested_type !== l.type)),
+  types: S().locations.filter((l) => !l.merged_into_id && l.suggested_type && !l.confirmed && l.suggested_type !== l.type).map(locationOut),
   merges: [],
 }));
 on("POST", "/locations", ({ body }) => createLocation(body));
@@ -1751,7 +2075,7 @@ on("POST", "/month-close/links/revoke", () => {
   persist();
   return null;
 });
-on("POST", "/month-close/:id/run", ({ m }) => runMonth(decodeURIComponent(m[1])));
+on("POST", "/month-close/:id/run", ({ m, query }) => runMonth(decodeURIComponent(m[1]), query.get("force") === "true"));
 
 // Översikten
 on("GET", "/dashboard/(summary|timeseries|destinations|routes|monthly)", ({ m, path, query }) => dashboard(m[1], path, query));

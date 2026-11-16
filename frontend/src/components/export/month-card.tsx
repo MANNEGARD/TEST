@@ -2,15 +2,16 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { ArrowRight, CalendarCheck, Clock, Download, RefreshCw } from "lucide-react";
+import { ArrowRight, CalendarCheck, Clock, Download, FileCheck, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ErrorState } from "@/components/ui/error-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { errorMessage } from "@/lib/api";
-import { formatDateTime, plural } from "@/lib/format";
+import { formatDateTime, formatDayMonth, formatTime, monthName, plural } from "@/lib/format";
 import type { ExportJob, MonthBlocker, MonthStatus } from "@/lib/exports-types";
 import { label, MONTH_STATE_LABELS } from "@/lib/labels";
 import { exportDownloadUrl, useExports, useMonthClose, useRunMonthClose } from "@/lib/queries/exports";
@@ -79,14 +80,35 @@ function NoteLine({ n }: { n: MonthBlocker }) {
   );
 }
 
-function stateText(s: MonthStatus, job: ExportJob | undefined): React.ReactNode {
+/** "16 nov 10:12" */
+function shortDateTime(value: string): string {
+  return `${formatDayMonth(value, false)} ${formatTime(value)}`;
+}
+
+/** "november" – månadens namn i löptext. */
+function monthWord(month: string): string {
+  return monthName(Number(month.slice(5, 7)));
+}
+
+function capitalize(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+function stateText(s: MonthStatus, job: ExportJob | undefined, current: boolean): React.ReactNode {
   switch (s.state) {
-    case "exported":
+    case "exported": {
+      const created = s.export_created_at ?? job?.created_at;
+      if (s.closed_early && created) {
+        return `Skapat ${shortDateTime(created)}, innan månaden var slut. Vid månadsskiftet kontrolleras månaden igen – ändras något kommer ett nytt underlag och en notis.`;
+      }
       return job
         ? `Klart. Underlaget skapades ${job.origin === "month_close" ? "automatiskt " : ""}${formatDateTime(job.created_at)}.`
         : "Klart. Underlaget är skapat.";
+    }
     case "stale":
-      return "Något har ändrats sedan underlaget skapades. En ny fil skapas vid nästa kontroll, och du får en notis.";
+      return current
+        ? "Något har ändrats sedan underlaget skapades. Ett nytt underlag skapas efter månadsskiftet, eller nu om du vill."
+        : "Något har ändrats sedan underlaget skapades. En ny fil skapas vid nästa kontroll, och du får en notis.";
     case "empty":
       return "Inga tjänsteresor – ingen fil behövs.";
     default: {
@@ -98,14 +120,81 @@ function stateText(s: MonthStatus, job: ExportJob | undefined): React.ReactNode 
   }
 }
 
-function MonthRow({ status, current, jobs }: { status: MonthStatus; current: boolean; jobs: ExportJob[] }) {
+/**
+ * Bekräftelsen för "Skapa underlaget nu" (POST /month-close/{månad}/run?force=true). `force`
+ * hoppar bara över väntan på månadsslutet – övriga kontroller gäller som vid månadsskiftet.
+ */
+function CreateNowDialog({
+  month,
+  renew,
+  open,
+  onOpenChange,
+}: {
+  month: string;
+  /** Ett underlag finns men något har ändrats ("Skapa nytt underlag nu"). */
+  renew: boolean;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
   const run = useRunMonthClose();
+  const name = monthWord(month);
+  const confirm = () =>
+    run.mutate(
+      { month, force: true },
+      {
+        onSuccess: (s) => {
+          onOpenChange(false);
+          if (s.state === "exported") toast.success(`Underlaget för ${name} är skapat.`);
+          else if (s.state === "empty") toast.success(`${capitalize(name)} har inga tjänsteresor – ingen fil behövs.`);
+          else if (s.state === "stale") toast.warning("Ett nytt underlag kan inte skapas än – se vad som väntar.");
+          else toast.warning("Underlaget kan inte skapas än – se vad som väntar.");
+        },
+        onError: (e) => toast.error(errorMessage(e)),
+      },
+    );
+  return (
+    <Dialog open={open} onOpenChange={(o) => !run.isPending && onOpenChange(o)}>
+      <DialogContent data-testid="month-create-now-dialog">
+        <DialogHeader>
+          <DialogTitle>{renew ? `Skapa ett nytt underlag för ${name} nu?` : `Skapa underlaget för ${name} nu?`}</DialogTitle>
+          <DialogDescription>
+            Underlaget skapas nu med de resor som finns i {name}. Samma kontroller som vid månadsskiftet gäller: obesvarade frågor, vetotiden för
+            antagna resor och kopplingen till Volvo. Väntar något får du veta vad, och då skapas ingen fil.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3 text-sm leading-relaxed text-fg-muted">
+          <p>Filen och länken skapas direkt. Länken kommer i telefonen, och filen finns här under Export. I filen står när den skapades.</p>
+          <p>
+            Vid månadsskiftet kontrollerar DriveLog {name} igen. Har en redovisad resa tillkommit eller ändrats skapas ett uppdaterat underlag och
+            du får en notis. Finns det då en obesvarad fråga om en tjänsteresa får du veta det. Annars händer inget mer.
+          </p>
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={run.isPending}>
+            Avbryt
+          </Button>
+          <Button variant="primary" onClick={confirm} loading={run.isPending} data-testid="month-create-now-confirm">
+            {run.isPending ? null : <FileCheck aria-hidden />} Skapa underlaget
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function MonthRow({ status, current, jobs, selfDriving }: { status: MonthStatus; current: boolean; jobs: ExportJob[]; selfDriving: boolean }) {
+  const run = useRunMonthClose();
+  const [creating, setCreating] = React.useState(false);
   const job = status.export_id ? jobs.find((j) => j.id === status.export_id) : undefined;
   const blockers = status.blockers.filter((b) => b.code !== "month_not_over");
   const notes = status.notes.filter((n) => !HIDDEN_NOTES.has(n.code) && n.text);
   const assumed = status.review_rows.filter((r) => r.approval_source === "assumed").length;
   const automatic = status.review_rows.length - assumed;
   const title = monthLabel(status.month);
+  // "Skapa underlaget nu": bara innevarande månad i självgående läge (run_due körs bara där).
+  const notOver = status.blockers.some((b) => b.code === "month_not_over");
+  const canCreateNow = current && selfDriving && (((status.state === "open" || status.state === "waiting") && notOver) || status.state === "stale");
+  const renew = status.state === "stale";
 
   const check = () =>
     run.mutate(status.month, {
@@ -135,9 +224,18 @@ function MonthRow({ status, current, jobs }: { status: MonthStatus; current: boo
               {run.isPending ? null : <RefreshCw aria-hidden />} Kontrollera nu
             </Button>
           ) : null}
+          {canCreateNow ? (
+            <Button size="sm" variant="secondary" onClick={() => setCreating(true)} data-testid="month-create-now">
+              <FileCheck aria-hidden /> {renew ? "Skapa nytt underlag nu" : "Skapa underlaget nu"}
+            </Button>
+          ) : null}
         </div>
       </div>
-      <p className="mt-1.5 text-[13px] text-fg-muted">{stateText(status, job)}</p>
+      <p className="mt-1.5 text-[13px] text-fg-muted" data-testid="month-state-text">
+        {stateText(status, job, current)}
+      </p>
+      {/* Hålls monterad även när läget byter efter svaret, så att kvittot hinner visas. */}
+      {current && selfDriving ? <CreateNowDialog month={status.month} renew={renew} open={creating} onOpenChange={setCreating} /> : null}
       {job?.origin === "month_close" && typeof job.link_downloads === "number" && job.link_downloads > 0 ? (
         <p className="mt-0.5 text-xs text-fg-muted">Hämtad {plural(job.link_downloads, "gång", "gånger")} via länken i notisen.</p>
       ) : null}
@@ -181,6 +279,7 @@ export function MonthCard() {
   const exports = useExports();
   const settings = useSettings();
   const manual = settings.data?.settings.automation?.mode === "manual";
+  const selfDriving = settings.data?.settings.automation?.mode === "self_driving";
 
   if (months.isError) {
     return (
@@ -217,7 +316,7 @@ export function MonthCard() {
       </div>
       <ul className="divide-y divide-border">
         {rows.map((m) => (
-          <MonthRow key={m.month} status={m} current={m === current} jobs={exports.data ?? []} />
+          <MonthRow key={m.month} status={m} current={m === current} jobs={exports.data ?? []} selfDriving={selfDriving} />
         ))}
       </ul>
     </Card>

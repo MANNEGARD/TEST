@@ -26,7 +26,7 @@ import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
@@ -316,11 +316,19 @@ def _raw_from_leg(
         else:
             flags.append("no_position")
         complete = False
+    gap_info: dict[str, Any] | None = None
     if index == 0:
         unobserved = (leg.steps[0].obs.fetched_at - anchor.last_seen_at).total_seconds() / 60
         if unobserved > float(settings.get("max_unobserved_minutes", 45)):
             flags.append("collection_gap")
             possible_missed = True
+            # När hämtningen låg nere och hur mycket mätaren ökade under tiden (1.3.0).
+            first_odo = leg.steps[0].obs.odometer_km
+            gap_info = {
+                "from": anchor.last_seen_at.isoformat(),
+                "to": leg.steps[0].obs.fetched_at.isoformat(),
+                "odometer_km": round(first_odo - odo_s, 1) if first_odo is not None and odo_s is not None else None,
+            }
     if leg_count > 1:
         flags.append("split_by_position_reports")
     if possible_missed:
@@ -415,6 +423,7 @@ def _raw_from_leg(
         possible_missed_trips=possible_missed,
         quality_flags=sorted(set(flags)),
         observation_ids=list(dict.fromkeys(obs_ids)),
+        collection_gap=gap_info,
         updated_by="system",
     )
     seg.set_raw_sort_time(raw)
@@ -577,6 +586,93 @@ def _estimate_existing(db: Session, vehicle: Vehicle, user_id: uuid.UUID, run_pi
     db.flush()
 
 
+# --------------------------------------------------------------- uppehåll i hämtningen (1.3.0)
+
+_WEEKDAYS = ("mån", "tis", "ons", "tors", "fre", "lör", "sön")
+GAP_ADVICE_LONG = "Importera Volvos körjournal för dagen under Import, eller dela upp resan i tjänst och privat."
+GAP_ADVICE_SHORT = "Importera gärna Volvos körjournal."
+
+
+@dataclass(frozen=True)
+class CollectionGap:
+    """När hämtningen från Volvo låg nere före en resa, och hur mycket mätaren ökade."""
+
+    start: datetime
+    end: datetime
+    odometer_km: float | None
+
+
+def parse_collection_gap(value: Any) -> CollectionGap | None:
+    """``RawTrip.collection_gap`` som CollectionGap, eller None (saknas eller trasigt)."""
+    if not isinstance(value, dict):
+        return None
+    try:
+        start = datetime.fromisoformat(str(value.get("from")))
+        end = datetime.fromisoformat(str(value.get("to")))
+    except ValueError:
+        return None
+    if start.tzinfo is None or end.tzinfo is None:
+        return None
+    km = value.get("odometer_km")
+    odo = float(km) if isinstance(km, (int, float)) and not isinstance(km, bool) else None
+    return CollectionGap(start=start, end=end, odometer_km=odo)
+
+
+def collection_gap_of(trip: LogicalTrip) -> CollectionGap | None:
+    """Uppehållet före resan: första delresan (i ordning) som har sparade uppgifter."""
+    for raw in seg.ordered_raws(trip):
+        gap = parse_collection_gap(raw.collection_gap)
+        if gap is not None:
+            return gap
+    return None
+
+
+def _km_text(km: float) -> str:
+    value = round(km, 1)
+    return f"{value:.0f}" if float(value).is_integer() else f"{value:.1f}".replace(".", ",")
+
+
+def _span(gap: CollectionGap, tz: Any, *, form: str) -> tuple[str, str]:
+    """(från, till) som text i användarens tidszon."""
+    a, b = gap.start.astimezone(tz), gap.end.astimezone(tz)
+    if a.date() == b.date():
+        if form == "long":
+            return f"{_WEEKDAYS[a.weekday()]} {a.day}/{a.month} {a:%H:%M}", f"{b:%H:%M}"
+        return f"{a:%H:%M}", f"{b:%H:%M}"
+    if form == "long":
+        return (f"{_WEEKDAYS[a.weekday()]} {a.day}/{a.month} {a:%H:%M}",
+                f"{_WEEKDAYS[b.weekday()]} {b.day}/{b.month} {b:%H:%M}")
+    return f"{_WEEKDAYS[a.weekday()]} {a:%H:%M}", f"{_WEEKDAYS[b.weekday()]} {b:%H:%M}"
+
+
+def collection_gap_text(gap: CollectionGap | None, tz: Any, *, form: Literal["long", "short"]) -> str:
+    """Varningen för ett uppehåll i hämtningen: när, hur många km och vad ägaren kan göra.
+
+    ``long`` används i webben och i granskningsärendet, ``short`` i telefonen. Utan sparade
+    uppgifter (resor från före 1.3.0) blir texten allmän.
+    """
+    if tz is None:
+        from zoneinfo import ZoneInfo
+
+        tz = ZoneInfo(settings_svc.default_timezone())
+    if gap is None:
+        if form == "long":
+            return f"Hämtningen från Volvo hade ett uppehåll före resan, så den kan vara flera körningar. {GAP_ADVICE_LONG}"
+        return "Kan vara flera körningar."
+    lo, hi = _span(gap, tz, form=form)
+    if form == "long":
+        head = f"Hämtningen från Volvo låg nere mellan {lo} och {hi}."
+        if gap.odometer_km is not None:
+            middle = f"Under tiden ökade mätaren med {_km_text(gap.odometer_km)} km, så resan kan vara flera körningar."
+        else:
+            middle = "Resan kan vara flera körningar."
+        return f"{head} {middle} {GAP_ADVICE_LONG}"
+    if gap.odometer_km is not None:
+        return (f"Volvo-hämtningen låg nere {lo}–{hi} och mätaren ökade {_km_text(gap.odometer_km)} km – "
+                f"kan vara flera körningar. {GAP_ADVICE_SHORT}")
+    return f"Volvo-hämtningen låg nere {lo}–{hi} – kan vara flera körningar. {GAP_ADVICE_SHORT}"
+
+
 # --------------------------------------------------------------- avstämning mot import
 
 
@@ -628,6 +724,26 @@ def _transfer_decision(db: Session, source: LogicalTrip, target: LogicalTrip, ac
     )
 
 
+def _decision_summary(trip: LogicalTrip | None) -> dict[str, Any] | None:
+    """Ägarens beslut på en resa: kategori och (bekräftat) ärende, och en text att visa."""
+    if trip is None:
+        return None
+    purpose = trip.purpose.strip() if trip.purpose and trip.purpose_confirmed and trip.purpose.strip() else None
+    if trip.category == Category.WORK:
+        text = f"Arbete – {purpose}" if purpose else "Arbete"
+    elif trip.category == Category.PRIVATE:
+        text = "Privat"
+    else:
+        text = "Delad mellan arbete och privat" if trip.has_mixed_categories else "Ej avgjord"
+    return {"category": trip.category, "purpose": purpose, "text": text}
+
+
+def _previous_text(previous: dict[str, Any] | None) -> str:
+    if previous is None:
+        return ""
+    return f" Ditt beslut var: {previous['text']}. Lägg in det på rätt resa nedan."
+
+
 def _void_reconstructed(db: Session, raw: RawTrip, superseded_by: RawTrip, actor: Actor, now: datetime) -> LogicalTrip | None:
     """Makulerar en rekonstruerad resa (originalposten finns kvar, märkt som ersatt)."""
     from app.services.trips import merge
@@ -660,6 +776,13 @@ def _void_reconstructed(db: Session, raw: RawTrip, superseded_by: RawTrip, actor
             by=actor.label,
             resolution={"superseded_by_import": str(superseded_by.id)},
         )
+        # En öppen fråga i telefonen om den ersatta resan avbryts direkt (F3).
+        try:
+            from app.services.ha import notifier
+
+            notifier.cancel_for_trip(db, trip.id, force=True)
+        except Exception:  # notiser får aldrig stoppa avstämningen
+            logger.exception("Kunde inte avbryta frågor om en ersatt resa")
     return trip
 
 
@@ -724,6 +847,9 @@ def reconcile_with_imports(db: Session, vehicle: Vehicle, *, actor: Actor, now: 
         rec_trip = _active_trip_for(db, rec.id)
         single_rec_trip = rec_trip if (rec_trip is not None and rec_trip.segment_count == 1) else None
         had_decision = _has_user_decision(rec_trip)
+        # Ägarens beslut i klartext, läst före makuleringen (F8).
+        previous = _decision_summary(rec_trip) if had_decision else None
+        untransferred = False
         exact = (
             len(hits) == 1
             and abs(hits[0].odometer_start - rec.odometer_start) <= tol
@@ -757,9 +883,11 @@ def reconcile_with_imports(db: Session, vehicle: Vehicle, *, actor: Actor, now: 
                         "fattade i DriveLog, med olika kategori. Originalresans beslut har behållits – kontrollera."
                     )
             elif had_decision:
+                untransferred = True
                 problem = (
                     "Ditt beslut för en rekonstruerad resa kunde inte föras över automatiskt eftersom resan "
                     "ingick i en sammanslagning. Kontrollera den importerade resan."
+                    + _previous_text(previous)
                 )
             out["exact"] += 1
         else:
@@ -770,9 +898,11 @@ def reconcile_with_imports(db: Session, vehicle: Vehicle, *, actor: Actor, now: 
                 _learn_positions(db, user_id, rec, first, start=abs(first.odometer_start - rec.odometer_start) <= tol, end=False)
                 _learn_positions(db, user_id, rec, last, start=False, end=abs(last.odometer_end - rec.odometer_end) <= tol)
             if had_decision:
+                untransferred = True
                 problem = (
                     "En rekonstruerad resa med ditt beslut motsvarar flera eller delar av importerade resor. "
                     "Beslutet kunde inte föras över automatiskt."
+                    + _previous_text(previous)
                 )
             elif not full:
                 problem = (
@@ -796,6 +926,11 @@ def reconcile_with_imports(db: Session, vehicle: Vehicle, *, actor: Actor, now: 
                     "type": "reconcile",
                     "reconstructed_raw_trip_id": str(rec.id),
                     "imported_raw_trip_ids": [str(i.id) for i in hits],
+                    **(
+                        {"previous_category": previous["category"], "previous_purpose": previous["purpose"]}
+                        if previous is not None and untransferred
+                        else {}
+                    ),
                 },
             )
             out["review_items"] += 1 if created else 0

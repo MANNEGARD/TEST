@@ -10,6 +10,13 @@
 
 Ett oförändrat avtryck (``rows_fingerprint``) ger aldrig en ny fil. Ändras det efter
 exporten blir månaden ``stale``, och vid nästa kontroll ersätts filen av en ny.
+
+Underlaget i förväg (1.3.0): ``run_for(force=True)`` för innevarande månad hoppar bara över
+väntan på månadsslutet – övriga kontroller gäller som vanligt. Filen gäller hela
+kalendermånaden och visar när den skapades. Vid månadsskiftet kontrolleras månaden igen
+som vilken exporterad månad som helst: oförändrat avtryck → ingenting, ändrat → nytt
+underlag. Väntar då en fråga om en tjänsteresa (som inte ändrar avtrycket, eftersom bara
+redovisade resor ingår) får ägaren den vanliga "väntar"-notisen.
 """
 
 from __future__ import annotations
@@ -17,7 +24,7 @@ from __future__ import annotations
 import logging
 import uuid
 from collections import Counter, defaultdict
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import date, datetime, timedelta
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
@@ -64,6 +71,9 @@ WAITING_NOTICE_EVERY = timedelta(days=3)
 WAITING_NOTICE_MAX = 3
 UPDATE_NOTICE_EVERY = timedelta(days=1)
 RECHECK_MONTHS = 3  # så långt bakåt run_due följer upp väntande och exporterade månader
+# Blockerare som löser sig själva utan ägaren: ger ingen "väntar"-notis för en månad som
+# stängts i förväg (filen finns redan; nästa kontroll tar hand om dem).
+SELF_RESOLVING = ("waiting_final_fetch", "addresses_pending")
 
 QUESTION_KINDS = (ReviewKind.CATEGORY, ReviewKind.PURPOSE, ReviewKind.TAX_UNCERTAIN, ReviewKind.MIXED_ALLOCATION)
 OPEN_ITEM_STATES = (ReviewState.OPEN, ReviewState.SNOOZED)
@@ -96,6 +106,9 @@ class MonthStatus:
     blockers: list[Blocker]
     notes: list[Blocker]
     export_id: uuid.UUID | None
+    # Underlaget skapades innan perioden var slut (månaden stängdes i förväg).
+    closed_early: bool = False
+    export_created_at: datetime | None = None
 
 
 @dataclass
@@ -477,20 +490,25 @@ def _evaluate(
         notes.append(home_note)
 
     has_export = record is not None and record.export_id is not None
+    export = db.get(ExportJob, record.export_id) if has_export else None  # type: ignore[union-attr]
     state: Literal["open", "waiting", "exported", "stale", "empty"]
-    if any(b.code == "month_not_over" for b in blockers):
-        state = "open"
-    elif has_export:
+    # En fil som finns avgör läget, även innan månaden är slut (underlaget skapat i förväg).
+    if has_export:
         changed = record.rows_fingerprint != fingerprint  # type: ignore[union-attr]
         state = "stale" if changed or record.state == MonthCloseState.STALE else "exported"  # type: ignore[union-attr]
+    elif any(b.code == "month_not_over" for b in blockers):
+        state = "open"
     elif blockers:
         state = "waiting"
     elif not journal.rows:
         state = "empty"
     else:
         state = "open"  # komplett och klar att skapa underlaget
+    created_at = export.created_at if export is not None else None
     status = MonthStatus(vehicle_id=vehicle.id, month=key, state=state, blockers=blockers, notes=notes,
-                         export_id=record.export_id if record is not None else None)
+                         export_id=record.export_id if record is not None else None,
+                         closed_early=created_at is not None and created_at < end,
+                         export_created_at=created_at)
     return _Facts(status=status, fingerprint=fingerprint, rows=len(journal.rows), start=start, end=end,
                   record=record)
 
@@ -556,8 +574,10 @@ def run_for(
 ) -> MonthStatus:
     """Kontrollerar en månad och skapar underlaget när den är komplett.
 
-    ``force`` hoppar bara över väntan på månadsslutet. ``notify_waiting`` (från ``run_due``)
-    skickar notisen om vad som väntar; en kontroll från webben gör det inte.
+    ``force`` hoppar bara över väntan på månadsslutet (och, när en fil redan finns och något
+    har ändrats, steget att först markera månaden: den nya filen skapas direkt om inget
+    väntar). ``notify_waiting`` (från ``run_due``) skickar notisen om vad som väntar; en
+    kontroll från webben gör det inte.
     """
     facts = _evaluate(db, user_id=user_id, vehicle=vehicle, month=month, now=now, force=force)
     status = facts.status
@@ -577,8 +597,9 @@ def run_for(
         job = _create_export(db, user_id=user_id, vehicle=vehicle, facts=facts, now=now)
         record.state, record.export_id, record.rows_fingerprint = MonthCloseState.EXPORTED, job.id, facts.fingerprint
         audit.record(db, audit.Actor("system", "month_close"), "month_close.exported", "month_close", record.id,
-                     after={"month": status.month, "export_id": str(job.id)}, user_id=user_id)
-        status.state, status.export_id = "exported", job.id
+                     after={"month": status.month, "export_id": str(job.id), "closed_early": now < facts.end},
+                     user_id=user_id)
+        _set_export(status, job, facts)
         _notify_ready(db, record, status, job, now, update=False)
     elif status.state == "empty":
         record.state = MonthCloseState.EMPTY
@@ -589,7 +610,9 @@ def run_for(
             _notify_waiting(db, record, status, now)
     elif status.state == "stale":
         changed = record.rows_fingerprint != facts.fingerprint
-        if record.state != MonthCloseState.STALE:
+        # Ägarens tryck (force) på en ändrad månad skapar den nya filen direkt (F5).
+        direct = force and changed and not real_blockers
+        if record.state != MonthCloseState.STALE and not direct:
             # Första gången ändringen syns: månaden markeras, nästa kontroll skapar filen.
             record.state = MonthCloseState.STALE
             audit.record(db, audit.Actor("system", "month_close"), "month_close.stale", "month_close", record.id,
@@ -604,7 +627,7 @@ def run_for(
             audit.record(db, audit.Actor("system", "month_close"), "month_close.superseded", "month_close",
                          record.id, after={"month": status.month, "export_id": str(job.id),
                                            "previous_export_id": str(old.id) if old else None}, user_id=user_id)
-            status.state, status.export_id = "exported", job.id
+            _set_export(status, job, facts)
             _notify_ready(db, record, status, job, now, update=old is not None)
         elif changed and not real_blockers:
             # Inga tjänsteresor kvar: den gamla filen återkallas (länken ger 410) och
@@ -618,14 +641,27 @@ def run_for(
                          record.id, after={"month": status.month,
                                            "previous_export_id": str(old.id) if old else None}, user_id=user_id)
             status.state, status.export_id = "empty", None
+            status.closed_early, status.export_created_at = False, None
             _notify_ready(db, record, status, None, now, update=False)
     elif status.state == "exported":
         record.state = MonthCloseState.EXPORTED
         job = db.get(ExportJob, record.export_id) if record.export_id else None
         if job is not None:
             _notify_ready(db, record, status, job, now, update=_replaces_older(db, job))
+    if notify_waiting and status.state in ("exported", "stale") and status.closed_early:
+        # Stängd i förväg: en tjänsteresa som väntar på svar ändrar inte avtrycket (bara
+        # redovisade resor ingår). Ägaren får den vanliga "väntar"-notisen; filen finns kvar.
+        waiting = [b for b in real_blockers if b.code not in SELF_RESOLVING]
+        if waiting:
+            _notify_waiting(db, record, replace(status, blockers=waiting), now)
     db.flush()
     return status
+
+
+def _set_export(status: MonthStatus, job: ExportJob, facts: _Facts) -> None:
+    status.state, status.export_id = "exported", job.id
+    status.export_created_at = job.created_at
+    status.closed_early = job.created_at is not None and job.created_at < facts.end
 
 
 def _replaces_older(db: Session, job: ExportJob) -> bool:

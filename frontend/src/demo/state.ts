@@ -16,6 +16,16 @@ export function poolTripId(n: number): string {
   return `00000000-0000-4000-8000-${String(n + 1).padStart(12, "0")}`;
 }
 
+/**
+ * De sista id:na i uppsättningen är reserverade för demots importerade resor (1.3.0), så att
+ * de har förbyggda sidor. Resor som skapas under körning får de övriga.
+ */
+export const IMPORTED_TRIPS = 3;
+
+export function importedTripId(n: number): string {
+  return poolTripId(POOL_SIZE - 1 - n);
+}
+
 export function poolQuestionId(n: number): string {
   return `de0000000000${(n + 1).toString(16).padStart(4, "0")}`;
 }
@@ -56,6 +66,8 @@ export interface DemoState {
   /** Tjänsteställen och mätarställningar (Inställningar), fylls från inspelningen. */
   workplaces?: Json[];
   odometer?: Json[];
+  /** Tillägget för 1.3.0 (importerade resor, uppehåll i hämtningen, nya inställningar) är inlagt. */
+  v130?: boolean;
 }
 
 type Runtime = "seedNow" | "homeMarked" | "imports" | "linksRevokedAt" | "nextTrip" | "nextQuestion";

@@ -62,6 +62,28 @@ def _q_path(public_id: str) -> str:
     return f"/m/q/{public_id}"
 
 
+def _trip_tz(db: Session, trip: LogicalTrip) -> tzinfo:
+    from app.models import Vehicle
+    from app.services import settings as settings_svc
+
+    vehicle = db.get(Vehicle, trip.vehicle_id)
+    if vehicle is None:
+        from zoneinfo import ZoneInfo
+
+        return ZoneInfo(settings_svc.default_timezone())
+    return settings_svc.user_timezone(db, vehicle.owner_user_id)
+
+
+def collection_gap_short(trip: LogicalTrip, tz: tzinfo) -> str | None:
+    """Kort varning om ett uppehåll i hämtningen före resan, eller None (byggkontraktet 3.A.3):
+    när hämtningen låg nere och hur många km mätaren ökade under tiden."""
+    if "collection_gap" not in set(trip.quality_flags or []):
+        return None
+    from app.services.volvo import detection
+
+    return detection.collection_gap_text(detection.collection_gap_of(trip), tz, form="short")
+
+
 def classify(db: Session, trip: LogicalTrip, public_id: str, *, hide_locations: bool) -> dict[str, Any]:
     origin, dest = trip_labels(db, trip)
     route = f"{origin} → {dest}"
@@ -69,6 +91,9 @@ def classify(db: Session, trip: LogicalTrip, public_id: str, *, hide_locations: 
     question = "Var detta arbete eller privat?"
     if trip.category in (Category.WORK, Category.PRIVATE):
         question += f" Förslag: {'Arbete' if trip.category == Category.WORK else 'Privat'}."
+    gap_text = collection_gap_short(trip, _trip_tz(db, trip))
+    if gap_text:
+        question += f" {gap_text}"
     detail = f"Ny resa: {route}. {distance}. {question}"
     message = f"Ny resa: {distance}. {question}" if hide_locations else detail
     return {
@@ -298,7 +323,12 @@ def classify_v2(
     origin, dest = place_labels(db, trip)
     day, distance = fmt_day(trip.ended_at or trip.sort_time, tz), fmt_mil(trip.distance_km)
     multi = is_multi(trip)
-    tail = "Tjänst eller privat?" + (f" {MULTI_TEXT}" if multi else "")
+    gap_text = collection_gap_short(trip, tz)
+    if gap_text:
+        # Uppehåll i hämtningen: när och hur långt, och att importen löser det.
+        tail = f"Tjänst eller privat? {gap_text}"
+    else:
+        tail = "Tjänst eller privat?" + (f" {MULTI_TEXT}" if multi else "")
     detail = f"{day} {fmt_trip_times(trip, tz)} · {origin} → {dest} · {distance}. {tail}"
     message = f"{day} · {distance}. {tail}" if hide_locations else detail
     acts: list[dict[str, Any]] = []
@@ -451,9 +481,13 @@ def _work_totals(summary: dict[str, Any] | None) -> dict[str, Any]:
 
 def month_ready(
     month: str, *, summary: dict[str, Any] | None, notes: list[Any], export_id: Any | None,
-    previous: dict[str, Any] | None = None,
+    previous: dict[str, Any] | None = None, early: bool = False, created: str | None = None,
 ) -> dict[str, Any]:
-    """"Oktober klart: 23 tjänsteresor, 412 mil, 10 300 kr, varav 3 antagna" med länken."""
+    """"Oktober klart: 23 tjänsteresor, 412 mil, 10 300 kr, varav 3 antagna" med länken.
+
+    ``early``: filen skapades innan månaden var slut ("November: underlaget skapat",
+    ``created`` = dagen som text, t.ex. "16/11").
+    """
     name = month_name(month)
     assumed_n = _note_count(notes, "assumed")
     missing_start = _note_count(notes, "missing_start_time")
@@ -477,12 +511,19 @@ def month_ready(
             d_trips = trips_n - int(previous.get("trips") or 0)
             d_km = round(float(summary.get("km") or 0) - float(previous.get("km") or 0))
             message = f"{d_trips:+d} {'resa' if abs(d_trips) == 1 else 'resor'}, {d_km:+d} km"
+        elif early:
+            title = f"{name}: underlaget skapat"
+            message = ", ".join(parts)
         else:
             title = f"{name} klart"
             message = ", ".join(parts)
         if assumed_n:
             message += f", varav {assumed_n} {'rad antagen' if assumed_n == 1 else 'rader antagna'} – se dem innan du skickar"
         message += "."
+        if early and previous is None:
+            when = f" {created}" if created else ""
+            message += (f" Skapat{when} innan månaden var slut – ändras något kommer ett nytt underlag "
+                        "efter månadsskiftet.")
         acts.append({"key": A.OPEN, "title": "Öppna underlaget", "uri": f"{A.EXPORT_LINK_PREFIX}{export_id}"})
     if missing_start:
         message += f" {_count(missing_start, 'resa saknar', 'resor saknar')} starttid."

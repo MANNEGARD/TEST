@@ -128,6 +128,9 @@ class SimpleRow:
     km: float
     mixed: bool = False  # resan innehåller även privat körning (endast tjänstedelen redovisas)
     time_note: bool = False  # tiden behöver fotnoten om "ca" och okänd starttid
+    # Start ("from") och/eller mål ("to") saknar adress (samma regel som kontrollen
+    # place_address_missing). Bara förhandsvisningen; ingår inte i avtrycket.
+    address_missing: tuple[str, ...] = ()
 
     @property
     def to_text(self) -> str:
@@ -148,6 +151,7 @@ class SimpleRow:
             "odometer_start": _odometer(self.odometer_start),
             "odometer_end": _odometer(self.odometer_end),
             "km": self.km,
+            "address_missing": list(self.address_missing),
         }
 
 
@@ -169,6 +173,9 @@ class SimpleJournal:
     show_amount: bool = True
     rows: list[SimpleRow] = field(default_factory=list)
     excluded: dict[str, Any] = field(default_factory=dict)
+    # "16 november 2026 kl. 10:12, innan månaden var slut" när underlaget skapas innan
+    # perioden är slut (månadens underlag i förväg); annars tom och raden utelämnas.
+    created_text: str = ""
 
     @property
     def title(self) -> str:
@@ -225,6 +232,7 @@ class SimpleJournal:
             "employer": self.employer_name or None,
             "vehicle": self.vehicle_label,
             "registration_number": self.registration_number or None,
+            "created": self.created_text or None,
         }
 
     def as_dict(self) -> dict[str, Any]:
@@ -367,6 +375,10 @@ def build_row(
     live = getattr(trip, "source", None) in LIVE_SOURCES
     start = locs.get(trip.start_location_id) if trip.start_location_id else None
     end = locs.get(trip.end_location_id) if trip.end_location_id else None
+    missing = tuple(
+        which for which, loc, text in (("from", start, trip.start_address), ("to", end, trip.end_address))
+        if _address_missing(loc, text, locs)
+    )
     return SimpleRow(
         trip_id=trip.id,
         date=when.astimezone(tz).date() if when is not None else None,
@@ -380,7 +392,25 @@ def build_row(
         km=km,
         mixed=per_category["private"] + per_category["undecided"] > common.KM_EPS,
         time_note=needs_time_note(trip, time),
+        address_missing=missing,
     )
+
+
+def _address_missing(loc: Any, text: str | None, locs: dict[uuid.UUID, Any]) -> bool:
+    """Saknar platsen adress i underlaget? Samma regel som kontrollen place_address_missing
+    (place_text.missing_address_places)."""
+    place = place_text.place_for(loc, text, locs)
+    return place_text.needs_address(place) or (place is not None and place_text._home_word(place, None, None))
+
+
+def created_text(generated_at: datetime | None, start: datetime | None, end: datetime | None, tz: ZoneInfo) -> str:
+    """"16 november 2026 kl. 10:12, innan månaden var slut" när underlaget skapas innan
+    perioden är slut, annars tom text (då står ingen rad "Skapad" i filen)."""
+    if generated_at is None or end is None or generated_at >= end:
+        return ""
+    local = generated_at.astimezone(tz)
+    what = "månaden" if whole_month(start, end, tz) is not None else "perioden"
+    return f"{local.day} {MONTHS_SV[local.month - 1].lower()} {local.year} kl. {local:%H:%M}, innan {what} var slut"
 
 
 def excluded_counts(trips: list[LogicalTrip]) -> dict[str, Any]:
@@ -472,10 +502,12 @@ def build_journal(
     rate_per_mil: float = 0.0,
     show_amount: bool = True,
     show_via: bool = True,
+    generated_at: datetime | None = None,
 ) -> SimpleJournal:
     """Väljer ut periodens redovisade tjänsteresor, sorterade på starttid.
 
     ``show_via`` falskt utelämnar mellanstoppen ("via …") under målet (inställningen export.show_via).
+    ``generated_at`` är när filen skapas; före periodens slut får sidhuvudet raden "Skapad".
     """
     reported = [t for t in trips if common.is_reported(t)]
     # Stabil sortering: resor utan känd tid (ovanligt) behåller sin plats sist.
@@ -500,6 +532,7 @@ def build_journal(
         show_amount=bool(show_amount),
         rows=rows,
         excluded=excluded_counts(trips),
+        created_text=created_text(generated_at, start, end, tz),
     )
 
 
@@ -670,6 +703,8 @@ def write_workbook(path: Path, journal: SimpleJournal) -> dict[str, Any]:
         info.append(("Arbetsgivare", journal.employer_name))  # raden utelämnas när arbetsgivare saknas
     if journal.vehicle_text:
         info.append(("Bil", journal.vehicle_text))
+    if journal.created_text:
+        info.append(("Skapad", journal.created_text))  # bara när filen skapas före periodens slut
     # Uppgifterna står i två spalter (vänster: period och förare, höger: arbetsgivare och bil)
     # så att sidhuvudet tar så lite höjd som möjligt.
     info_rows = (len(info) + 1) // 2

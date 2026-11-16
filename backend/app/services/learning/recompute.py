@@ -248,7 +248,7 @@ def _recompute(vehicle_id: uuid.UUID) -> None:
     from app.services import settings as settings_svc
     from app.services.classify import autopilot
     from app.services.learning import feedback, patterns
-    from app.services.trips import gaps, merge, pipeline
+    from app.services.trips import gaps, merge, pipeline, review
 
     with _step(vehicle_id, []) as db:
         vehicle = db.get(Vehicle, vehicle_id)
@@ -266,6 +266,14 @@ def _recompute(vehicle_id: uuid.UUID) -> None:
         if vehicle is not None:
             autopilot.run_vehicle(db, user_id=user_id, vehicle=vehicle, actor=audit.SYSTEM)
 
+    # Kategoriregler för sammanslagning: resor som blivit avgjorda kan slås ihop med grannen
+    # av samma kategori; frågorna går till telefonen som i pipelinen (byggkontraktet 2.A.3).
+    with _step(vehicle_id) as db:
+        vehicle = db.get(Vehicle, vehicle_id)
+        if vehicle is not None:
+            questions = feedback.merge_after_decisions(db, user_id=user_id, vehicle=vehicle)
+            feedback.notify_merge_questions(db, user_id=user_id, vehicle=vehicle, questions=questions)
+
     scope: str | None = None
     for ids in _chunks(_active_ids(vehicle_id)):
         with _step(vehicle_id, ids) as db:
@@ -278,3 +286,5 @@ def _recompute(vehicle_id: uuid.UUID) -> None:
         tol = float(settings_svc.get_section(db, user_id, "merge")["odometer_tolerance_km"])
         gaps.recompute(db, vehicle_id, tol, scope=settings_svc.journal_scope(db, user_id))
         merge.close_stale_overlaps(db, vehicle_id, odometer_tolerance=tol)
+        # Ärenden för resor som inte längre är aktiva (t.ex. en borttagen resa).
+        review.close_orphaned(db, vehicle_id)

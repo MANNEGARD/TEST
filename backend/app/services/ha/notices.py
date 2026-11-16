@@ -162,9 +162,14 @@ def queue_month_ready(
         if older is not None:
             previous = dict(older.summary or {})
     _supersede_open_monthly(db, user_id, status.vehicle_id, month)
+    early = bool(getattr(status, "closed_early", False)) and export is not None and previous is None
+    created = None
+    if early and export is not None and export.created_at is not None:
+        local = export.created_at.astimezone(settings_svc.user_timezone(db, user_id))
+        created = f"{local.day}/{local.month}"
     built = messages.month_ready(
         month, summary=dict(export.summary or {}) if export is not None else None, notes=list(status.notes or []),
-        export_id=export.id if export is not None else None, previous=previous,
+        export_id=export.id if export is not None else None, previous=previous, early=early, created=created,
     )
     extra: dict[str, Any] = {}
     if export is not None:

@@ -8,6 +8,7 @@
  */
 
 import type { components } from "./api-types";
+import type { PositionLookup } from "./types";
 
 type S = components["schemas"];
 
@@ -38,6 +39,11 @@ export interface PlaceStats {
 
 export interface Place extends Omit<S["LocationOut"], "stats"> {
   stats: PlaceStats;
+  /**
+   * Adressuppslaget när platsen har adress men saknar position (1.3.0). Valfritt så att typen
+   * fungerar före och efter att api-types.ts genererats om. `coordinate_source` kan då vara "geocoded".
+   */
+  position_lookup?: PositionLookup | null;
 }
 
 /** Body för POST /locations och PATCH /locations/{id} (LocationIn). */

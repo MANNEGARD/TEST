@@ -55,6 +55,11 @@ class KnownLocation(Base):
     osm_class: Mapped[str | None] = mapped_column(String(60), nullable=True)  # t.ex. "building=warehouse"
     place_kind: Mapped[str | None] = mapped_column(String(10), nullable=True)  # work | never | unclear
     assumption: Mapped[str | None] = mapped_column(String(20), nullable=True)  # customer | revoked
+    # Adress → position (1.3.0): ok | not_found | ambiguous | failed; tom = inte prövad än.
+    forward_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    forward_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    forward_attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    forward_next_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
 
@@ -110,6 +115,9 @@ class LocationPattern(Base):
     is_manual_rule: Mapped[bool] = mapped_column(Boolean, default=False)
     manual_category: Mapped[str | None] = mapped_column(String(20), nullable=True)
     manual_purpose: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Egen regel med fast text (1.3.0): NULL/"unless_calendar" = när kalendern inte säger
+    # något annat (standard), "always" = alltid regelns text.
+    manual_purpose_mode: Mapped[str | None] = mapped_column(String(20), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
 
     __table_args__ = (UniqueConstraint("owner_user_id", "pattern_key", name="uq_pattern_owner_key"),)
@@ -197,6 +205,9 @@ class CalendarEvent(Base):
     latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     body_preview: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Deltagare (1.3.0): [{"name", "email", "role": "organizer" | "attendee"}]; tom när
+    # hela bokningen inte läses (calendar.store_body_preview).
+    attendees: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONType, nullable=True)
     series_master_id: Mapped[str | None] = mapped_column(String(400), nullable=True)
     is_demo: Mapped[bool] = mapped_column(Boolean, default=False)
     fetched_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)

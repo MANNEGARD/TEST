@@ -24,7 +24,7 @@ import { PositionPicker, type LatLon } from "./position-picker";
 const COORDINATE_SOURCE: Record<string, string> = {
   user: "satt av dig",
   api: "från bilens position",
-  geocoded: "från adressen",
+  geocoded: "ungefärlig position ur adressen",
   demo: "demodata",
 };
 
@@ -181,6 +181,11 @@ function PlaceEditor({
     !!address.trim() &&
     address.split(",").filter((part) => part.trim()).length < 2 &&
     !(address.trim() === (place.address ?? "").trim() && place.city);
+
+  // Adressuppslaget (1.3.0) gäller den sparade adressen – inte en ändrad i fältet.
+  const addressUnchanged = address.trim() === (place.address ?? "").trim();
+  const lookupPending = addressUnchanged && place.position_lookup === "pending";
+  const lookupFailed = addressUnchanged && (place.position_lookup === "not_found" || place.position_lookup === "ambiguous");
 
   const clearPosition = () => {
     setPos(null);
@@ -463,6 +468,22 @@ function PlaceEditor({
                     {formatNumber(pos.lat, 5, 5)}, {formatNumber(pos.lon, 5, 5)}
                   </span>
                   {patch.latitude === undefined && place.coordinate_source ? <span>· {COORDINATE_SOURCE[place.coordinate_source] ?? place.coordinate_source}</span> : null}
+                </>
+              ) : lookupPending ? (
+                <>
+                  <MapPinned className="size-3.5 shrink-0" aria-hidden />
+                  <span data-testid="place-position-lookup">
+                    <span className="font-medium text-fg">Positionen slås upp.</span> DriveLog slår upp adressen på kartan i bakgrunden, lite i
+                    taget. Du kan också sätta ut platsen själv.
+                  </span>
+                </>
+              ) : lookupFailed ? (
+                <>
+                  <MapPinOff className="size-3.5 shrink-0 text-warn-ink" aria-hidden />
+                  <span data-testid="place-position-lookup">
+                    <span className="font-medium text-fg">Adressen hittades inte på kartan.</span> Kartan hittade inte adressen eller gav flera
+                    möjliga platser. Sätt ut platsen på kartan ovan, eller ange koordinaterna, och spara.
+                  </span>
                 </>
               ) : (
                 <>

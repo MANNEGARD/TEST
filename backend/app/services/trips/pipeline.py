@@ -1,8 +1,11 @@
 """Gemensam efterbearbetning när resor tillkommit eller ändrats.
 
-Ordningen är: starttid ur sträckan (K4) → sammanslagningsregler → dataluckor → platsstatistik → mönster →
-kalender → klassificering av oavgjorda resor → resekedjor → autopiloten (självgående
-läge) → granskningsärenden → ev. notiser.
+Ordningen med kategoriregler för sammanslagning (``merge.by_category``, standard från
+1.3.0) är: starttid ur sträckan (K4) → dataluckor → platsstatistik → mönster → kalender →
+klassificering av oavgjorda resor → resekedjor → autopiloten (självgående läge) →
+sammanslagningsregler → granskningsärenden → ev. notiser. Sammanslagningen kommer efter
+klassningen eftersom bara avgjorda resor av samma kategori slås ihop. Med det tidigare
+regelverket kommer sammanslagningsreglerna direkt efter starttiden, som före 1.3.0.
 
 Luckor i mätarställningen mellan resorna ger aldrig granskningsärenden här – de
 räknas bara fram (``gaps.recompute``). I omfånget ``business_only`` är de privat
@@ -18,7 +21,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.models import LogicalTrip, Vehicle
-from app.models.enums import Category, LogicalState, ReviewKind, ReviewStatus
+from app.models.enums import ApprovalSource, Category, LogicalState, ReviewKind, ReviewStatus
 from app.services import settings as settings_svc
 from app.services.audit import Actor
 from app.services.places import registry as places
@@ -44,6 +47,37 @@ def _trip_scope(db: Session, trip: LogicalTrip) -> str:
     if vehicle is None:
         return settings_svc.SCOPE_COMPLETE
     return settings_svc.journal_scope(db, vehicle.owner_user_id)
+
+
+_OWNER_APPROVAL_SOURCES = (None, ApprovalSource.USER, ApprovalSource.BULK)
+
+
+def private_by_owner(trip: LogicalTrip) -> bool:
+    """Är den privata kategorin ägarens eget beslut eller källans (importen)?
+
+    Ett förslag (proposed/auto/needs_review) eller ett automatiskt godkännande är det inte.
+    """
+    if trip.review_status == ReviewStatus.IMPORTED:
+        return True
+    return trip.review_status == ReviewStatus.APPROVED and trip.approval_source in _OWNER_APPROVAL_SOURCES
+
+
+def _data_gap_texts(db: Session, trip: LogicalTrip) -> tuple[str, str]:
+    """Rubrik och text för DATA_GAP. Ett uppehåll i hämtningen säger när och hur långt."""
+    from app.services.volvo import detection
+
+    if "collection_gap" in set(trip.quality_flags or []):
+        vehicle = db.get(Vehicle, trip.vehicle_id)
+        tz = settings_svc.user_timezone(db, vehicle.owner_user_id) if vehicle is not None else None
+        return (
+            f"Uppehåll i hämtningen: {_route(trip)}",
+            detection.collection_gap_text(detection.collection_gap_of(trip), tz, form="long"),
+        )
+    return (
+        f"Misstänkt datalucka: {_route(trip)}",
+        "Mätarställningen visar längre körsträcka än vad positionerna förklarar. "
+        "Flera körningar kan ha skett. Komplettera gärna med Volvos körjournal.",
+    )
 
 
 def sync_trip_review_items(
@@ -92,14 +126,13 @@ def sync_trip_review_items(
             else:
                 wanted[ReviewKind.MISSING_ODOMETER] = (f"Mätarställning saknas: {_route(trip)}", None)
         if "possible_missed_trips" in flags:
-            if private_out_of_scope:
+            # En resa som kan vara flera körningar blir bara privat körning utan ärende när
+            # ägaren själv (eller källan) har sagt privat – aldrig av ett förslag eller ett
+            # automatiskt godkännande (byggkontraktet 3.A.4, F1).
+            if private_out_of_scope and private_by_owner(trip):
                 out_of_scope.add(ReviewKind.DATA_GAP)
             else:
-                wanted[ReviewKind.DATA_GAP] = (
-                    f"Misstänkt datalucka: {_route(trip)}",
-                    "Mätarställningen visar längre körsträcka än vad positionerna förklarar. "
-                    "Flera körningar kan ha skett. Komplettera gärna med Volvos körjournal.",
-                )
+                wanted[ReviewKind.DATA_GAP] = _data_gap_texts(db, trip)
     created: list[str] = []
     for kind in _TRIP_KINDS:
         key = review.trip_key(kind, trip.id)
@@ -153,11 +186,12 @@ def after_trips_changed(
     # så att flaggor, klassning och frågor ser den (start_time.fill_from_distance).
     out["start_estimated"] = start_time.fill_from_distance(db, vehicle.id)
 
-    merge_result = merge.evaluate_vehicle(
-        db, vehicle_id=vehicle.id, merge_settings=merge_cfg, actor=actor, apply_auto=apply_merge_rules
-    )
-    out["auto_merged"] = merge_result["auto_merged"]
-    out["merge_questions"] = len(merge_result["questions"])
+    by_category = merge.uses_category_rules(merge_cfg)
+    merge_result: dict[str, Any] = {"auto_merged": 0, "questions": []}
+    if not by_category:
+        merge_result = merge.evaluate_vehicle(
+            db, vehicle_id=vehicle.id, merge_settings=merge_cfg, actor=actor, apply_auto=apply_merge_rules
+        )
 
     out.update(gaps.recompute(db, vehicle.id, float(merge_cfg["odometer_tolerance_km"]), scope=scope))
     places.recount_visits(db, user_id)
@@ -189,6 +223,14 @@ def after_trips_changed(
         out["autopilot"] = autopilot.run_vehicle(db, user_id=user_id, vehicle=vehicle, actor=actor)
         if out["autopilot"].get("approved"):
             out["journeys"] += journeys.detect(db, user_id=user_id, vehicle=vehicle)
+
+    if by_category:
+        # Kategoriregler: först nu är resorna avgjorda (av ägaren, en regel eller importen).
+        merge_result = merge.evaluate_vehicle(
+            db, vehicle_id=vehicle.id, merge_settings=merge_cfg, actor=actor, apply_auto=apply_merge_rules
+        )
+    out["auto_merged"] = merge_result["auto_merged"]
+    out["merge_questions"] = len(merge_result["questions"])
 
     new_trip_items: list[tuple[LogicalTrip, list[str]]] = []
     for trip in seg.active_trips(db, vehicle.id):
