@@ -478,7 +478,7 @@ def test_assumed_trips_never_count_as_history(db, user, vehicle, trips, auto, lo
 
 
 def test_accepted_ai_purpose_is_used(db, user, vehicle, trips, auto, locs, monkeypatch):
-    _ai(monkeypatch, {**AI_WORK, "purpose": "Service hos Ateljé Norr"})
+    _ai(monkeypatch, {**AI_WORK, "purpose": "Service hos Ateljé Norr", "purpose_supported": True})
     t = live(trips, HOME, ATELJE, start_at=TUE_1015)
     t = _reconsider(db, user, t)
     assert (t.approval_source, t.purpose) == (ApprovalSource.ASSUMED, "Service hos Ateljé Norr.")

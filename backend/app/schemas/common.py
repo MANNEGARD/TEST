@@ -209,6 +209,8 @@ class PatternOut(ORM):
     is_manual_rule: bool
     manual_category: str | None
     manual_purpose: str | None
+    # "unless_calendar" (standard: kalendern går före regelns text) eller "always".
+    purpose_mode: str = "unless_calendar"
     origin_name: str | None = None
     destination_name: str | None = None
 

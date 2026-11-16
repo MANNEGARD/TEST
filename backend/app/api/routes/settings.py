@@ -74,7 +74,14 @@ def _workplace_out(db, wp: WorkplacePeriod) -> dict[str, Any]:
 
 @router.get("/settings", summary="Alla inställningar (med standardvärden)")
 def get_settings(principal: PrincipalDep, db: DbDep) -> dict[str, Any]:
-    return {"settings": settings_svc.get_all(db, principal.user.id), "defaults": settings_svc.defaults()}
+    from app.services.classify import lunch
+
+    return {
+        "settings": settings_svc.get_all(db, principal.user.id),
+        "defaults": settings_svc.defaults(),
+        # Lunchregeln kräver att minst ett av arbetsgivarens kontor finns som bekräftad plats.
+        "status": {"lunch_office_ready": lunch.office_ready(db, principal.user.id)},
+    }
 
 
 @router.patch("/settings/{section}", summary="Ändra en sektion av inställningarna")
@@ -85,7 +92,9 @@ def update_settings(section: str, body: dict[str, Any], principal: WebPrincipalD
     updated = settings_svc.update_section(db, principal.user.id, section, body)
     audit.record(db, principal.actor, "settings.update", "settings", section,
                  before={k: before.get(k) for k in body}, after=body)
-    if section in ("tax", "ai", "calendar", "abbreviations"):
+    if section in ("tax", "ai", "calendar", "abbreviations", "lunch") or (
+        section == "automation" and before.get("home_office_is_work") != updated.get("home_office_is_work")
+    ):
         _reevaluate(db, principal)  # påverkar förslag för oavgjorda resor
     if section == "general" and before.get("journal_scope") != updated.get("journal_scope"):
         _apply_journal_scope(db, principal)

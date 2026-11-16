@@ -103,8 +103,9 @@ def test_enums():
     assert {NotificationKind.ASSUMED, NotificationKind.COMPANY, NotificationKind.ALERT, NotificationKind.MONTHLY} == {
         "assumed", "company", "alert", "monthly"}
     assert {s.value for s in ApprovalSource} == {
-        "user", "bulk", "rule", "history", "return_trip", "commute", "private_place", "assumed"}
-    assert AUTO_APPROVAL_SOURCES == {"rule", "history", "return_trip", "commute", "private_place", "assumed"}
+        "user", "bulk", "rule", "history", "return_trip", "commute", "private_place", "assumed", "home_office", "lunch"}
+    assert AUTO_APPROVAL_SOURCES == {"rule", "history", "return_trip", "commute", "private_place", "assumed",
+                                     "home_office", "lunch"}
 
 
 # ----------------------------------------------------------------------------- inställningar
@@ -116,7 +117,7 @@ def test_new_defaults():
     assert d["automation"] == {
         "mode": "self_driving", "active_since": "",
         "office_hours": {"days": [0, 1, 2, 3, 4], "start": "07:00", "end": "18:00"},
-        "assumption_veto_hours": 24,
+        "assumption_veto_hours": 24, "home_office_is_work": False,
     }
     assert d["privacy"]["geocoding_enabled"] is True
     assert d["privacy"]["geocoder_url"] == "https://nominatim.openstreetmap.org"

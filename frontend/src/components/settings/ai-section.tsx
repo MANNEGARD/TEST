@@ -2,12 +2,13 @@
 
 import Link from "next/link";
 import { ArrowRight, Sparkles } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { formatNumber, formatPercent } from "@/lib/format";
 import type { SettingsPayload } from "@/lib/settings-page-types";
 import { cn } from "@/lib/utils";
 import { useReportDirty } from "./dirty-context";
-import { BoolRow, ChoiceCards, FormCard, GroupHeading, Note, SectionIntro, SettingRow, SettingsSaveBar, Slider } from "./form-parts";
+import { BoolRow, FormCard, GroupHeading, Note, SectionIntro, SettingRow, SettingsSaveBar, Slider } from "./form-parts";
 import { sectionHref } from "./sections";
 import { useSectionSave, useSettingsForm, type FieldSpecs } from "./use-settings-form";
 
@@ -20,10 +21,75 @@ const ABOUT_MAX = 1000;
 type ContextLevel = "full" | "minimal";
 
 /** Radiotexterna (byggkontraktet 6.E och tilläggets 3.J) – säger exakt vad som lämnar servern. */
-const FULL_TEXT =
-  "Allt som hjälper bedömningen skickas: namn och gatuadress för start och mål – även hemmet och privata platser –, kartans namn och typ för okända ställen, dagens alla resor med tider, platser, kategorier och ärenden, resan före och efter, historiken för samma mål och rutt, dina regler och platsanteckningar, arbetsgivarens namn och det du skriver under Om mitt arbete, samt kalenderbokningarna för dagen och, vid resor till en annan ort, hela vistelsen och de närmaste dagarna – med rubrik, plats, beskrivning och deltagarnas namn (kollega eller extern, och den externa e-postdomänen). Privata bokningar skickas bara som tid, utan text. E-postadresser, koordinater, chassinummer, nycklar, lösenord och kalenderlänken skickas aldrig, och koder och lösenord i bokningar och anteckningar tas bort före sändningen.";
+const FULL_ITEMS = [
+  "Namn och gatuadress för start och mål – även hemmet och privata platser – och kartans namn och typ för okända ställen.",
+  "Dagens alla resor med tider, platser, kategorier och ärenden, resan före och efter, och historiken för samma mål och rutt.",
+  "Dina regler och platsanteckningar, arbetsgivarens namn och det du skriver under Om mitt arbete.",
+  "Kalenderbokningarna för dagen och, vid resor till en annan ort, hela vistelsen och de närmaste dagarna – med rubrik, plats, beskrivning och deltagarnas namn (kollega eller extern, och den externa e-postdomänen). Privata bokningar skickas bara som tid, utan text.",
+];
+const FULL_NEVER =
+  "E-postadresser, koordinater, chassinummer, nycklar, lösenord och kalenderlänken skickas aldrig, och koder och lösenord i bokningar och anteckningar tas bort före sändningen.";
 const MINIMAL_TEXT =
   "Bara platsens namn och ort, veckodag, klockslag, sträcka, regelmotorns signaler och dina tidigare ärenden. Hemmet och privata platser skickas som ”Hemmet” och ”Privat plats”. Kalenderrubrik, brödtext och gatuadresser styrs av valen nedan.";
+
+/** Underlagsnivån: två val under varandra (det fullständiga har en lista och behöver bredden). */
+function LevelChoice({ value, onChange, defaultLevel }: { value: ContextLevel; onChange: (v: ContextLevel) => void; defaultLevel: unknown }) {
+  const options: { value: ContextLevel; title: string; description: React.ReactNode }[] = [
+    {
+      value: "full",
+      title: "Fullständigt underlag (rekommenderas)",
+      description: (
+        <>
+          Allt som hjälper bedömningen skickas:
+          <ul className="mt-1 list-disc space-y-0.5 pl-4">
+            {FULL_ITEMS.map((t) => (
+              <li key={t}>{t}</li>
+            ))}
+          </ul>
+          <span className="mt-1.5 block">{FULL_NEVER}</span>
+        </>
+      ),
+    },
+    { value: "minimal", title: "Minimalt", description: MINIMAL_TEXT },
+  ];
+  return (
+    <fieldset className="px-5 py-4">
+      <legend className="float-left w-full text-[13px] font-medium text-fg">Underlag till AI-leverantören</legend>
+      <div className="clear-both grid gap-2.5 pt-3">
+        {options.map((o) => {
+          const checked = o.value === value;
+          return (
+            <label
+              key={o.value}
+              className={cn(
+                "relative flex cursor-pointer gap-3 rounded-lg border p-3.5 transition-colors has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-ring",
+                checked ? "border-accent bg-accent-soft/50" : "border-border hover:border-border-strong hover:bg-surface-2/50",
+              )}
+            >
+              <input type="radio" name="ai-context-level" value={o.value} checked={checked} onChange={() => onChange(o.value)} className="sr-only" />
+              <span
+                aria-hidden
+                className={cn(
+                  "mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full border transition-colors",
+                  checked ? "border-accent bg-accent" : "border-border-strong bg-surface",
+                )}
+              >
+                {checked ? <span className="size-1.5 rounded-full bg-accent-fg" /> : null}
+              </span>
+              <span className="min-w-0">
+                <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-medium text-fg">
+                  {o.title}
+                  {defaultLevel === o.value ? <Badge size="sm">Standard</Badge> : null}
+                </span>
+                <span className="mt-1 block text-xs leading-relaxed text-fg-muted">{o.description}</span>
+              </span>
+            </label>
+          );
+        })}
+      </div>
+    </fieldset>
+  );
+}
 
 const FIELDS: FieldSpecs = {
   "ai.auto_threshold": { type: "number", name: "Gränsen för automatisk klassning", min: AUTO_MIN, max: 1 },
@@ -154,16 +220,7 @@ export function AiSection({ data }: { data: SettingsPayload }) {
           Hur mycket underlag får AI?
         </GroupHeading>
         {form.has("ai.context_level") ? (
-          <ChoiceCards<ContextLevel>
-            legend="Underlag till AI-leverantören"
-            name="ai-context-level"
-            value={level}
-            onChange={(v) => form.set("ai.context_level", v)}
-            options={[
-              { value: "full", title: "Fullständigt underlag (rekommenderas)", description: FULL_TEXT, isDefault: form.defaultOf("ai.context_level") === "full" },
-              { value: "minimal", title: "Minimalt", description: MINIMAL_TEXT, isDefault: form.defaultOf("ai.context_level") === "minimal" },
-            ]}
-          />
+          <LevelChoice value={level} onChange={(v) => form.set("ai.context_level", v)} defaultLevel={form.defaultOf("ai.context_level")} />
         ) : null}
         <div className="px-5 py-4">
           <Note tone={provider === "none" ? "info" : "accent"} icon={<Sparkles />}>

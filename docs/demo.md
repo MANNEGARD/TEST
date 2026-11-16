@@ -71,11 +71,23 @@ vanlig takt, så att "i dag", vetotiden och månadskortet stämmer med uppgifter
   märkt *innan månaden var slut*; *Skapa Excel* och *Hämta underlaget* ger exempelfilen; *Stäng alla nedladdningslänkar*.
 - Import: förhandsgranskningen visar ett inspelat exempel oavsett vilken fil som väljs.
 - Inställningar → Sammanslagning: gränser för tjänsteresor och privata resor sparas.
+- Inställningar → Förslag och AI: underlagsnivån (Fullständigt är valt) och *Om mitt arbete*
+  sparas; Lunchregeln: gränserna sparas och mönstret följer med; Kalender: *Läs hela bokningen*
+  är påslagen och arbetsgivarens e-postdomän (exempelakeri.se) är ifylld av "DriveLog";
+  Tjänsteställe: *Resor mellan hemmet och våra kontor …* är påslaget.
+- AI-genomgången: *Gå igenom väntande med AI* i Granskning, *Gå igenom med AI* i körjournalens
+  massfält och *Bedöm igen* på resan. Demot har ingen AI-leverantör, så genomgången säger att bara
+  reglerna används och varje resa blir *Oförändrad*.
+- *Ärendet stämmer inte* på resan Hemmet → Exempel Åkeri AB den 3 november, vars ärende kom ur en
+  (påhittad) kalenderbokning när resan godkändes av en regel – på resans sida, i månadskortet
+  (*Ärende ur kalendern: 1 resa*) och i månadens genomgång.
 
 Utöver inspelningen lägger demot till det som 1.3.0 visar: tre importerade resor i början av
 oktober (Exempel Snickeri AB och Exempel Lager AB) med adresser men utan positioner – kartan
 visar *Positionen slås upp*, och Exempel Lager AB saknar adress i underlaget – samt ett uppehåll
-i hämtningen från Volvo på resan till Ekvägen 14 den 14 november. De importerade resorna har de
+i hämtningen från Volvo på resan till Ekvägen 14 den 14 november. Omgången AI lägger till de nya
+inställningarna (underlagsnivå, lunchregeln, hela bokningen, hem ↔ kontor) och ärendet ur
+kalendern med en påhittad bokning på resan den 3 november. De importerade resorna har de
 tre sista av de 40 reserverade id:na, så att deras sidor är förbyggda.
 
 Följderna syns som i appen: listor, granskningens räknare, översikten (sträckor, ersättning, att
@@ -85,7 +97,8 @@ localStorage; *Återställ demot* börjar om.
 ## Vad som inte simuleras
 
 Det här svarar **Det här går inte att prova i demot**: att ansluta, koppla bort eller byta
-demoläge för Volvo, Outlook, Home Assistant och AI, importens *Bekräfta*, säkerhetskopior,
+demoläge för Volvo, Outlook, Home Assistant och AI (därför finns ingen AI-leverantör i demot och
+AI-genomgången kör bara reglerna), importens *Bekräfta*, säkerhetskopior,
 tokens, lösenord, radera historik, att lägga till, ändra eller ta bort tankning och laddning,
 sammanslagning och delning av resor, egna regler och mönster under Platser och andra ändringar
 som inte står ovan. Statistik som inte räknas om (resvägar, energi, månadsjämförelsen, *Veckan i

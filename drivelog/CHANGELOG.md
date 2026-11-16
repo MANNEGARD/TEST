@@ -39,6 +39,40 @@
   hittas, och bostadens adress slås upp av sig själv när den saknas.
 - **Saknad adress syns i förhandsvisningen.** På exportsidan står *Adress saknas – lägg till under
   Platser* direkt i cellen för start eller mål, och tiden bryts aldrig på två rader.
+- **AI får hela underlaget och skriver färdiga ärenden.** Med en AI-leverantör får AI nu
+  *fullständigt underlag*: platsernas namn och adresser (även hemmet och privata platser), dagens
+  resor, historiken, dina regler, arbetsgivaren, det du skriver under *Om mitt arbete* och
+  kalenderbokningarna med beskrivning och deltagare. **Det gäller direkt efter uppdateringen**;
+  välj *Minimalt* under *Inställningar → Förslag och AI* om du vill skicka mindre. AI lämnar
+  alltid ett färdigt ärende i din stil, märkt *Förslag att bekräfta* – du godkänner med ett tryck,
+  AI godkänner aldrig något själv och namn som inte finns i underlaget kastas. Koordinater,
+  chassinummer, nycklar, e-postadresser och kalenderlänken skickas aldrig.
+- **Kalendern först för ärendet.** Stämmer en kalenderbokning med resan formuleras ärendet ur
+  bokningen – för en resa till en annan ort ur hela vistelsens bokningar ("Rest till Jönköping för
+  … med Lennart"). Godkänns resan automatiskt sätts kalenderns ärende utan fråga, märkt *Ur
+  kalendern* på resan och i månadens genomgång, och *Ärendet stämmer inte* tar bort det. En egen
+  regel med fast text gäller "när kalendern inte säger något annat" eller "alltid" – du väljer när
+  du skapar regeln.
+- **Läs hela bokningen.** DriveLog läser bokningens beskrivning och deltagare (kollegor känns igen
+  på arbetsgivarens e-postdomän, som fylls i ur kalendern). **Påslaget efter uppdateringen**;
+  stängs av under *Inställningar → Kalender*. Möteslänkar, inringningsnummer och lösenord tas bort
+  innan något skickas till AI. Under *Integrationer* står hur många bokningar som har beskrivning
+  och deltagare.
+- **Gå igenom med AI.** *Bedöm med AI* på resan, *Gå igenom med AI* för valda resor i
+  körjournalen och *Gå igenom väntande med AI* i Granskning – med antal och leverantör före start,
+  högst 25 resor per gång, förlopp och resultat. Godkända och importerade resor rörs aldrig. Utan
+  AI-leverantör körs bara reglerna.
+- **Resor mellan hemmet och våra kontor godkänns automatiskt.** Resor mellan hemmet och vilket som
+  helst av arbetsgivarens kontor godkänns som tjänsteresor, även kvällar och helger. **Påslaget i
+  din installation efter uppdateringen** (ditt val); stängs av under *Inställningar →
+  Tjänsteställe*. Korta kvällsturer från hotellet under en tjänsteresa ger alltid en fråga.
+- **Lunchregeln.** En kort tur från ett av era kontor mitt på dagen (11–13 en arbetsdag), ett stopp
+  på 20–45 minuter och tillbaka till samma kontor blir privat utan fråga – du får ingen fråga om
+  utresan medan du äter. Hela mönstret krävs, aldrig klockslaget ensamt, och den gäller inte hos
+  kunder, med en egen regel eller när en kalenderbokning stämmer. Lunchregeln är på från start och
+  gäller även resor som väntar på svar när uppdateringen installeras. Gränserna ändras och regeln
+  stängs av under *Inställningar → Lunchregeln*; den kräver att minst ett kontor finns som
+  bekräftad plats.
 
 ## 1.2.3
 

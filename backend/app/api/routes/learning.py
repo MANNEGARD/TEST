@@ -27,6 +27,8 @@ class PatternUpdate(BaseModel):
     # "undecided" = "fråga mig alltid": resor som träffar regeln kräver alltid användarens beslut.
     manual_category: str | None = Field(default=None, pattern="^(work|private|undecided)$")
     manual_purpose: str | None = Field(default=None, max_length=500)
+    # Regelns fasta ärendetext gäller "när kalendern inte säger något annat" (standard) eller "alltid".
+    purpose_mode: str | None = Field(default=None, pattern="^(unless_calendar|always)$")
     clear_manual_rule: bool = False
 
 
@@ -36,6 +38,7 @@ class RuleIn(BaseModel):
     # "undecided" = "fråga mig alltid": resor som träffar regeln kräver alltid användarens beslut.
     category: str | None = Field(default=None, pattern="^(work|private|undecided)$")
     purpose: str | None = Field(default=None, max_length=500)
+    purpose_mode: str | None = Field(default=None, pattern="^(unless_calendar|always)$")
 
 
 def _pattern_out(db, pats: list[LocationPattern]) -> list[PatternOut]:
@@ -46,6 +49,7 @@ def _pattern_out(db, pats: list[LocationPattern]) -> list[PatternOut]:
     out = []
     for p in pats:
         item = PatternOut.model_validate(p)
+        item.purpose_mode = p.manual_purpose_mode or "unless_calendar"
         item.origin_name = names.get(p.origin_location_id) if p.origin_location_id else None
         item.destination_name = names.get(p.destination_location_id)
         out.append(item)
@@ -114,11 +118,14 @@ def update_pattern(pattern_id: uuid.UUID, body: PatternUpdate, principal: WebPri
         pat.status = body.status
     if body.clear_manual_rule:
         pat.is_manual_rule, pat.manual_category, pat.manual_purpose = False, None, None
+        pat.manual_purpose_mode = None
     elif body.manual_category is not None or body.manual_purpose is not None:
         pat.is_manual_rule = True
         pat.manual_category = body.manual_category or pat.manual_category
         pat.manual_purpose = body.manual_purpose if body.manual_purpose is not None else pat.manual_purpose
         pat.status = PatternStatus.APPROVED
+    if body.purpose_mode is not None and pat.is_manual_rule:
+        pat.manual_purpose_mode = None if body.purpose_mode == "unless_calendar" else body.purpose_mode
     audit.record(db, principal.actor, "pattern.update", "location_pattern", pat.id, after=body.model_dump(exclude_unset=True))
     db.flush()
     _reevaluate(db, principal)
@@ -139,6 +146,8 @@ def create_rule(body: RuleIn, principal: WebPrincipalDep, db: DbDep) -> PatternO
         db, principal.user.id, origin_id=body.origin_location_id, dest_id=body.destination_location_id,
         category=body.category, purpose=body.purpose,
     )
+    # NULL = "när kalendern inte säger något annat" (standard, även för äldre regler).
+    pat.manual_purpose_mode = "always" if body.purpose_mode == "always" else None
     audit.record(db, principal.actor, "pattern.manual_rule", "location_pattern", pat.id, after=body.model_dump(mode="json"))
     _reevaluate(db, principal)
     db.commit()
@@ -151,6 +160,7 @@ def delete_rule(pattern_id: uuid.UUID, principal: WebPrincipalDep, db: DbDep) ->
     if pat is None or pat.owner_user_id != principal.user.id:
         raise not_found("Mönstret")
     pat.is_manual_rule, pat.manual_category, pat.manual_purpose, pat.status = False, None, None, PatternStatus.SUGGESTED
+    pat.manual_purpose_mode = None
     patterns.rebuild(db, principal.user.id)
     _reevaluate(db, principal)
     db.commit()

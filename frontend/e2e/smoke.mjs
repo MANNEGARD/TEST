@@ -803,6 +803,85 @@ print(json.dumps({"sheets": wb.sheetnames, "rows": rows, "km": round(km, 2), "to
     });
 
     // ---------------------------------------------------------------- Platser
+    // ---------------------------------------------------------------- 1.3.0: AI
+    await section("förslag och AI", async () => {
+      step("Inställningar → Förslag och AI: underlagsnivåerna med Fullständigt som standard, Om mitt arbete");
+      await page.goto(`${BASE}/settings?sektion=forslag`);
+      const panel = page.getByTestId("settings-panel-forslag");
+      await panel.waitFor({ timeout: 15000 });
+      const full = panel.getByRole("radio", { name: /Fullständigt underlag/ });
+      if (!(await full.count())) {
+        fail("förslag och AI", "underlagsnivån saknas – backend har inte ai.context_level");
+        return;
+      }
+      if (!(await full.isChecked())) fail("förslag och AI", "Fullständigt underlag är inte valt på en ny databas");
+      if (!(await page.locator("#ai-about-work").count())) fail("förslag och AI", "fältet Om mitt arbete saknas");
+      await shot(page, "settings-ai-light");
+    });
+
+    await section("lunchregeln", async () => {
+      step("Inställningar → Lunchregeln: mönstret och varningen om saknat kontor");
+      await page.goto(`${BASE}/settings?sektion=lunch`);
+      const panel = page.getByTestId("settings-panel-lunch");
+      await panel.waitFor({ timeout: 15000 });
+      if (!(await page.getByTestId("lunch-pattern").count())) {
+        fail("lunchregeln", "lunchmönstret saknas – backend har inte sektionen lunch");
+        return;
+      }
+      const settings = await api(page, "GET", "/settings");
+      const ready = settings?.status?.lunch_office_ready;
+      if (typeof ready !== "boolean") fail("lunchregeln", "GET /settings saknar status.lunch_office_ready");
+      const warned = (await page.getByTestId("lunch-office-missing").count()) > 0;
+      if (ready === false && !warned) fail("lunchregeln", "varningen om saknat kontor visas inte");
+      if (ready === true && warned) fail("lunchregeln", "varningen om saknat kontor visas fast ett kontor finns");
+      await shot(page, "settings-lunch-light");
+    });
+
+    await section("kalender och tjänsteställe", async () => {
+      step("Kalender: Läs hela bokningen och domänfältet; Tjänsteställe: hem ↔ kontor");
+      await page.goto(`${BASE}/settings?sektion=kalender`);
+      await page.getByTestId("settings-panel-kalender").waitFor({ timeout: 15000 });
+      if (!(await page.getByText("Läs hela bokningen – beskrivning och deltagare").count())) fail("kalender", "Läs hela bokningen saknas");
+      if (!(await page.locator("#cal-domain").count())) fail("kalender", "fältet för arbetsgivarens e-postdomän saknas");
+      await page.goto(`${BASE}/settings?sektion=tjanstestalle`);
+      await page.getByTestId("settings-panel-tjanstestalle").waitFor({ timeout: 15000 });
+      if (!(await page.locator("#auto-home-office").count())) fail("tjänsteställe", "valet hem ↔ kontor saknas");
+    });
+
+    await section("AI-genomgång", async () => {
+      step("AI-genomgång: planen och en resa i taget (utan leverantör körs bara reglerna)");
+      const vehicles = await api(page, "GET", "/vehicles");
+      const vid = (vehicles.find((v) => !v.is_demo) ?? vehicles[0])?.id;
+      const plan = await api(page, "POST", `/trips/ai-review/plan?vehicle_id=${vid}`, { trip_ids: null, pending: true });
+      if (!plan || !Array.isArray(plan.trip_ids)) {
+        fail("AI-genomgång", "POST /trips/ai-review/plan svarar inte med en plan");
+        return;
+      }
+      if (plan.provider !== null) fail("AI-genomgång", `en ny databas har leverantören ${plan.provider}`);
+      await page.goto(`${BASE}/review`);
+      const button = page.getByTestId("review-ai-review");
+      if (!(await button.count())) {
+        step("  (Granskning är tom – genomgången prövas från körjournalen)");
+        await page.goto(`${BASE}/journal`);
+        await page.getByTestId("trip-row").first().getByRole("checkbox").click();
+        await page.getByTestId("bulk-ai-review").click();
+      } else {
+        await button.click();
+      }
+      const dialog = page.getByTestId("ai-review-dialog");
+      await dialog.waitFor({ timeout: 10000 });
+      await dialog.getByTestId("ai-review-intro").or(dialog.getByTestId("ai-review-empty")).waitFor({ timeout: 15000 });
+      if (await dialog.getByTestId("ai-review-intro").count()) {
+        if (!(await dialog.innerText()).includes("bara reglerna")) fail("AI-genomgång", "texten utan leverantör saknas");
+        await dialog.getByTestId("ai-review-start").click();
+        await dialog.getByTestId("ai-review-summary").waitFor({ timeout: 120000 });
+        await shot(page, "ai-review-done");
+        await dialog.getByTestId("ai-review-close").click();
+      } else {
+        await page.keyboard.press("Escape");
+      }
+    });
+
     await section("platser", async () => {
       step("Platser: förslag, byt namn, AI-minne");
       await page.goto(`${BASE}/places`);

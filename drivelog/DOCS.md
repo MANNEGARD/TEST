@@ -96,7 +96,8 @@ Från 1.1.0 sköter körjournalen sig själv utan Excel-uppladdning när Volvo �
   adressen. Adressdata © OpenStreetMap-bidragsgivare
   (ODbL). Geokodningen stängs av under *Inställningar → Sekretess*.
 - Tydliga resor godkänns av sig själva (egen regel, samma som de tre senaste gångerna,
-  hemresa, resa till arbetet, privat plats, antaget kundbesök). Resten blir en fråga i taget
+  hemresa, resa till arbetet, privat plats, antaget kundbesök, och från 1.3.0 hem ↔ kontor och
+  lunchregeln – båda stängs av under *Inställningar → Tjänsteställe* respektive *Lunchregeln*). Resten blir en fråga i taget
   i telefonen via Home Assistant. Välj *Jag godkänner allt själv* under *Inställningar →
   Automatik* om du hellre godkänner allt.
 - När månaden är klar skapas underlaget, och notisen i telefonen har en länk som går att
@@ -108,7 +109,14 @@ Från 1.1.0 sköter körjournalen sig själv utan Excel-uppladdning när Volvo �
   telefonen. Adresser slås upp först när bostaden är markerad. Kortet försvinner när allt är klart.
 - **Kalendern (valfritt):** under *Integrationer → Microsoft Outlook* kan du klistra in en
   kalenderlänk (ICS) från Outlook på webben – ingen inloggning eller appregistrering behövs.
-  Mötena ger förslag på ärende. Länken sparas krypterad och visas aldrig igen.
+  Mötena ger förslag på ärende. Länken sparas krypterad och visas aldrig igen. Från 1.3.0
+  läser DriveLog hela bokningen (beskrivning och deltagare) – dela kalendern med *Kan visa all
+  information*. Stängs av under *Inställningar → Kalender*.
+- **AI (valfritt):** med en AI-leverantör under *Integrationer → AI* får AI från 1.3.0
+  *fullständigt underlag* (platsernas namn och adresser, dagens resor, kalenderbokningar,
+  arbetsgivaren) för att skriva färdiga ärenden som du godkänner. Välj *Minimalt* under
+  *Inställningar → Förslag och AI* om du vill skicka mindre. Koordinater, chassinummer, nycklar
+  och kalenderlänken skickas aldrig.
 
 **Om nedladdningslänken:** den gäller i 7 dagar och för högst 10 hämtningar. Notisen går via
 Home Assistant, så den som har en Home Assistant-token eller kommer åt Home Assistants

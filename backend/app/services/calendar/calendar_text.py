@@ -198,8 +198,15 @@ def external_domains(attendees: list[dict[str, Any]] | None, work_domain: str | 
 _COMPANY_FORMS = ("aktiebolag", "ab", "hb", "kb")
 
 
+def _ascii(text: str) -> str:
+    """Utan diakritiska tecken (å → a, ö → o), så att exempelakeri.se ↔ "Exempel Åkeri AB"."""
+    import unicodedata
+
+    return "".join(c for c in unicodedata.normalize("NFKD", text) if not unicodedata.combining(c))
+
+
 def _company_key(text: str | None) -> str:
-    words = [w for w in re.split(r"[\s,.]+", fold(text or "")) if w]
+    words = [w for w in re.split(r"[\s,.]+", _ascii(fold(text or ""))) if w]
     while words and words[-1] in _COMPANY_FORMS:
         words.pop()
     while words and words[0] in _COMPANY_FORMS:
@@ -217,7 +224,7 @@ def domain_matches(domain: str | None, *names: str | None) -> bool:
     first = domain.lower()
     if first.startswith("www."):
         first = first[4:]
-    first = fold(first.split(".", 1)[0]).replace("-", "")
+    first = _ascii(fold(first.split(".", 1)[0])).replace("-", "")
     if len(first) < 3:
         return False
     for name in names:

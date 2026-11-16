@@ -288,7 +288,7 @@ try {
     const open = (await api(page, "GET", "/trips?page_size=500")).items.find((t) => t.review_status === "needs_review" || t.review_status === "proposed");
     if (!open) throw new Error("ingen oavgjord demoresa");
     await visit(page, `/journal/${open.id}/`);
-    const again = page.getByTestId("trip-ai-review");
+    const again = page.getByTestId("trip-ai-review").locator("visible=true").first();
     if (!(await again.innerText()).includes("Bedöm igen")) fail("klassningskortet saknar Bedöm igen");
     await again.click();
     await dialog.getByTestId("ai-review-start").click();
@@ -296,7 +296,7 @@ try {
     await dialog.getByTestId("ai-review-close").click();
     const approved = (await api(page, "GET", "/trips?page_size=500")).items.find((t) => t.review_status === "approved");
     await visit(page, `/journal/${approved.id}/`);
-    if (await page.getByTestId("trip-ai-review").count()) fail("Bedöm igen visas på en godkänd resa");
+    if (await page.getByTestId("trip-ai-review").locator("visible=true").count()) fail("Bedöm igen visas på en godkänd resa");
 
     step("Körjournalen: Gå igenom med AI för en vald resa öppnar genomgången");
     await visit(page, "/journal/");
@@ -751,9 +751,9 @@ try {
     else if (!(await full.isChecked())) fail("Fullständigt underlag är inte valt");
     if (await panel.getByText("Gatuadresser", { exact: true }).count()) fail("minimal-valen visas vid Fullständigt");
     if (!(await panel.getByText(/Privata bokningar skickas bara som tid/).count())) fail("radiotexten om privata bokningar saknas");
-    await panel.locator("label").filter({ has: minimal }).click();
+    await panel.locator("label").filter({ hasText: "Bara platsens namn och ort" }).click();
     if (!(await panel.getByText("Gatuadresser", { exact: true }).count())) fail("minimal-valen visas inte vid Minimalt");
-    await panel.locator("label").filter({ has: full }).click();
+    await panel.locator("label").filter({ hasText: "Fullständigt underlag" }).click();
     if (!(await full.isChecked())) fail("Fullständigt underlag gick inte att välja igen");
     await page.locator("#ai-about-work").fill("Jag är servicetekniker på Exempel Åkeri AB och besöker kunder i länet.");
     await panel.getByRole("button", { name: "Spara" }).click();
@@ -805,9 +805,9 @@ try {
   await section("ärende ur kalendern", async () => {
     step("Klassningskortet: Ur kalendern och Ärendet stämmer inte; månadens genomgång visar samma");
     await visit(page, `/journal/${CALENDAR_TRIP}/`, "resa-ur-kalendern");
-    const badge = page.getByTestId("purpose-badge");
+    const badge = page.getByTestId("purpose-badge").locator("visible=true");
     if (!(await badge.count()) || (await badge.first().innerText()).trim() !== "Ur kalendern") fail("märket Ur kalendern saknas på resan");
-    if (!(await page.getByTestId("reject-calendar-purpose").count())) fail("knappen Ärendet stämmer inte saknas på resan");
+    if (!(await page.getByTestId("reject-calendar-purpose").locator("visible=true").count())) fail("knappen Ärendet stämmer inte saknas på resan");
     await visit(page, "/m/month/2026-11/", "manad-ur-kalendern");
     if (!(await page.getByTestId("month-review-calendar").count())) fail("månadens genomgång märker inte ärendet ur kalendern");
     await visit(page, "/export/");

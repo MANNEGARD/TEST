@@ -278,7 +278,9 @@ def test_klas2_lowercase_invented_purpose_is_not_stored(db, user, trips):
     t = trips.trip(OFFICE, CUSTOMER)
     a = classify(db, user, t, provider=fake)
     assert len(fake.documents) == 1
-    assert "volvo" not in (t.purpose or "").casefold() and t.purpose_source != "ai"
+    # 1.3.0: det påhittade namnet sparas aldrig; reservmallen blir förslaget att bekräfta.
+    assert "volvo" not in (t.purpose or "").casefold() and t.purpose == "Tjänsteresa till Exempelbolaget"
+    assert not t.purpose_confirmed
     rejected = next(s for s in a.signals if s.kind == "ai_purpose_rejected")
     assert {"volvo", "anna", "göteborg"} <= set(rejected.data["unsupported"])
 

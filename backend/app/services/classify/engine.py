@@ -689,10 +689,11 @@ def _ai_purpose(
         if not check.ok:
             label = (
                 "AI-förslag till syfte avvisades: innehöll namn som inte finns i underlaget"
-                if any(r.startswith("namn") for r in check.reasons)
+                if check.names
                 else "AI-förslag till syfte avvisades: " + "; ".join(check.reasons)
             )
-            signals.append(Signal("ai_purpose_rejected", label, "neutral", data={"unsupported": check.reasons}))
+            signals.append(Signal("ai_purpose_rejected", label, "neutral",
+                                  data={"unsupported": check.names or check.reasons}))
         else:
             weak = support != "strong" and purpose_mod.is_calendar_based(proposal) and (
                 proposal is not None and proposal.based_on.get("calendar") == "weak"

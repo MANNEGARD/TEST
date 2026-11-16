@@ -302,7 +302,8 @@ def test_llm_purpose_with_invented_names_is_rejected(db, user, trips):
     a = classify(db, user, t, provider=fake)
     assert len(fake.documents) == 1
     assert "Volvo" not in (t.purpose or "") and "Anna" not in (t.purpose or "")
-    assert t.purpose == "Besök hos Exempelbolaget – syfte behöver bekräftas."
+    # 1.3.0: ett avvisat AI-förslag ger reservmallen (förslag att bekräfta), inte platshållaren.
+    assert t.purpose == "Tjänsteresa till Exempelbolaget" and not t.purpose_confirmed
     assert "ai_purpose_rejected" in evidence_kinds(db, t)
     rejected = next(s for s in a.signals if s.kind == "ai_purpose_rejected")
     assert set(rejected.data["unsupported"]) >= {"Volvo", "Lastvagnar", "Anna"}

@@ -181,15 +181,20 @@ def test_b1_errand_type_supported_by_confirmed_history(db, user, trips):
     assert ok, missing
 
 
-def test_b1_engine_keeps_cautious_rule_purpose_when_type_unsupported(db, user, trips):
+def test_b1_engine_keeps_unsupported_type_as_proposal_to_confirm(db, user, trips):
+    """1.3.0 (6.C.3): en ärendetyp utan stöd kastas inte längre – förslaget behålls som
+    "förslag att bekräfta" (supported False) och godkänns aldrig av sig självt."""
     setup_places(trips)
     fake = FakeProvider(ai_answer("work", "Intervju hos kund i Storstad"))
     t = trips.trip(OFFICE, CUSTOMER)
     a = classify(db, user, t, provider=fake)
     assert len(fake.documents) == 1
-    assert t.purpose == "Besök hos Exempelbolaget – syfte behöver bekräftas." and t.purpose_source != "ai"
-    rejected = next(s for s in a.signals if s.kind == "ai_purpose_rejected")
-    assert any("ärendetyp" in m for m in rejected.data["unsupported"])
+    assert t.purpose == "Intervju hos kund i Storstad." and t.purpose_source == "ai" and not t.purpose_confirmed
+    assert not any(s.kind == "ai_purpose_rejected" for s in a.signals)
+    current = db.execute(select(M.TripPurpose).where(M.TripPurpose.logical_trip_id == t.id,
+                                                     M.TripPurpose.is_current.is_(True))).scalar_one()
+    assert current.based_on["supported"] is False and any("ärendetyp" in m for m in current.based_on["unsupported"])
+    assert current.rationale.startswith("Förslag att bekräfta – ")
 
 
 def test_reg3_engine_accepts_supported_compound_purpose(db, user, trips):

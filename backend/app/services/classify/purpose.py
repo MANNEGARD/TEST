@@ -557,6 +557,7 @@ class GeneratedCheck:
     supported: bool  # ärendetypen har stöd och texten är mer än ett allmänt ord
     reasons: list[str] = field(default_factory=list)  # varför det avvisades
     unsupported: list[str] = field(default_factory=list)  # ärendetyper utan stöd
+    names: list[str] = field(default_factory=list)  # ord utan stöd i underlaget (avvisar)
 
 
 _BARE_WORDS = {"tjänsteresa", "arbete", "möte", "resa", "kundbesök", "besök", "tjänsteärende", "jobb"}
@@ -584,7 +585,7 @@ def check_generated(
     corpus |= {fold(w) for w in textnorm.GENERIC_WORDS}
     missing = unsupported_words(cleaned, corpus)
     if missing:
-        return GeneratedCheck(False, False, [f"namn utan stöd: {m}" for m in missing])
+        return GeneratedCheck(False, False, ["namn utan stöd i underlaget"], names=missing)
     types = unsupported_types(cleaned, ctx, rules, rule_proposal)
     words = [fold(t) for t in textnorm.tokens(textnorm.strip_trailing_period(cleaned))]
     bare = bool(words) and all(w in _BARE_WORDS or w in _FUNCTION_WORDS for w in words)

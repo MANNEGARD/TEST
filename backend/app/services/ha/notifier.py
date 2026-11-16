@@ -276,7 +276,8 @@ def _suggestion_items(db: Session, user_id: uuid.UUID, trip: LogicalTrip, limit:
     from app.services.text_safety import sanitize_text
 
     try:
-        cands = list(autopilot.purpose_candidate_items(db, trip, user_id=user_id, limit=limit))
+        texts = list(autopilot.purpose_candidates(db, trip, user_id=user_id, limit=limit))
+        cands = [(t, autopilot.candidate_origin(db, trip, t)) for t in texts]
     except Exception:  # knapparna är en bekvämlighet – får aldrig stoppa frågan
         logger.exception("Kunde inte ta fram ärendeförslag")
         cands = []

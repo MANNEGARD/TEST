@@ -935,8 +935,9 @@ def _approve(db: Session, trip: LogicalTrip, d: AutoDecision, *, actor: audit.Ac
         "related_trip_id": str(d.related_trip_id) if d.related_trip_id else None,
         "reason": d.reason,
         "veto_until": d.veto_until,
-        "from_calendar": bool(d.calendar_event_ids) or None,
     }
+    if d.calendar_event_ids:
+        trip.approval_basis["from_calendar"] = True
     trip.auto_approved_at = now
     trip.updated_by = actor.label
     seg.refresh_logical(db, trip)
@@ -1126,6 +1127,23 @@ def purpose_candidate_items(
     return out[:limit]
 
 
+def candidate_origin(db: Session, trip: LogicalTrip, text: str) -> str:
+    """Varifrån en ärendeknapp kommer: "calendar" eller "ai" när texten är resans obekräftade
+    förslag ur kalendern eller från AI, annars "history" (ägarens bekräftade ärende eller
+    platsantagandet)."""
+    if trip.purpose_confirmed or not trip.purpose:
+        return "history"
+    current = _current_purpose(db, trip)
+    if current is None or sanitize_text(current.text, limit=80) != sanitize_text(text, limit=80):
+        return "history"
+    based = current.based_on or {}
+    if based.get("calendar_event_id") or based.get("calendar_event_ids"):
+        return "calendar"
+    if current.source == DecisionSource.AI:
+        return "ai"
+    return "history"
+
+
 def purpose_candidates(db: Session, trip: LogicalTrip, *, user_id: uuid.UUID, limit: int = 2) -> list[str]:
     """Ärendeknappar (texterna ur ``purpose_candidate_items``)."""
     return [text for text, _origin in purpose_candidate_items(db, trip, user_id=user_id, limit=limit)]
@@ -1222,6 +1240,7 @@ def remember_always(
     pat = patterns_svc.set_manual_rule(
         db, user_id, origin_id=None, dest_id=dest.id, category=category, purpose=text
     )
+    pat.manual_purpose_mode = None  # "Alltid: …" – kalendern går före regelns text (standard)
     if category == Category.PRIVATE:
         dest.type = LocationType.PRIVATE
         dest.confirmed = True
@@ -1484,6 +1503,7 @@ def _make_customer(
     pat = patterns_svc.set_manual_rule(
         db, user_id, origin_id=None, dest_id=dest.id, category=Category.WORK, purpose=purpose
     )
+    pat.manual_purpose_mode = None
     audit.record(db, actor, action, "known_location", dest.id, before=before,
                  after={"type": dest.type, "confirmed": True, "company": name, "rule_id": str(pat.id)},
                  user_id=user_id)

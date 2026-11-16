@@ -34,6 +34,15 @@ STATUS_LABELS = {
 }
 
 
+FULL_SENDS = (
+    "Platsernas namn och gatuadresser (även hemmet och privata platser), kartans namn och typ för okända ställen, "
+    "dagens resor, resan före och efter, historiken för samma mål och rutt, dina regler och platsanteckningar, "
+    "kalenderbokningarna (rubrik, plats, beskrivning och deltagarnas namn – privata bokningar bara som tid), "
+    "arbetsgivarens namn och det du skriver under Om mitt arbete."
+)
+NEVER_SENDS = "Koordinater, chassinummer, registreringsnummer, nycklar, lösenord, kalenderlänken och e-postadresser."
+
+
 class AIConfig(BaseModel):
     provider: str = Field(pattern="^(none|anthropic|openai)$")
     model: str = Field(default="", max_length=120)
@@ -51,8 +60,12 @@ def _ai_view(db, user_id) -> dict[str, Any]:
             "default_models": {"anthropic": llm.DEFAULT_ANTHROPIC_MODEL, "openai": llm.DEFAULT_OPENAI_MODEL},
             "has_key": {p: bool(integrations.secrets(conn).get(f"{p}_api_key")) for p in ("anthropic", "openai")},
             "privacy": {
-                "sends": "Platsetiketter/orter, veckodag, tid, sträcka, regelsignaler och tidigare bekräftade syften.",
-                "never_sends": "Koordinater, VIN, hemadress och privata platsnamn.",
+                "context_level": ai.get("context_level", settings_svc.CONTEXT_FULL),
+                "sends": FULL_SENDS if ai.get("context_level", settings_svc.CONTEXT_FULL) == settings_svc.CONTEXT_FULL
+                else "Platsetiketter/orter, veckodag, tid, sträcka, regelsignaler och tidigare bekräftade syften.",
+                "never_sends": NEVER_SENDS
+                if ai.get("context_level", settings_svc.CONTEXT_FULL) == settings_svc.CONTEXT_FULL
+                else "Koordinater, VIN, hemadress och privata platsnamn.",
                 "send_calendar_subjects": ai["send_calendar_subjects"],
                 "send_calendar_body": ai["send_calendar_body"],
                 "send_street_addresses": ai["send_street_addresses"],
