@@ -7,8 +7,9 @@
  * Flöde: första kontot (/setup) → import via webbgränssnittet → Översikt → Körjournal →
  * Resedetalj → Granskning → Export (förhandsvisning = API = Excel-fil) → Platser →
  * Inställningar (ersättning per mil slår igenom, Automatik, sekretess och OSM) → Integrationer
- * (demolägen, starttid "≈" och "Ange starttid") → Bränsle & energi → månadskortet och
- * nedladdningslänkarna → banderollen för Home Assistant → mobilvy 390×844 → mörkt tema →
+ * (demolägen, starttid "≈" och "Ange starttid", kalenderlänken utan länk och med ogiltig länk) →
+ * Bränsle & energi → månadskortet och nedladdningslänkarna → banderollen för Home Assistant →
+ * mobilvy 390×844 → mörkt tema →
  * utloggning och inloggning med retur.
  *
  * Miljövariabler:
@@ -55,6 +56,8 @@ const EXPECTED = [
   { status: 401, url: /\/api\/v1\/auth\/me$/ },
   // "Bilen står hemma nu" innan bilen rapporterat någon position (Kom igång på ny databas).
   { status: 400, url: /\/api\/v1\/locations\/home-from-vehicle$/ },
+  // Kalenderlänken: ogiltiga länkar avvisas med klartextfel (avsnittet Integrationer).
+  { status: 400, url: /\/api\/v1\/integrations\/microsoft\/ics$/ },
 ];
 // 1×1 transparent PNG – kartplattor hämtas aldrig från internet under testet.
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64");
@@ -797,6 +800,34 @@ print(json.dumps({"sheets": wb.sheetnames, "rows": rows, "km": round(km, 2), "to
           .waitFor({ timeout: 15000 })
           .catch(() => fail("integrationer", `kortet ${id} är inte "Inte konfigurerad" efter demoläget`));
       }
+
+      step("Integrationer: kalenderlänken (ICS) utan länk; ogiltiga länkar ger klartextfel och sparas inte");
+      await page.getByTestId("configure-microsoft").click();
+      const ics = sheet.getByTestId("ics-section");
+      await ics.waitFor({ timeout: 15000 });
+      if (await sheet.getByTestId("ics-status").count()) fail("kalenderlänk", "status för en sparad länk visas utan länk");
+      const icsInput = sheet.getByTestId("ics-link-input").locator("input");
+      if ((await icsInput.getAttribute("type")) !== "password") fail("kalenderlänk", "fältet är inget lösenordsfält");
+      if (await icsInput.inputValue()) fail("kalenderlänk", "fältet är förifyllt");
+      if (!(await sheet.getByTestId("ics-save").isDisabled())) fail("kalenderlänk", "Spara är aktiv med tomt fält");
+      await shot(page, "kalenderlank-light");
+      // Inga anrop lämnar datorn: båda avvisas innan något hämtas.
+      for (const [link, msg] of [
+        ["http://calendar.example.com/owa/calendar/kal.ics", "Länken måste börja med https:// eller webcal://."],
+        ["https://127.0.0.1/owa/calendar/kal.ics", "Länken pekar på en lokal eller reserverad adress."],
+      ]) {
+        await icsInput.fill(link);
+        const put = responseTo(page, "PUT", /\/integrations\/microsoft\/ics$/);
+        await sheet.getByTestId("ics-save").click();
+        const resp = await put;
+        if (resp.status() !== 400) fail("kalenderlänk", `ogiltig länk gav ${resp.status()}, väntat 400`);
+        if ((await resp.text()).includes(link)) fail("kalenderlänk", "felsvaret innehåller länken");
+        await expectText(page, msg, "kalenderlänk");
+      }
+      const icsStatus = await api(page, "GET", "/integrations/microsoft/ics");
+      if (icsStatus.has_link || icsStatus.host || "url" in icsStatus) fail("kalenderlänk", `en ogiltig länk sparades: ${JSON.stringify(icsStatus)}`);
+      await page.keyboard.press("Escape");
+      await sheet.waitFor({ state: "hidden" });
     });
 
     // ---------------------------------------------------------------- Bränsle & energi

@@ -1149,6 +1149,45 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/integrations/microsoft/ics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Status för kalenderlänken (ICS) */
+        get: operations["ics_status_api_v1_integrations_microsoft_ics_get"];
+        /**
+         * Spara eller byt kalenderlänk (ICS)
+         * @description Länken hämtas och tolkas innan den sparas. Går det inte sparas ingenting.
+         */
+        put: operations["ics_save_api_v1_integrations_microsoft_ics_put"];
+        post?: never;
+        /** Ta bort kalenderlänken och dess händelser */
+        delete: operations["ics_remove_api_v1_integrations_microsoft_ics_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/integrations/microsoft/ics/sync": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Synka kalenderlänken nu och matcha mot resor */
+        post: operations["ics_sync_now_api_v1_integrations_microsoft_ics_sync_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/integrations/microsoft/demo/enable": {
         parameters: {
             query?: never;
@@ -3226,6 +3265,63 @@ export interface components {
             absorbed: number;
             /** Geocoding Unlocked */
             geocoding_unlocked: boolean;
+        };
+        /** IcsLink */
+        IcsLink: {
+            /** Url */
+            url: string;
+        };
+        /** IcsStatus */
+        IcsStatus: {
+            /** Provider */
+            provider: string;
+            /** Status */
+            status: string;
+            /** Has Link */
+            has_link: boolean;
+            /** Host */
+            host: string | null;
+            /** Last Sync At */
+            last_sync_at: string | null;
+            /** Last Success At */
+            last_success_at: string | null;
+            /** Last Error */
+            last_error: string | null;
+            /** Last Error At */
+            last_error_at: string | null;
+            /** Stored Events */
+            stored_events: number;
+            /** Events With Location */
+            events_with_location: number | null;
+            /** Tip */
+            tip: string | null;
+            /** Stores Body Preview */
+            stores_body_preview: boolean;
+            /** Sync Days Back */
+            sync_days_back: number;
+            /** Sync Days Forward */
+            sync_days_forward: number;
+        };
+        /** IcsSyncResult */
+        IcsSyncResult: {
+            /** Status */
+            status: string;
+            /** Created */
+            created: number;
+            /** Updated */
+            updated: number;
+            /** Removed */
+            removed: number;
+            /** Events */
+            events: number;
+            /** Skipped */
+            skipped: number;
+            /** Truncated */
+            truncated: boolean;
+            /** Tip */
+            tip: string | null;
+            /** Trips With Match */
+            trips_with_match: number;
         };
         /** ImportBatchOut */
         ImportBatchOut: {
@@ -6747,6 +6843,99 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ics_status_api_v1_integrations_microsoft_ics_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IcsStatus"];
+                };
+            };
+        };
+    };
+    ics_save_api_v1_integrations_microsoft_ics_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IcsLink"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IcsStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ics_remove_api_v1_integrations_microsoft_ics_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IcsStatus"];
+                };
+            };
+        };
+    };
+    ics_sync_now_api_v1_integrations_microsoft_ics_sync_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IcsSyncResult"];
                 };
             };
         };

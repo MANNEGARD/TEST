@@ -3,7 +3,7 @@
  "info": {
   "title": "SMGD DriveLog API",
   "description": "REST-API för SMGD DriveLog – intelligent körjournal. Webbappen autentiserar med sessionskaka + X-CSRF-Token; Home Assistant-integrationen med Bearer-token.",
-  "version": "1.1.0"
+  "version": "1.2.0"
  },
  "paths": {
   "/api/v1/auth/setup-status": {
@@ -3796,6 +3796,111 @@
        "application/json": {
         "schema": {
          "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/integrations/microsoft/ics": {
+   "get": {
+    "tags": [
+     "Calendar matching",
+     "Integration health"
+    ],
+    "summary": "Status för kalenderlänken (ICS)",
+    "operationId": "ics_status_api_v1_integrations_microsoft_ics_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/IcsStatus"
+        }
+       }
+      }
+     }
+    }
+   },
+   "put": {
+    "tags": [
+     "Calendar matching",
+     "Integration health"
+    ],
+    "summary": "Spara eller byt kalenderlänk (ICS)",
+    "description": "Länken hämtas och tolkas innan den sparas. Går det inte sparas ingenting.",
+    "operationId": "ics_save_api_v1_integrations_microsoft_ics_put",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/IcsLink"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/IcsStatus"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   },
+   "delete": {
+    "tags": [
+     "Calendar matching",
+     "Integration health"
+    ],
+    "summary": "Ta bort kalenderlänken och dess händelser",
+    "operationId": "ics_remove_api_v1_integrations_microsoft_ics_delete",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/IcsStatus"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/integrations/microsoft/ics/sync": {
+   "post": {
+    "tags": [
+     "Calendar matching",
+     "Integration health"
+    ],
+    "summary": "Synka kalenderlänken nu och matcha mot resor",
+    "operationId": "ics_sync_now_api_v1_integrations_microsoft_ics_sync_post",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/IcsSyncResult"
         }
        }
       }
@@ -10356,6 +10461,211 @@
      "geocoding_unlocked"
     ],
     "title": "HomeFromVehicleOut"
+   },
+   "IcsLink": {
+    "properties": {
+     "url": {
+      "type": "string",
+      "maxLength": 2000,
+      "minLength": 1,
+      "title": "Url"
+     }
+    },
+    "type": "object",
+    "required": [
+     "url"
+    ],
+    "title": "IcsLink"
+   },
+   "IcsStatus": {
+    "properties": {
+     "provider": {
+      "type": "string",
+      "title": "Provider"
+     },
+     "status": {
+      "type": "string",
+      "title": "Status"
+     },
+     "has_link": {
+      "type": "boolean",
+      "title": "Has Link"
+     },
+     "host": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Host"
+     },
+     "last_sync_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Last Sync At"
+     },
+     "last_success_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Last Success At"
+     },
+     "last_error": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Last Error"
+     },
+     "last_error_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Last Error At"
+     },
+     "stored_events": {
+      "type": "integer",
+      "title": "Stored Events"
+     },
+     "events_with_location": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Events With Location"
+     },
+     "tip": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Tip"
+     },
+     "stores_body_preview": {
+      "type": "boolean",
+      "title": "Stores Body Preview"
+     },
+     "sync_days_back": {
+      "type": "integer",
+      "title": "Sync Days Back"
+     },
+     "sync_days_forward": {
+      "type": "integer",
+      "title": "Sync Days Forward"
+     }
+    },
+    "type": "object",
+    "required": [
+     "provider",
+     "status",
+     "has_link",
+     "host",
+     "last_sync_at",
+     "last_success_at",
+     "last_error",
+     "last_error_at",
+     "stored_events",
+     "events_with_location",
+     "tip",
+     "stores_body_preview",
+     "sync_days_back",
+     "sync_days_forward"
+    ],
+    "title": "IcsStatus"
+   },
+   "IcsSyncResult": {
+    "properties": {
+     "status": {
+      "type": "string",
+      "title": "Status"
+     },
+     "created": {
+      "type": "integer",
+      "title": "Created"
+     },
+     "updated": {
+      "type": "integer",
+      "title": "Updated"
+     },
+     "removed": {
+      "type": "integer",
+      "title": "Removed"
+     },
+     "events": {
+      "type": "integer",
+      "title": "Events"
+     },
+     "skipped": {
+      "type": "integer",
+      "title": "Skipped"
+     },
+     "truncated": {
+      "type": "boolean",
+      "title": "Truncated"
+     },
+     "tip": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Tip"
+     },
+     "trips_with_match": {
+      "type": "integer",
+      "title": "Trips With Match"
+     }
+    },
+    "type": "object",
+    "required": [
+     "status",
+     "created",
+     "updated",
+     "removed",
+     "events",
+     "skipped",
+     "truncated",
+     "tip",
+     "trips_with_match"
+    ],
+    "title": "IcsSyncResult"
    },
    "ImportBatchOut": {
     "properties": {
