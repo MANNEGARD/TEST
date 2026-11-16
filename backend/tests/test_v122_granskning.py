@@ -347,7 +347,7 @@ def test_godkann_vagras_om_syftet_hunnit_andras(client, db, user, vehicle, fleet
     trip = db.get(M.LogicalTrip, trip_id)
     shown = {"expected_category": trip.category, "expected_purpose": trip.purpose}
     trip.purpose = "Ett annat syfte från omräkningen"
-    db.flush()
+    db.commit()  # anropet nedan har en egen session (PostgreSQL)
     r = client.post(f"{API}/trips/{trip_id}/approve", json=shown)
     assert r.status_code == 409 and r.json()["code"] == "proposal_changed"
     assert reload_trip(db, trip_id).review_status != "approved"
