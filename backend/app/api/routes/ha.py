@@ -27,6 +27,7 @@ from app.services import settings as settings_svc
 from app.services.ha import connection, demo, messages, notifier, policy, responses, summaries
 from app.services.ha.client import HAError, validate_base_url, validate_notify_service
 from app.services.ha.connection import CHANNEL_DEMO, CHANNEL_PULL, CHANNEL_PUSH
+from app.services.learning import recompute
 
 router = APIRouter()
 
@@ -118,6 +119,7 @@ class ConfigIn(BaseModel):
 @router.post("/ha/callback", response_model=CallbackOut, tags=["Home Assistant callbacks"],
              summary="Svar på en notis (knapptryckning eller textsvar) från Home Assistant")
 def ha_callback(body: CallbackIn, principal: HaPrincipal, db: DbDep) -> dict[str, Any]:
+    recompute.defer(db)  # övriga resors förslag räknas om efter svaret
     result = responses.handle(
         db,
         user_id=principal.user.id,

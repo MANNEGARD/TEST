@@ -32,7 +32,7 @@ from app.services import settings as settings_svc
 from app.services.audit import Actor
 from app.services.ha import actions as A
 from app.services.ha import connection, notifier
-from app.services.learning import feedback
+from app.services.learning import feedback, recompute
 from app.services.learning.feedback import MAX_PURPOSE_LENGTH
 from app.services.trips import merge
 from app.services.trips import segments as seg
@@ -222,6 +222,10 @@ def _apply(
     """Utför åtgärden. Kastar TripError om den inte kan genomföras."""
     actor = _actor(user_id, source)
     channel = "ha" if source in _PHONE_SOURCES else "web"
+    if req.vehicle_id is not None and recompute.is_deferred(db):
+        # Omräkningen efter beslutet görs efter svaret. Beställningen görs före ändringarna
+        # (fordonet låses före resorna, som i fordonsinsamlingen).
+        recompute.request(db, req.vehicle_id)
     # "Gör alltid så här" finns bara i webben (RespondIn.always) och prövas med can_remember.
     always = always and source == "web"
 
@@ -290,7 +294,7 @@ def _apply(
         )
         if merged is not None:
             # Mönster, förslag och granskningsärenden uppdateras för den sammanslagna resan.
-            feedback.after_decisions(db, user_id=user_id, vehicle_id=req.vehicle_id, actor=actor)
+            feedback.rebuild_after(db, user_id=user_id, vehicle_id=req.vehicle_id, actor=actor, trips=[merged])
             return _result(req, OUTCOME_APPLIED, "Resorna slogs samman.", merged_trip_id=str(merged.id))
         return _result(req, OUTCOME_APPLIED, "Resorna behålls separata.")
 

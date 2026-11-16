@@ -223,7 +223,7 @@ def _summarize(db: Session, batch: ImportBatch, vehicle: Vehicle, merge_settings
     notes = {r.parsed.get("original_notes") for r in new_rows if r.parsed.get("original_notes")}
 
     # Täckningsanalys: luckor i mätarställning mellan på varandra följande nya resor.
-    tol = float(merge_settings["odometer_tolerance_km"])
+    tol = seg.odometer_slack(float(merge_settings["odometer_tolerance_km"]))  # 1 km är avrundning, ingen lucka
     ordered = sorted(
         (r for r in new_rows if r.parsed.get("odometer_start") is not None and r.parsed.get("started_at")),
         key=lambda r: r.parsed["started_at"],

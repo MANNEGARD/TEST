@@ -26,6 +26,7 @@ from app.models.enums import (
 from app.services.ha import actions as A
 from app.services.ha import demo, messages, notifier, responses
 from app.services.ha.connection import CHANNEL_DEMO
+from app.services.learning import recompute
 
 router = APIRouter(prefix="/notifications", tags=["Notifications"])
 
@@ -266,6 +267,7 @@ def get_notification(public_id: str, principal: WebPrincipalDep, db: DbDep) -> d
 def respond(public_id: str, body: RespondIn, principal: WebPrincipalDep, db: DbDep) -> dict[str, Any]:
     req = _get(db, principal.user.id, public_id)
     source = "demo" if (body.as_phone and req.channel == CHANNEL_DEMO) else "web"
+    recompute.defer(db)  # övriga resors förslag räknas om efter svaret
     result = responses.handle(
         db,
         user_id=principal.user.id,
@@ -322,6 +324,7 @@ def review_row(trip_id: uuid.UUID, body: ReviewVerdictIn, principal: WebPrincipa
     if trip.state != LogicalState.ACTIVE or trip.approval_source not in AUTO_APPROVAL_SOURCES:
         raise bad_request("Raden är redan avgjord av dig.", "not_automatic")
     actor = audit.user_actor(principal.user.id)
+    recompute.defer(db)
     try:
         if body.verdict == "ok":
             if trip.approval_source == ApprovalSource.ASSUMED:

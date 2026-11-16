@@ -20,6 +20,7 @@ from app.models.enums import REVIEW_KIND_LABELS_SV, GapStatus, LogicalState, Rev
 from app.schemas.common import GapOut, ReviewItemOut, TripOut
 from app.services import audit
 from app.services import settings as settings_svc
+from app.services.learning import recompute
 from app.services.trips import gaps, pipeline, review
 from app.services.trips import segments as seg
 
@@ -92,12 +93,15 @@ def list_items(
             payload["second_trip"] = (trips[uuid.UUID(i.data["second_trip_id"])].model_dump(mode="json")
                                       if i.data.get("second_trip_id") and uuid.UUID(i.data["second_trip_id"]) in trips else None)
         out.append(payload)
+    pending = recompute.is_pending(db, vehicle.id)
     db.commit()
     return {
         "items": out,
         "open_counts": {k: counts.get(k, 0) for k in ReviewKind},
         "open_total": sum(counts.values()),
         "kind_labels": {k: v for k, v in REVIEW_KIND_LABELS_SV.items()},
+        # Förslag och ärenden räknas om efter ägarens senaste beslut (webbappen hämtar då om listan).
+        "recompute_pending": pending,
     }
 
 

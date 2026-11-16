@@ -13,7 +13,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import DbDep, PrincipalDep, WebPrincipalDep, get_owned_trip, get_vehicle, owned_vehicle_ids
-from app.api.errors import bad_request, not_found
+from app.api.errors import bad_request, conflict, not_found
 from app.api.serializers import trip_out, trips_out
 from app.jobs import enqueue
 from app.models import (
@@ -51,7 +51,7 @@ from app.services import settings as settings_svc
 from app.services.classify import engine as classify_engine
 from app.services.classify import purpose as purpose_mod
 from app.services.classify import signals as sig
-from app.services.learning import feedback
+from app.services.learning import feedback, recompute
 from app.services.places import registry as places
 from app.services.trips import pipeline, start_time
 from app.services.trips import segments as seg
@@ -428,6 +428,7 @@ def update_trip(trip_id: uuid.UUID, body: TripUpdate, principal: PrincipalDep, d
     if "start_time" in data:
         _set_start_time(db, trip, body.start_time, principal)
     if any(k in data for k in ("category", "purpose", "subcategory", "contacts", "notes")) or body.approve:
+        recompute.defer(db)  # övriga resors förslag räknas om efter svaret
         feedback.apply_decision(
             db, trip, user_id=principal.user.id, actor=principal.actor,
             channel="web",
@@ -437,13 +438,27 @@ def update_trip(trip_id: uuid.UUID, body: TripUpdate, principal: PrincipalDep, d
         # Frågor som blivit inaktuella (klassning godkänd, syfte bekräftat) avbryts.
         _cancel_notifications(db, trip.id)
     db.commit()
-    enqueue("classify.pending", user_id=str(principal.user.id), vehicle_id=str(trip.vehicle_id))
+    # AI-bedömningen av oavgjorda resor görs efter svaret (i enprocessläget i en bakgrundstråd).
+    enqueue("classify.pending", countdown=recompute.DEBOUNCE_SECONDS, user_id=str(principal.user.id),
+            vehicle_id=str(trip.vehicle_id))
     return trip_out(db, get_owned_trip(db, principal, trip_id))
 
 
+class ApproveIn(BaseModel):
+    expected_category: str | None = Field(
+        default=None, pattern="^(work|private|undecided)$",
+        description="Kategorin i förslaget som ägaren såg. Har förslaget ändrats sedan dess godkänns inget (409).",
+    )
+
+
 @router.post("/trips/{trip_id}/approve", response_model=TripOut, summary="Godkänn föreslagen klassning")
-def approve_trip(trip_id: uuid.UUID, principal: PrincipalDep, db: DbDep) -> TripOut:
+def approve_trip(trip_id: uuid.UUID, principal: PrincipalDep, db: DbDep, body: ApproveIn | None = None) -> TripOut:
     trip = get_owned_trip(db, principal, trip_id)
+    if body is not None and body.expected_category is not None and body.expected_category != trip.category:
+        # Förslagen räknas om efter föregående beslut; ägaren godkänner bara det hen faktiskt såg.
+        raise conflict("Förslaget för resan har ändrats sedan du såg det. Titta på det nya förslaget.",
+                       "proposal_changed", {"category": trip.category})
+    recompute.defer(db)
     feedback.apply_decision(db, trip, user_id=principal.user.id, actor=principal.actor, approve=True)
     _cancel_notifications(db, trip.id)
     db.commit()
@@ -483,6 +498,7 @@ def bulk_update(body: BulkUpdate, principal: WebPrincipalDep, db: DbDep) -> dict
             t.is_favorite = body.is_favorite
     done, errors = 0, []
     if body.category is not None or body.purpose is not None or body.approve:
+        recompute.defer(db)
         done, errors = feedback.bulk_apply(
             db, trips, user_id=principal.user.id, actor=principal.actor, category=body.category,
             purpose=body.purpose, approve=body.approve,

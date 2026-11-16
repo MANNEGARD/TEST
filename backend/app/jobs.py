@@ -9,12 +9,18 @@ Tjänstekod anropar ``enqueue("namn", **kwargs)``. Jobbfunktionerna registreras 
   den tråd som begär det. Har tråden en databassession med en öppen skrivtransaktion skjuts
   jobbet upp tills den transaktionen är avslutad – annars skulle jobbets egen session vänta
   på ett skrivlås som den anropande tråden själv håller ("database is locked" med SQLite).
+  Ett jobb med ``countdown`` körs i stället i en bakgrundstråd efter fördröjningen, så att
+  anropet inte väntar på det. Begärs samma jobb (samma namn och argument) igen innan det
+  har startat slås det ihop med det väntande – dock aldrig längre än ``MAX_DEBOUNCE_SECONDS``
+  från den första begäran. Det som inte hann köras före en omstart måste jobbet självt
+  kunna ta igen (se t.ex. ``learning.recompute``).
 """
 
 from __future__ import annotations
 
 import logging
 import threading
+import time
 import weakref
 from collections.abc import Callable
 from typing import Any
@@ -31,6 +37,8 @@ _registry: dict[str, Callable[..., Any]] = {}
 _test_queue: list[tuple[str, dict[str, Any]]] | None = None
 
 _DEFERRED_KEY = "drivelog_deferred_jobs"
+# Enprocessläget: ett fördröjt jobb skjuts upp av nya begäranden högst så här länge.
+MAX_DEBOUNCE_SECONDS = 10.0
 
 
 def register(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
@@ -117,12 +125,47 @@ def _run_now(name: str, kwargs: dict[str, Any]) -> None:
         logger.exception("Jobbet %s misslyckades", name)
 
 
-def enqueue(name: str, *, countdown: int | None = None, **kwargs: Any) -> None:
+# Enprocessläget: väntande fördröjda jobb, per (namn, argument) → (timer, första begäran).
+_later: dict[tuple[str, tuple[tuple[str, Any], ...]], tuple[threading.Timer, float]] = {}
+_later_lock = threading.Lock()
+
+
+def _run_later(name: str, kwargs: dict[str, Any], delay: float) -> None:
+    key = (name, tuple(sorted(kwargs.items())))
+    now = time.monotonic()
+    with _later_lock:
+        waiting = _later.get(key)
+        first = now
+        if waiting is not None:
+            timer, first = waiting
+            if now - first >= MAX_DEBOUNCE_SECONDS:
+                return  # startar snart ändå och ser då även den här begäran
+            timer.cancel()
+        delay = min(delay, max(0.0, first + MAX_DEBOUNCE_SECONDS - now))
+        timer = threading.Timer(delay, _fire_later, args=(key, name, kwargs))
+        timer.name = f"drivelog-job-{name}"
+        timer.daemon = True
+        _later[key] = (timer, first)
+        timer.start()
+
+
+def _fire_later(key: tuple[str, tuple[tuple[str, Any], ...]], name: str, kwargs: dict[str, Any]) -> None:
+    with _later_lock:
+        waiting = _later.get(key)
+        if waiting is not None and waiting[0] is threading.current_thread():
+            del _later[key]
+    _run_now(name, kwargs)
+
+
+def enqueue(name: str, *, countdown: float | None = None, **kwargs: Any) -> None:
     """Köar ett bakgrundsjobb. Fel vid köläggning får aldrig fälla anropet."""
     if _test_queue is not None:
         _test_queue.append((name, kwargs))
         return
     cfg = get_config()
+    if cfg.jobs_eager and countdown:
+        _run_later(name, kwargs, float(countdown))
+        return
     if cfg.jobs_eager:
         owner = _session_with_write_lock()
         if owner is not None:

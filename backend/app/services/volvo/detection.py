@@ -476,7 +476,8 @@ def process_vehicle(
     db.flush()
     db.execute(select(Vehicle.id).where(Vehicle.id == vehicle.id).with_for_update())
     settings = settings or settings_svc.get_section(db, user_id, "volvo")
-    tolerance = float(settings_svc.get_section(db, user_id, "merge")["odometer_tolerance_km"])
+    # Avrundning till hela kilometer räknas aldrig som skillnad (seg.odometer_slack).
+    tolerance = seg.odometer_slack(float(settings_svc.get_section(db, user_id, "merge")["odometer_tolerance_km"]))
     poll = float(settings.get("poll_interval_seconds", 300))
 
     anchor = db.execute(
@@ -691,7 +692,7 @@ def reconcile_with_imports(db: Session, vehicle: Vehicle, *, actor: Actor, now: 
     """
     now = now or utcnow()
     user_id = vehicle.owner_user_id
-    tol = float(settings_svc.get_section(db, user_id, "merge")["odometer_tolerance_km"])
+    tol = seg.odometer_slack(float(settings_svc.get_section(db, user_id, "merge")["odometer_tolerance_km"]))
     raws = list(
         db.execute(
             select(RawTrip).where(

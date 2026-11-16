@@ -16,7 +16,7 @@ from app.models import KnownLocation, LearningFeedback, LocationPattern, Logical
 from app.models.enums import PatternStatus
 from app.schemas.common import FeedbackOut, PatternOut, TripOut
 from app.services import audit
-from app.services.learning import feedback, patterns
+from app.services.learning import feedback, patterns, recompute
 from app.services.trips import segments as seg
 
 router = APIRouter(tags=["Learning feedback"])
@@ -66,6 +66,7 @@ def undo_feedback(feedback_id: uuid.UUID, principal: PrincipalDep, db: DbDep) ->
     fb = db.get(LearningFeedback, feedback_id)
     if fb is None or fb.user_id != principal.user.id:
         raise not_found("Ändringen")
+    recompute.defer(db)  # övriga resors förslag räknas om efter svaret
     trip = feedback.undo(db, fb, actor=principal.actor)
     db.commit()
     return trip_out(db, seg.load_trip(db, trip.id) or trip)

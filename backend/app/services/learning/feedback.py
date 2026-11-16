@@ -3,6 +3,10 @@
 Varje ändring sparas som ``LearningFeedback`` med ursprungligt och nytt värde, plats,
 veckodag, tid, kalenderkontext och modellens tidigare bedömning. Mönstren räknas om
 efter varje beslut, och en korrigering kan ångras helt.
+
+Omräkningen efter ett beslut (``after_decisions``) görs direkt i anropet, utom när anropet
+svarar ägaren i webben eller på telefonen (``recompute.defer``): då görs bara resans egna
+ärenden direkt och resten beställs till efter svaret (se ``learning.recompute``).
 """
 
 from __future__ import annotations
@@ -30,7 +34,7 @@ from app.services import audit
 from app.services import settings as settings_svc
 from app.services.audit import Actor
 from app.services.classify.purpose import NEEDS_CONFIRMATION_SUFFIX
-from app.services.learning import patterns
+from app.services.learning import patterns, recompute
 from app.services.places.normalize import fold
 from app.services.trips import segments as seg
 from app.services.trips.segments import TripError
@@ -120,6 +124,8 @@ def apply_decision(
     if purpose is not None and len(purpose) > MAX_PURPOSE_LENGTH:
         raise TripError(f"Syftet får vara högst {MAX_PURPOSE_LENGTH} tecken.", "purpose_too_long")
 
+    if rebuild and recompute.is_deferred(db):
+        recompute.request(db, trip.vehicle_id)
     before = _snapshot(trip)
     tz = settings_svc.user_timezone(db, user_id)
     decision_source = DecisionSource.HA if channel == "ha" else DecisionSource.USER
@@ -267,23 +273,53 @@ def apply_decision(
 
     trip._autopilot_notice = autopilot.on_owner_decision(db, trip, before=before, actor=actor)  # type: ignore[attr-defined]
     if rebuild:
-        after_decisions(db, user_id=user_id, vehicle_id=trip.vehicle_id, actor=actor)
+        rebuild_after(db, user_id=user_id, vehicle_id=trip.vehicle_id, actor=actor, trips=[trip])
     return trip
+
+
+def rebuild_after(
+    db: Session, *, user_id: uuid.UUID, vehicle_id: uuid.UUID, actor: Actor, trips: list[LogicalTrip]
+) -> None:
+    """Omräkningen efter beslut om ``trips``: direkt (after_decisions), eller – när anropet
+    svarar ägaren (recompute.defer) – bara resornas egna ärenden nu och resten efter svaret."""
+    if not recompute.is_deferred(db):
+        after_decisions(db, user_id=user_id, vehicle_id=vehicle_id, actor=actor)
+        return
+    from app.services.trips import pipeline
+
+    recompute.request(db, vehicle_id)
+    for trip in trips:
+        pipeline.sync_trip_review_items(db, trip, by=actor.label)
+    db.flush()
 
 
 def after_decisions(db: Session, *, user_id: uuid.UUID, vehicle_id: uuid.UUID, actor: Actor) -> None:
     """Räknar om mönster och uppdaterar förslag för övriga oavgjorda resor (utan LLM)."""
-    from app.services.classify import engine
     from app.services.trips import pipeline
 
     patterns.rebuild(db, user_id)
     vehicle = db.get(Vehicle, vehicle_id)
     if vehicle is None:
         return
-    # Regelkörning utan LLM. Resor vars aktuella bedömning kommer från AI lämnas orörda:
-    # en regelbedömning utan AI skulle annars ersätta AI-förslaget (annan indatahash) och
-    # förslaget gå förlorat tills nästa AI-körning.
-    cache: dict[str, Any] = {}
+    reclassify(db, user_id=user_id, vehicle_id=vehicle_id, trips=seg.active_trips(db, vehicle_id), cache={})
+    # Självgående läge: T och nya regler slår igenom på väntande resor direkt.
+    from app.services.classify import autopilot
+
+    autopilot.run_vehicle(db, user_id=user_id, vehicle=vehicle, actor=audit.SYSTEM)
+    for trip in seg.active_trips(db, vehicle_id):
+        pipeline.sync_trip_review_items(db, trip, by=actor.label)
+    db.flush()
+
+
+def reclassify(
+    db: Session, *, user_id: uuid.UUID, vehicle_id: uuid.UUID, trips: list[LogicalTrip], cache: dict[str, Any]
+) -> None:
+    """Regelbedömer ``trips`` (i given ordning) på nytt, utan LLM."""
+    from app.services.classify import engine
+
+    # Resor vars aktuella bedömning kommer från AI lämnas orörda: en regelbedömning utan AI
+    # skulle annars ersätta AI-förslaget (annan indatahash) och förslaget gå förlorat tills
+    # nästa AI-körning.
     ai_trips = set(
         db.execute(
             select(TripClassification.logical_trip_id)
@@ -296,19 +332,12 @@ def after_decisions(db: Session, *, user_id: uuid.UUID, vehicle_id: uuid.UUID, a
             )
         ).scalars()
     )
-    for trip in seg.active_trips(db, vehicle_id):
+    for trip in trips:
         if trip.id in ai_trips:
             continue
         engine.classify_trip(
             db, trip, user_id=user_id, actor=audit.SYSTEM, provider=None, use_llm=False, settings_cache=cache
         )
-    db.flush()
-    # Självgående läge: T och nya regler slår igenom på väntande resor direkt.
-    from app.services.classify import autopilot
-
-    autopilot.run_vehicle(db, user_id=user_id, vehicle=vehicle, actor=audit.SYSTEM)
-    for trip in seg.active_trips(db, vehicle_id):
-        pipeline.sync_trip_review_items(db, trip, by=actor.label)
     db.flush()
 
 
@@ -326,6 +355,9 @@ def bulk_apply(
     done = 0
     errors: list[dict[str, str]] = []
     vehicles: set[uuid.UUID] = set()
+    if recompute.is_deferred(db):
+        for vid in sorted({t.vehicle_id for t in trips}):
+            recompute.request(db, vid)  # före resorna (samma låsordning som insamlingen)
     for trip in trips:
         try:
             apply_decision(
@@ -337,7 +369,8 @@ def bulk_apply(
         except TripError as exc:
             errors.append({"trip_id": str(trip.id), "message": exc.message})
     for vid in vehicles:
-        after_decisions(db, user_id=user_id, vehicle_id=vid, actor=actor)
+        rebuild_after(db, user_id=user_id, vehicle_id=vid, actor=actor,
+                      trips=[t for t in trips if t.vehicle_id == vid])
     return done, errors
 
 
@@ -357,6 +390,8 @@ def undo(db: Session, feedback: LearningFeedback, *, actor: Actor) -> LogicalTri
     ).first()
     if later is not None:
         raise TripError("Det finns senare ändringar av resan. Ångra dem först.", "later_changes")
+    if recompute.is_deferred(db):
+        recompute.request(db, trip.vehicle_id)
     state = feedback.original_state or {}
     before = {f: getattr(trip, f) for f in _SNAPSHOT_FIELDS}
     for f in _SNAPSHOT_FIELDS:
@@ -399,7 +434,7 @@ def undo(db: Session, feedback: LearningFeedback, *, actor: Actor) -> LogicalTri
         before=before, after={f: getattr(trip, f) for f in _SNAPSHOT_FIELDS},
     )
     db.flush()
-    after_decisions(db, user_id=feedback.user_id, vehicle_id=trip.vehicle_id, actor=actor)
+    rebuild_after(db, user_id=feedback.user_id, vehicle_id=trip.vehicle_id, actor=actor, trips=[trip])
     return trip
 
 

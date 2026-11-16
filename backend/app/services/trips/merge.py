@@ -790,7 +790,6 @@ def evaluate_vehicle(
     self_driving = vehicle is not None and autopilot.is_active(db, vehicle.owner_user_id)
 
     trips = seg.active_trips(db, vehicle_id)
-    overlap_keys: set[str] = set()
     i = 0
     while i < len(trips) - 1:
         a, b = trips[i], trips[i + 1]
@@ -802,7 +801,6 @@ def evaluate_vehicle(
         verdict = decide(gap, auto_max=auto_max, ask_max=ask_max, odometer_tolerance=tol)
 
         if verdict == "overlap":
-            overlap_keys.add(f"overlap:{prev_raw.id}:{next_raw.id}")
             _, created = review.upsert(
                 db,
                 vehicle_id=vehicle_id,
@@ -865,13 +863,35 @@ def evaluate_vehicle(
             if created:
                 result["questions"].append(item)
         i += 1
-    # Öppna frågor om överlapp som inte längre gäller (t.ex. bara avrundning i mätarställningen)
-    # stängs av sig själva. Avvikelsesökningens ärenden med samma nyckel saknar first_trip_id.
-    review.close_stale(
-        db, vehicle_id, prefixes=("overlap:",), keep=overlap_keys, data_type="overlap", note=review.OVERLAP_GONE_NOTE,
-        when=lambda item: "first_trip_id" in (item.data or {}),
-    )
+    close_stale_overlaps(db, vehicle_id, odometer_tolerance=tol)
     return result
+
+
+def close_stale_overlaps(db: Session, vehicle_id: uuid.UUID, *, odometer_tolerance: float) -> int:
+    """Stänger öppna ärenden "Överlappande resor" där resorna inte längre överlappar.
+
+    T.ex. ett överlapp i mätarställningen som bara var avrundning till hela kilometer, eller
+    en resa som rättats eller makulerats. Avvikelsesökningens ärenden med samma nyckel
+    (utan ``first_trip_id``) och ärenden som ägaren har hanterat rörs inte.
+    """
+
+    def gone(item: ReviewItem) -> bool:
+        if "first_trip_id" not in (item.data or {}):
+            return False
+        try:
+            first, second = (uuid.UUID(part) for part in item.dedupe_key.split(":")[1:3])
+        except ValueError:
+            return False
+        prev, nxt = db.get(RawTrip, first), db.get(RawTrip, second)
+        if prev is None or nxt is None or prev.voided_at is not None or nxt.voided_at is not None:
+            return True
+        verdict = decide(stop_gap(prev, nxt), auto_max=0, ask_max=0, odometer_tolerance=odometer_tolerance)
+        return verdict != "overlap"
+
+    return review.close_stale(
+        db, vehicle_id, prefixes=("overlap:",), keep=set(), data_type="overlap", note=review.OVERLAP_GONE_NOTE,
+        when=gone,
+    )
 
 
 def _open_question(db: Session, vehicle_id: uuid.UUID, first_raw: uuid.UUID, second_raw: uuid.UUID) -> bool:

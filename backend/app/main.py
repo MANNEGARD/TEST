@@ -95,6 +95,11 @@ def start_scheduler():
     if not get_config().single_process:
         return None
     from app import scheduler
+    from app.services.learning import recompute
+
+    # Ingen omräkning kan pågå vid start: lås från en avbruten körning släpps, och det som
+    # inte hann räknas om görs vid första ticken.
+    recompute.release_leases()
 
     sched = scheduler.from_config()
     sched.start()

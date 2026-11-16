@@ -46,6 +46,7 @@ def tick() -> dict[str, Any]:
     from app.services.classify import autopilot
     from app.services.export import month_close
     from app.services.ha import alerts, notifier
+    from app.services.learning import recompute
     from app.services.places import geocode
     from app.services.trips import review
     from app.services.volvo import collector
@@ -60,6 +61,8 @@ def tick() -> dict[str, Any]:
         out["volvo_demo"] = _safe("volvo.demo.tick", volvo_demo.tick, db)
     with session_scope() as db:
         out["snoozed_woken"] = _safe("review.wake_snoozed", review.wake_snoozed, db)
+    # Omräkningar efter ägarens beslut som blivit kvar (t.ex. efter en omstart).
+    out["recompute"] = _safe("learning.recompute.run_due", recompute.run_due)
     out["geocode"] = _safe("places.geocode.run_pending", geocode.run_pending)
     with session_scope() as db:
         out["questions"] = _safe("ha.notifier.ensure_open_questions", notifier.ensure_open_questions, db)
@@ -104,6 +107,14 @@ def classify_pending(user_id: str, vehicle_id: str) -> dict[str, Any]:
         for trip in seg.active_trips(db, vehicle.id):
             pipeline.sync_trip_review_items(db, trip)
         return {"changed": changed}
+
+
+@jobs.register("learning.recompute")
+def learning_recompute(vehicle_id: str) -> dict[str, Any]:
+    """Omräkningen efter ägarens beslut (förslag, autopilot och ärenden), efter svaret."""
+    from app.services.learning import recompute
+
+    return recompute.run_vehicle(uuid.UUID(vehicle_id))
 
 
 @jobs.register("pipeline.vehicle")

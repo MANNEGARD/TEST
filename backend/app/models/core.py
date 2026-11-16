@@ -82,6 +82,12 @@ class Vehicle(Base):
         ForeignKey("integration_connections.id", ondelete="SET NULL"), nullable=True
     )
     capabilities: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict)
+    # Omräkning efter ägarens beslut (learning.recompute): räknas upp vid varje beslut och
+    # bockas av när omräkningen som började vid det värdet är klar. Ligger kvar över omstarter.
+    recompute_requested: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    recompute_done: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # Pågående omräkning (lås med utgångstid, så att två körningar inte räknar om samtidigt).
+    recompute_started_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
 
