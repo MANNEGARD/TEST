@@ -1196,12 +1196,15 @@ def _merge_candidate(db: Session, loc: KnownLocation) -> KnownLocation | None:
 
 
 def _merge_with_known(db: Session, loc: KnownLocation, *, now: datetime) -> bool:
-    """En uppslagen plats vid bostaden eller ett kontor utan adress slås ihop med den (så får
-    bostaden sin adress ur den importerade platsen). Har båda adress och adresserna skiljer
-    sig blir det bara ett förslag (``registry.merge_suggestions``). Andra platser rörs inte."""
+    """En uppslagen plats vid bostaden eller ett kontor utan adress (eller med samma adress)
+    slås ihop med den – så får bostaden sin adress ur den importerade platsen. Har båda adress
+    och adresserna skiljer sig blir det bara ett förslag (``registry.merge_suggestions``).
+    Andra platser (kunder, obekräftade) rörs inte."""
     known = _merge_candidate(db, loc)
-    if known is None or (known.address or "").strip():
+    if known is None:
         return False
+    if (known.address or "").strip() and address_key(known.address) != address_key(loc.address):
+        return False  # olika adresser: bara ett förslag (address_merge_suggestions)
     address, city = loc.address, loc.city
     places.merge_locations(db, known, loc)
     if not (known.address or "").strip():

@@ -546,11 +546,26 @@ def _notify_ready(
     key = f"monthly:{status.vehicle_id}:{status.month}:ready:{export.id if export is not None else 'empty'}"
     if notifier._exists(db, record.user_id, key):
         return
-    if update and record.notified_at is not None and now - record.notified_at < UPDATE_NOTICE_EVERY:
+    if update and _ready_sent_since(db, record, now - UPDATE_NOTICE_EVERY):
         return  # nästa kontroll skickar notisen när dygnet har gått
     req = notices.queue_month_ready(db, user_id=record.user_id, status=status, export=export, now=now)
     if req is not None:
         record.notified_at = now
+
+
+def _ready_sent_since(db: Session, record: MonthClose, since: datetime) -> bool:
+    """Har en "klart"/"uppdaterad"-notis för månaden skapats sedan ``since``? (En "väntar"-notis
+    räknas inte: den får inte skjuta upp beskedet om det nya underlaget ett dygn.)"""
+    from app.models import NotificationRequest
+
+    prefix = f"monthly:{record.vehicle_id}:{record.month}:ready:"
+    return db.execute(
+        select(NotificationRequest.id).where(
+            NotificationRequest.user_id == record.user_id,
+            NotificationRequest.dedupe_key.like(f"{prefix}%"),
+            NotificationRequest.created_at >= since,
+        ).limit(1)
+    ).first() is not None
 
 
 def _notify_waiting(db: Session, record: MonthClose, status: MonthStatus, now: datetime) -> None:
@@ -622,6 +637,7 @@ def run_for(
             job = _create_export(db, user_id=user_id, vehicle=vehicle, facts=facts, now=now)
             if old is not None:
                 old.superseded_by_id = job.id
+                db.flush()  # notisen hittar den ersatta filen ("uppdaterad"), sessionen flushar inte själv
             record.state, record.export_id, record.rows_fingerprint = (
                 MonthCloseState.EXPORTED, job.id, facts.fingerprint)
             audit.record(db, audit.Actor("system", "month_close"), "month_close.superseded", "month_close",

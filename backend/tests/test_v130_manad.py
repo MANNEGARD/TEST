@@ -94,10 +94,15 @@ def exports(db) -> list[M.ExportJob]:
 
 
 def monthly(db) -> list[M.NotificationRequest]:
-    return list(db.execute(
+    """Novembers månadsnotiser (oktober kontrolleras också av run_due, men är tom)."""
+    return [n for n in db.execute(
         select(M.NotificationRequest).where(M.NotificationRequest.kind == NotificationKind.MONTHLY)
         .order_by(M.NotificationRequest.created_at)
-    ).scalars())
+    ).scalars() if n.title.startswith("November")]
+
+
+def november(db) -> M.MonthClose:
+    return db.execute(select(M.MonthClose).where(M.MonthClose.month == "2026-11")).scalar_one()
 
 
 def due(db, now: datetime) -> dict[str, Any]:
@@ -207,10 +212,12 @@ def test_month_end_unchanged_gives_nothing_more(db, user, vehicle, trips, sd):
     work(trips)
     run(db, user, vehicle, force=True)
     final_fetch(db, vehicle)
-    assert due(db, at(20, 12, month=11)).get("checked", 0) == 0  # november kontrolleras inte under månaden
-    assert due(db, at(1, 3)).get("checked", 0) == 0  # inom väntetiden efter månadsslutet
-    out = due(db, at(1, 7))
-    assert out["checked"] == 1 and out.get("exported") == 1
+    due(db, at(20, 12, month=11))
+    assert november(db).last_checked_at == NOW  # november kontrolleras inte under månaden
+    due(db, at(1, 3))
+    assert november(db).last_checked_at == NOW  # inom väntetiden efter månadsslutet
+    due(db, at(1, 7))
+    assert november(db).last_checked_at == at(1, 7) and november(db).state == "exported"
     assert len(exports(db)) == 1 and len(monthly(db)) == 1  # ingen fil i onödan, ingen dubbel "klar"-notis
 
 
@@ -219,8 +226,8 @@ def test_month_end_with_a_new_trip_gives_an_updated_file(db, user, vehicle, trip
     run(db, user, vehicle, force=True)
     work(trips, day=25, km=34)
     final_fetch(db, vehicle)
-    assert due(db, at(1, 7)).get("stale") == 1
-    assert len(exports(db)) == 1
+    due(db, at(1, 7))
+    assert november(db).state == "stale" and len(exports(db)) == 1
     due(db, at(1, 8, 1))
     first, second = exports(db)
     assert first.superseded_by_id == second.id
@@ -255,9 +262,8 @@ def test_closed_early_then_an_unanswered_work_trip_gives_a_waiting_notice(db, us
     run(db, user, vehicle, force=True)
     trip = pending_work(db, trips)
     final_fetch(db, vehicle)
-    out = due(db, at(1, 7))
-    assert out.get("exported") == 1
-    assert len(exports(db)) == 1
+    due(db, at(1, 7))
+    assert november(db).state == "exported" and len(exports(db)) == 1
     waiting = [n for n in monthly(db) if n.title == "November väntar"]
     assert len(waiting) == 1 and "väntar på ditt svar" in waiting[0].message
     due(db, at(1, 8, 1))
