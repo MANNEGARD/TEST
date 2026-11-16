@@ -240,8 +240,12 @@ def _notes(ctx: ExportContext, trip: LogicalTrip, refuels: list[FuelRecord]) -> 
         elif trip.start_time_quality == TimeQuality.ESTIMATED:
             # Uträknad ur bilens egna avläsningar (byggkontraktet D.3), med felmarginalen.
             basis = raws[0].start_estimate_basis if raws else None
-            margin = start_time.margin_text(basis if isinstance(basis, dict) else None)
-            parts.append("Starttiden är uträknad ur bilens egna uppgifter (ca" + (f", {margin})" if margin else ")"))
+            basis = basis if isinstance(basis, dict) else None
+            margin = start_time.margin_text(basis)
+            # K4: ur sträckan och en snittfart (start_time.fill_from_distance).
+            what = ("uppskattad ur sträckan och en snittfart" if (basis or {}).get("method") == "distance_speed"
+                    else "uträknad ur bilens egna uppgifter")
+            parts.append(f"Starttiden är {what} (ca" + (f", {margin})" if margin else ")"))
         elif trip.start_time_quality == TimeQuality.BOUNDED:
             parts.append("Starttiden är uppskattad")
         if trip.ended_at is None:

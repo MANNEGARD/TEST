@@ -1,6 +1,6 @@
 """Gemensam efterbearbetning när resor tillkommit eller ändrats.
 
-Ordningen är: sammanslagningsregler → dataluckor → platsstatistik → mönster →
+Ordningen är: starttid ur sträckan (K4) → sammanslagningsregler → dataluckor → platsstatistik → mönster →
 kalender → klassificering av oavgjorda resor → resekedjor → autopiloten (självgående
 läge) → granskningsärenden → ev. notiser.
 
@@ -22,7 +22,7 @@ from app.models.enums import Category, LogicalState, ReviewKind, ReviewStatus
 from app.services import settings as settings_svc
 from app.services.audit import Actor
 from app.services.places import registry as places
-from app.services.trips import gaps, merge, review
+from app.services.trips import gaps, merge, review, start_time
 from app.services.trips import segments as seg
 
 _TRIP_KINDS = (
@@ -148,6 +148,10 @@ def after_trips_changed(
     merge_cfg = settings_svc.get_section(db, user_id, "merge")
     scope = settings_svc.journal_scope(db, user_id)
     out: dict[str, Any] = {"origin": origin}
+
+    # Resor från bilen med okänd starttid får en uppskattning ur sträckan före allt annat,
+    # så att flaggor, klassning och frågor ser den (start_time.fill_from_distance).
+    out["start_estimated"] = start_time.fill_from_distance(db, vehicle.id)
 
     merge_result = merge.evaluate_vehicle(
         db, vehicle_id=vehicle.id, merge_settings=merge_cfg, actor=actor, apply_auto=apply_merge_rules

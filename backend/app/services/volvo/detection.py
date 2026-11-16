@@ -13,7 +13,8 @@ och mätarställningen är ett heltal i kilometer. Motorn gör därför så här
 
 Starttiden rapporteras inte av bilen. Den räknas fram ur bilens egna avläsningar när de
 räcker (``trips.start_time.estimate``, märkt ``estimated``); annars lämnas den tom och i
-stället anges ett intervall (``start_earliest``–``start_latest``). Om mätarsträckan inte förklaras av
+stället anges ett intervall (``start_earliest``–``start_latest``), och pipelinen uppskattar
+den sedan ur sträckan (``trips.start_time.fill_from_distance``, också märkt ``estimated``). Om mätarsträckan inte förklaras av
 positionerna (omväg, rundresa utan ny position, uppehåll i insamlingen) flaggas
 resan med ``possible_missed_trips`` – flera körningar kan ha skett.
 """
@@ -493,6 +494,7 @@ def process_vehicle(
     )
     if anchor is None:
         if not pending:
+            _estimate_existing(db, vehicle, user_id, run_pipeline)
             return []
         anchor = pending.pop(0)
         anchor.processed_at = now
@@ -540,6 +542,7 @@ def process_vehicle(
 
     db.flush()
     if not created:
+        _estimate_existing(db, vehicle, user_id, run_pipeline)
         return []
     for raw in created:
         seg.create_logical_for_raw(
@@ -558,6 +561,20 @@ def process_vehicle(
         )
     db.flush()
     return created
+
+
+def _estimate_existing(db: Session, vehicle: Vehicle, user_id: uuid.UUID, run_pipeline: bool) -> None:
+    """Resor med okänd starttid som ännu inte fått en uppskattning ur sträckan (t.ex. från
+    före 1.2.1) får den vid nästa insamling, även när ingen ny resa hittas. Pipelinen gör
+    uppskattningen först och räknar sedan om flaggor, klassning och frågor."""
+    if not run_pipeline or not start_time.has_distance_candidates(db, vehicle.id):
+        return
+    from app.services.trips import pipeline
+
+    pipeline.after_trips_changed(
+        db, user_id=user_id, vehicle=vehicle, actor=audit.SYSTEM, apply_merge_rules=True, notify=True, origin="live"
+    )
+    db.flush()
 
 
 # --------------------------------------------------------------- avstämning mot import

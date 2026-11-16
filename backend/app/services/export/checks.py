@@ -283,7 +283,8 @@ def reported_quality_checks(db: Session, reported: list[LogicalTrip]) -> list[di
     if estimated:
         out.append(
             _check("estimated_times", INFO, "Uträknade tider",
-                   f"{len(estimated)} tjänsteresor har en tid som är uträknad ur bilens egna uppgifter. "
+                   f"{len(estimated)} tjänsteresor har en tid som är uträknad ur bilens egna uppgifter "
+                   "(en okänd starttid uppskattas ur sträckan). "
                    "Den står som \"ca\" i underlaget.", estimated)
         )
     no_address = [t for t in rows if not clean(t.start_address) or not clean(t.end_address)]
