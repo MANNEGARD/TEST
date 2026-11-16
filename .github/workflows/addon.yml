@@ -413,6 +413,212 @@ jobs:
           grep -F "Ingen terminal att fråga i" "$RUNNER_TEMP/server-fel.txt"
           test -z "$(docker ps -aq --filter name=drivelog-server-tom)"
 
+      - name: Egen server – automatisk uppdatering (timer, uppgradering, återgång, lås, avstängning)
+        run: |
+          . "$RUNNER_TEMP/addon.sh"
+          # Fortsätter med datakatalogen från förra steget (kontot finns, lösenordet är CI_NYTT_PASSWORD).
+          DATA="$RUNNER_TEMP/server-data"
+          HEM="$RUNNER_TEMP/server-hem"
+          KALLA="$RUNNER_TEMP/server-kalla"
+          ENHET=drivelog-uppdatering
+          # Versionskällan är en lokal fil (file://) i stället för config.yaml på GitHub, och
+          # avbilderna är den nyss byggda med ny versionsetikett – inget hämtas eller publiceras.
+          erbjud() { mkdir -p "$KALLA/drivelog"; printf 'name: "SMGD DriveLog"\nversion: "%s"\nslug: drivelog\n' "$1" > "$KALLA/drivelog/config.yaml"; }
+          # Källan har också skriptet: kommer det genom ett rör (curl … | bash) hämtas kopian därifrån.
+          mkdir -p "$KALLA/deploy"; cp deploy/server.sh "$KALLA/deploy/server.sh"
+          ny_version() { # version [trasig|hanger]
+            local cid andra=(--change "LABEL io.hass.version=$1" --change "ENV DRIVELOG_ADDON_VERSION=$1")
+            # Den trasiga versionen "migrerar" datat (skriver en fil) och avslutar sedan med fel.
+            [ "${2:-}" != trasig ] || andra+=(--change 'CMD ["/bin/sh", "-c", "echo Trasig testversion >&2; touch /data/app/trasig-migrering; exit 3"]')
+            # Den som hänger "migrerar" också men svarar aldrig – provet hinner avbryta skriptet under väntan.
+            [ "${2:-}" != hanger ] || andra+=(--change 'CMD ["/bin/sh", "-c", "touch /data/app/trasig-migrering; exec sleep 600"]')
+            cid="$(docker create drivelog-addon:test)"
+            docker commit "${andra[@]}" "$cid" "drivelog-addon:$1" >/dev/null
+            docker rm "$cid" >/dev/null
+          }
+          auto_server() { # [VARIABEL=värde …] -- argument till skriptet
+            local miljo=()
+            while [ "$1" != "--" ]; do miljo+=("$1"); shift; done
+            shift
+            sudo env DRIVELOG_IMAGE=drivelog-addon DRIVELOG_PULL=0 DRIVELOG_DATA="$DATA" DRIVELOG_CONTAINER=drivelog-server \
+              DRIVELOG_HEM="$HEM" DRIVELOG_REPO_RAW="file://$KALLA" DRIVELOG_WAIT=240 "${miljo[@]}" deploy/server.sh "$@"
+          }
+          # Som ägarens rad: skriptet kommer på standard in (curl … | sudo bash -s --), ingen fil att kopiera.
+          auto_ror() {
+            cat deploy/server.sh | sudo env DRIVELOG_IMAGE=drivelog-addon DRIVELOG_PULL=0 DRIVELOG_DATA="$DATA" \
+              DRIVELOG_CONTAINER=drivelog-server DRIVELOG_HEM="$HEM" DRIVELOG_REPO_RAW="file://$KALLA" DRIVELOG_WAIT=240 \
+              bash -s -- "$@"
+          }
+          kor_tjansten() { sudo systemctl start "$ENHET.service"; }
+          tjanstens_lage() { systemctl show -p ActiveState --value "$ENHET.service"; }
+          version() { docker inspect -f '{{ index .Config.Labels "io.hass.version" }}' drivelog-server; }
+          startad() { docker inspect -f '{{.State.StartedAt}}' drivelog-server; }
+          logg() { sudo cat "$HEM/uppdatering.log"; }
+          for v in 900.0.0 900.1.0 900.3.0; do ny_version "$v"; done
+          ny_version 900.2.0 trasig
+          ny_version 900.1.5 hanger
+
+          # 1) Slå på genom röret, som ägaren gör: installerar den erbjudna versionen och startar
+          #    timern. Kopian som timern kör hämtas ur källan och är samma fil.
+          erbjud 900.0.0
+          auto_ror localhost --automatisk-uppdatering
+          test "$(docker inspect -f '{{.Config.Image}}' drivelog-server)" = drivelog-addon:900.0.0
+          test "$(systemctl is-enabled "$ENHET.timer")" = enabled
+          test "$(systemctl is-active "$ENHET.timer")" = active
+          sudo cmp deploy/server.sh "$HEM/server.sh"
+          test "$(sudo stat -c '%a %U' "$HEM/server.sh")" = "700 root"
+          grep -F "ExecStart=/bin/bash $HEM/server.sh --tidsstyrd" "/etc/systemd/system/$ENHET.service"
+          test "$(logga_in "$CI_NYTT_PASSWORD")" = 200
+
+          # 2) Ingen ny version: ingenting händer, ingen omstart.
+          fore="$(startad)"
+          kor_tjansten
+          test "$(startad)" = "$fore"
+          logg | grep -F "Ingen ny version (kör 900.0.0, erbjuds 900.0.0)."
+          sudo journalctl -t "$ENHET" --no-pager | grep -F "Ingen ny version"
+
+          # 3) Ny version erbjuds: säkerhetskopia, uppgradering, rätt version svarar, datat finns kvar.
+          #    Tre äldre kopior har senare tidsstämplar i namnet (klockan gick fel en gång): städningen
+          #    går på ändringstid och tar aldrig bort den nya kopian.
+          for d in 1 2 3; do
+            f="$HEM/kopior/drivelog-data-2999010${d}T000000-0.9.0.tar.gz"
+            sudo sh -c ": | gzip > '$f'"; sudo touch -d "2020-01-0$d" "$f"
+          done
+          erbjud 900.1.0
+          kor_tjansten
+          test "$(version)" = 900.1.0
+          test "$(docker inspect -f '{{.Config.Image}}' drivelog-server)" = drivelog-addon:900.1.0
+          test "$(logga_in "$CI_NYTT_PASSWORD")" = 200
+          SMOKE_EMAIL=ci@example.com SMOKE_PASSWORD="$CI_NYTT_PASSWORD" deploy/smoke-test.sh https://localhost
+          sudo sh -c "ls $HEM/kopior/drivelog-data-*-900.0.0.tar.gz"
+          sudo sh -c "tar -tzf $HEM/kopior/drivelog-data-*-900.0.0.tar.gz" | grep -F ./app/drivelog.sqlite3
+          logg | grep -F "Klart: DriveLog 900.1.0 är igång och svarar."
+          test "$(sudo sh -c "ls $HEM/kopior/drivelog-data-*.tar.gz" | wc -l)" = 3
+          sudo test ! -e "$HEM/kopior/drivelog-data-29990101T000000-0.9.0.tar.gz"
+          sudo test -e "$HEM/kopior/drivelog-data-29990103T000000-0.9.0.tar.gz"
+          sudo test ! -e "$HEM/pagaende-uppgradering"
+
+          # 3b) Avbrott efter docker stop, före säkerhetskopian (som när servern startas om): markeringen
+          #     finns, DriveLog är stoppad och en halvfärdig kopia ligger kvar. Nästa körning startar
+          #     den förra versionen igen och städar.
+          gammal_id="$(docker inspect -f '{{.Image}}' drivelog-server)"
+          docker stop -t 30 drivelog-server >/dev/null
+          printf 'fas=stoppad\ngammal=900.1.0\ngammal_bild=%s\nny=900.1.5\nkopia=\ndata=%s\nnamn=drivelog-server\n' "$gammal_id" "$DATA" \
+            | sudo tee "$HEM/pagaende-uppgradering" >/dev/null
+          echo halv | sudo tee "$HEM/kopior/drivelog-data-20261116T000000-900.1.0.tar.gz.tmp" >/dev/null
+          kor_tjansten
+          test "$(docker inspect -f '{{.State.Running}}' drivelog-server)" = true
+          test "$(version)" = 900.1.0
+          sudo test ! -e "$HEM/pagaende-uppgradering"
+          sudo test ! -e "$HEM/kopior/drivelog-data-20261116T000000-900.1.0.tar.gz.tmp"
+          logg | grep -F "avbröts under säkerhetskopieringen; DriveLog 900.1.0 kör igen"
+          test "$(logga_in "$CI_NYTT_PASSWORD")" = 200
+
+          # 3c) Tjänsten dödas medan den nya versionen provas (som ett strömavbrott för skriptet):
+          #     den nya containern lever kvar med migrerat data. Nästa körning litar inte på den utan
+          #     går tillbaka till 900.1.0 med datat från före försöket, och tillåter ett nytt försök.
+          erbjud 900.1.5
+          sudo systemctl start --no-block "$ENHET.service"
+          for _ in $(seq 1 120); do
+            [ "$(version 2>/dev/null)" = 900.1.5 ] && sudo test -e "$DATA/app/trasig-migrering" && break
+            sleep 1
+          done
+          test "$(version)" = 900.1.5
+          test "$(tjanstens_lage)" = activating
+          sudo systemctl kill --signal=KILL "$ENHET.service"
+          for _ in $(seq 1 30); do [ "$(tjanstens_lage)" != activating ] && break; sleep 1; done
+          test "$(tjanstens_lage)" != activating
+          sudo grep -x "fas=provar" "$HEM/pagaende-uppgradering"
+          test "$(version)" = 900.1.5
+          kor_tjansten
+          test "$(version)" = 900.1.0
+          test "$(docker inspect -f '{{.State.Running}}' drivelog-server)" = true
+          if sudo test -e "$DATA/app/trasig-migrering"; then echo "Datat återställdes inte efter avbrottet" >&2; exit 1; fi
+          sudo test ! -e "$HEM/pagaende-uppgradering"
+          sudo grep -x "avbruten_version=900.1.5" "$HEM/lage.txt"
+          logg | grep -F "Uppgraderingen till 900.1.5 avbröts innan den var kontrollerad"
+          test "$(logga_in "$CI_NYTT_PASSWORD")" = 200
+
+          # 4) Trasig ny version: återgång till 900.1.0 med datat från före försöket.
+          erbjud 900.2.0
+          if kor_tjansten; then echo "Tjänsten lyckades trots trasig version" >&2; exit 1; fi
+          test "$(version)" = 900.1.0
+          test "$(docker inspect -f '{{.State.Running}}' drivelog-server)" = true
+          if sudo test -e "$DATA/app/trasig-migrering"; then echo "Datat återställdes inte" >&2; exit 1; fi
+          test "$(logga_in "$CI_NYTT_PASSWORD")" = 200
+          logg | grep -F "Återgick till DriveLog 900.1.0"
+          sudo grep -x "misslyckad_version=900.2.0" "$HEM/lage.txt"
+          # … och samma version prövas inte igen.
+          fore="$(startad)"
+          kor_tjansten
+          test "$(startad)" = "$fore"
+          test "$(version)" = 900.1.0
+          logg | grep -F "Version 900.2.0 startade inte förra gången – försöker inte igen"
+
+          # 5) Läget i klartext.
+          auto_server -- --lage | tee "$RUNNER_TEMP/lage.txt"
+          grep -F "Automatisk uppdatering:  på" "$RUNNER_TEMP/lage.txt"
+          grep -F "Kör version:             900.1.0 (igång)" "$RUNNER_TEMP/lage.txt"
+          grep -F "Senaste uppgradering:" "$RUNNER_TEMP/lage.txt" | grep -F "900.0.0 → 900.1.0"
+          grep -F "Hoppar över version:     900.2.0" "$RUNNER_TEMP/lage.txt"
+
+          # 6) Lås: medan en annan körning håller låset gör tjänsten ingenting.
+          erbjud 900.3.0
+          fore="$(startad)"
+          sudo flock /run/lock/drivelog-server.lock systemctl start "$ENHET.service"
+          test "$(startad)" = "$fore"
+          logg | grep -F "En annan körning pågår redan"
+          # Raden för hand fungerar som förut med automatiken på – och förnyar kopian.
+          echo "# gammal kopia" | sudo tee -a "$HEM/server.sh" >/dev/null
+          auto_server -- localhost </dev/null
+          test "$(version)" = 900.3.0
+          sudo cmp deploy/server.sh "$HEM/server.sh"
+          if sudo grep -q misslyckad_version "$HEM/lage.txt"; then echo "Minnet av den misslyckade versionen finns kvar" >&2; exit 1; fi
+          test "$(systemctl is-active "$ENHET.timer")" = active
+
+          # Raden för hand med en tom datakatalog men säkerhetskopior: inget nytt, tomt konto skapas.
+          if auto_server DRIVELOG_DATA="$RUNNER_TEMP/server-forsvunnen" DRIVELOG_CONTAINER=drivelog-server-tom -- localhost \
+               </dev/null 2> "$RUNNER_TEMP/server-fel.txt"; then
+            echo "Skriptet skapade ett nytt konto trots säkerhetskopior" >&2; exit 1
+          fi
+          grep -F "Inget nytt konto skapas" "$RUNNER_TEMP/server-fel.txt"
+          test -z "$(docker ps -aq --filter name=drivelog-server-tom)"
+          test "$(version)" = 900.3.0
+
+          # Inga hemligheter i automatikens filer eller i journalen.
+          for pw in "$CI_ADMIN_PASSWORD" "$CI_NYTT_PASSWORD"; do
+            if sudo grep -rF "$pw" "$HEM/automatik.conf" "$HEM/lage.txt" "$HEM/uppdatering.log" >/dev/null 2>&1 \
+              || sudo journalctl -t "$ENHET" --no-pager | grep -F "$pw" >/dev/null; then
+              echo "Ett lösenord finns i automatikens filer eller i journalen" >&2; exit 1
+            fi
+          done
+
+          # 7) Slå av: timern och tjänsten är borta, DriveLog kör vidare.
+          auto_server -- --utan-automatisk-uppdatering
+          test ! -e "/etc/systemd/system/$ENHET.timer"
+          test ! -e "/etc/systemd/system/$ENHET.service"
+          if systemctl is-active --quiet "$ENHET.timer"; then echo "Timern är fortfarande aktiv" >&2; exit 1; fi
+          if systemctl list-timers --all --no-legend | grep -F "$ENHET" >/dev/null; then echo "Timern finns kvar" >&2; exit 1; fi
+          test "$(docker inspect -f '{{.State.Running}}' drivelog-server)" = true
+          auto_server -- --lage | grep -F "Automatisk uppdatering:  av"
+
+      - name: Egen server – automatikens logg vid fel
+        if: failure()
+        run: |
+          sudo cat "$RUNNER_TEMP/server-hem/uppdatering.log" 2>/dev/null || true
+          sudo journalctl -t drivelog-uppdatering --no-pager -n 200 2>/dev/null || true
+          systemctl status drivelog-uppdatering.timer drivelog-uppdatering.service --no-pager 2>/dev/null || true
+
+      - name: Egen server – städa automatiken
+        if: always()
+        run: |
+          sudo systemctl disable --now drivelog-uppdatering.timer >/dev/null 2>&1 || true
+          sudo rm -f /etc/systemd/system/drivelog-uppdatering.timer /etc/systemd/system/drivelog-uppdatering.service
+          sudo systemctl daemon-reload || true
+          sudo rm -rf "$RUNNER_TEMP/server-hem" "$RUNNER_TEMP/server-kalla" "$RUNNER_TEMP/lage.txt" "$RUNNER_TEMP/server-forsvunnen"
+          docker rmi drivelog-addon:900.0.0 drivelog-addon:900.1.0 drivelog-addon:900.1.5 drivelog-addon:900.2.0 \
+            drivelog-addon:900.3.0 >/dev/null 2>&1 || true
+
       - name: Loggar vid fel
         if: failure()
         run: |

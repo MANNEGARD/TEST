@@ -28,11 +28,66 @@ efter e-post och lösenord för ditt konto, startar den färdiga avbilden (samma
 Assistant-appen: API, webbapp och proxy i en container, med SQLite) och väntar tills
 `https://drivelog.smgd.se` svarar med giltigt certifikat. Lösenordet sparas inte i klartext.
 
-- **Uppdatera:** kör samma rad igen. Allt ditt ligger kvar i `/opt/drivelog/data`.
+- **Uppdatera:** kör samma rad igen. Allt ditt ligger kvar i `/opt/drivelog/data`. Servern kan
+  också göra det själv, se [Automatisk uppdatering](#automatisk-uppdatering).
 - **Glömt lösenordet:** lägg till `--nytt-losenord` sist på raden.
 - **Säkerhetskopia:** ta med `/opt/drivelog/data` i serverns säkerhetskopior (databasen,
   krypteringsnyckeln och certifikaten ligger där).
 - **Loggen:** `docker logs --tail 50 drivelog`.
+
+### Automatisk uppdatering
+
+Vill du slippa köra raden själv varje gång en ny version kommer kan servern sköta det. Lägg
+till `--automatisk-uppdatering` sist på samma rad (en gång räcker):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/SMGD-MP/TEST/HEAD/deploy/server.sh | sudo bash -s -- drivelog.smgd.se --automatisk-uppdatering
+```
+
+Så här fungerar det:
+
+- Ungefär var 15:e minut kontrollerar servern vilken version som erbjuds. Det är samma version
+  som raden ovan installerar, och den erbjuds först när den är färdigbyggd och provstartad.
+  Bara en **nyare** version installeras. Är det samma version händer ingenting, och DriveLog
+  startas inte om.
+- Före varje uppdatering stoppas DriveLog en kort stund och hela `/opt/drivelog/data` kopieras
+  till `/opt/drivelog/kopior` (databasen, nycklarna, certifikaten och inställningarna). De tre
+  senaste kopiorna sparas. Sedan startas den nya versionen, och servern kontrollerar att den
+  svarar och att det verkligen är den nya versionen som kör.
+- **Om den nya versionen inte startar** går servern själv tillbaka: den nya stoppas, datat
+  läggs tillbaka från kopian och den förra versionen startas igen. Den misslyckade versionen
+  prövas inte om och om igen, bara när en ännu nyare version kommer eller när du kör raden
+  själv. Du behöver inte göra något, men titta gärna på läget (se nedan).
+- **Om uppdateringen avbryts** (servern startas om eller strömmen går mitt i) gör servern
+  klart vid nästa kontroll, eller när du kör raden själv: den förra versionen startas igen
+  med datat från före försöket. Avbryts samma version två gånger prövas den inte igen förrän
+  en nyare kommer. Saknas ditt data någon gång men säkerhetskopior finns, skapar raden inget
+  nytt tomt konto. Den talar i stället om vilken kopia du ska lägga tillbaka.
+- Servern kör en egen kopia av skriptet (`/opt/drivelog/server.sh`). Från internet hämtas bara
+  versionsnumret och själva DriveLog-avbilden. Kopian förnyas när du kör raden själv.
+- Du kan fortfarande köra raden för hand när du vill. Pågår en automatisk uppdatering just då
+  väntar raden tills den är klar.
+
+**Se läget** (automatik på eller av, vilken version som kör och vilken som erbjuds, senaste
+kontroll, senaste uppdatering och senaste fel):
+
+```bash
+sudo /opt/drivelog/server.sh --lage
+```
+
+Samma sak fungerar alltid med raden ovan om du byter `drivelog.smgd.se --automatisk-uppdatering`
+mot `--lage`. Hela loggen finns i `/opt/drivelog/uppdatering.log` (och med
+`journalctl -t drivelog-uppdatering`).
+
+**Slå av** automatiken (DriveLog fortsätter att köra som vanligt):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/SMGD-MP/TEST/HEAD/deploy/server.sh | sudo bash -s -- --utan-automatisk-uppdatering
+```
+
+Säkerhetskopiorna i `/opt/drivelog/kopior` ligger på samma disk som DriveLog. De skyddar mot en
+misslyckad uppdatering, inte mot att servern går sönder, så ta fortfarande med `/opt/drivelog`
+i serverns vanliga säkerhetskopior.
 
 Resten av den här sidan beskriver den större uppsättningen med Docker Compose (PostgreSQL,
 Redis och separata tjänster), som bygger avbilderna på servern.
