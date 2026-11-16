@@ -3,7 +3,7 @@
 name: "SMGD DriveLog"
 # `version` är den version Home Assistant erbjuder. Raden höjs av arbetsflödet
 # (.github/workflows/addon.yml) när avbilden är publicerad – ändra drivelog/VERSION i stället.
-version: "1.2.3"
+version: "1.3.0"
 slug: "drivelog"
 description: "Självhostad körjournal för tjänsteresor – nås på din egen domän med automatisk HTTPS."
 url: "https://github.com/SMGD-MP/TEST"
