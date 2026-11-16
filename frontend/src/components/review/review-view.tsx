@@ -30,7 +30,7 @@ import { useTripActions } from "@/components/trips/use-trip-actions";
 import { api, errorMessage } from "@/lib/api";
 import { formatDate, formatNumber, formatPercent } from "@/lib/format";
 import { CATEGORY_LABELS, DECISION_SOURCE_LABELS, label, REVIEW_KIND_LABELS, REVIEW_KIND_SHORT } from "@/lib/labels";
-import { invalidateJournalData } from "@/lib/queries/keys";
+import { invalidateJournalData, qk } from "@/lib/queries/keys";
 import { HIDDEN_REVIEW_KINDS, useAnswerMerge, useReviewAction, useReviewItems } from "@/lib/queries/review";
 import { useTripDetail } from "@/lib/queries/trips";
 import type { CategoryCode, ReviewItem, Trip } from "@/lib/types";
@@ -199,6 +199,9 @@ export function ReviewView() {
   const [done, setDone] = React.useState<Set<string>>(new Set());
   const [front, setFront] = React.useState<string[]>([]);
   const [failed, setFailed] = React.useState<Record<string, string>>({});
+  // När servern har sparat svaret gäller dess lista igen: ett ärende som fortfarande är öppet
+  // (t.ex. "Syfte saknas" efter Arbete) kommer tillbaka när listan har hämtats om efter svaret.
+  const [saved, setSaved] = React.useState<Record<string, number>>({});
   // Samma ärende besvaras aldrig två gånger, även om två tangenttryck hinner komma innan
   // nästa ärende visas (svaret binds till ärendet som visades när det gavs).
   const answered = React.useRef(new Set<string>());
@@ -235,13 +238,15 @@ export function ReviewView() {
   }
   const [shown, setShown] = React.useState<string | null>(null);
 
+  const fetchedAt = list.dataUpdatedAt;
   const all = React.useMemo(() => {
     const live = new Set((seen.data?.items ?? []).map((i) => i.id));
+    const hidden = (id: string) => done.has(id) && !(saved[id] !== undefined && fetchedAt > saved[id]);
     return seen.order
-      .filter((id) => live.has(id) && !done.has(id))
+      .filter((id) => live.has(id) && !hidden(id))
       .map((id) => seen.byId[id])
       .filter((i) => !HIDDEN_REVIEW_KINDS.includes(i.kind));
-  }, [seen, done]);
+  }, [seen, done, saved, fetchedAt]);
   const counts = React.useMemo(() => {
     const c: Record<string, number> = {};
     for (const i of all) c[i.kind] = (c[i.kind] ?? 0) + 1;
@@ -269,6 +274,12 @@ export function ReviewView() {
     answered.current.add(item.id);
     const keys = [item.id, item.trip?.id].filter(Boolean) as string[];
     setDone((d) => new Set(d).add(item.id));
+    setSaved((s) => {
+      if (!(item.id in s)) return s;
+      const n = { ...s };
+      delete n[item.id];
+      return n;
+    });
     setSkipped((s) => s.filter((x) => x !== item.id));
     setFront((f) => f.filter((x) => !keys.includes(x)));
     setFailed((f) => {
@@ -297,6 +308,16 @@ export function ReviewView() {
     }
   }, []);
 
+  /** Servern har sparat svaret på ärendet: listan som hämtas härefter avgör om det är kvar. */
+  const confirm = React.useCallback(
+    (item: ReviewItem) => {
+      answered.current.delete(item.id);
+      setSaved((s) => ({ ...s, [item.id]: Date.now() }));
+      void qc.invalidateQueries({ queryKey: qk.review.all });
+    },
+    [qc],
+  );
+
   const undoReopen = (item: ReviewItem) => ({
     label: "Ångra",
     onClick: () =>
@@ -319,9 +340,12 @@ export function ReviewView() {
     (c: "work" | "private") => {
       const item = current;
       if (!item?.trip || !finish(item)) return;
-      actions.setCategory(item.trip.id, c, { onUndone: () => restore(item) }).catch((e) => restore(item, e));
+      actions.setCategory(item.trip.id, c, { onUndone: () => restore(item) }).then(
+        () => confirm(item),
+        (e) => restore(item, e),
+      );
     },
-    [current, actions, finish, restore],
+    [current, actions, finish, restore, confirm],
   );
 
   const approve = React.useCallback(() => {
@@ -333,16 +357,24 @@ export function ReviewView() {
         expected: { category: item.trip.category as CategoryCode, purpose: item.trip.purpose ?? null },
         onUndone: () => restore(item),
       })
-      .catch((e) => restore(item, e));
-  }, [current, actions, finish, restore]);
+      .then(
+        () => confirm(item),
+        (e) => restore(item, e),
+      );
+  }, [current, actions, finish, restore, confirm]);
 
   const savePurpose = (text: string) => {
     const item = current;
     if (!item?.trip) return;
     if (item.kind === "purpose" && !finish(item)) return;
-    actions.setPurpose(item.trip.id, text).catch((e) => {
-      if (item.kind === "purpose") restore(item, e);
-    });
+    actions.setPurpose(item.trip.id, text).then(
+      () => {
+        if (item.kind === "purpose") confirm(item);
+      },
+      (e) => {
+        if (item.kind === "purpose") restore(item, e);
+      },
+    );
   };
 
   const answerMerge = React.useCallback(
