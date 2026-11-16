@@ -86,12 +86,40 @@ Resan flaggas som möjligen flera körningar när mätarsträckan är mycket lä
 när positionen är oförändrad men mätaren ökat, eller när insamlingen haft ett uppehåll. Sådana
 resor hamnar i granskningscentret. När samma period senare importeras från Volvos körjournal
 ersätter de verifierade originalresorna de rekonstruerade (som makuleras men finns kvar för
-spårbarhet); användarens beslut flyttas över vid entydig träff.
+spårbarhet); användarens beslut flyttas över vid entydig träff. Motsvarar den rekonstruerade
+resan flera importerade resor står ägarens tidigare beslut i klartext i ett ärende
+(`IMPORT_PROBLEM`, `data.previous_category`/`previous_purpose`), och en öppen fråga i
+telefonen om den ersatta resan avbryts direkt.
+
+Vid ett uppehåll i hämtningen (1.3.0) sparas när hämtningen låg nere och hur många km mätaren
+ökade under tiden (`raw_trips.collection_gap`: `{"from", "to", "odometer_km"}`). Texten byggs
+av `volvo.detection.collection_gap_text` – lång i webben och i ärendet "Uppehåll i
+hämtningen", kort i frågan i telefonen. En resa som kan vara flera körningar blir aldrig en
+tyst preliminär klassning (`requires_review`), och ärendet om det försvinner inte för att
+motorn föreslår privat – bara när ägaren själv (eller importen) har sagt privat.
 
 ## Sammanslagning
 
 Regelmotorn (`trips/merge.py`) går igenom fordonets resor i tidsordning och jämför varje par
-av på varandra följande resor:
+av på varandra följande resor. Det finns två regelverk (`merge.by_category`).
+
+**Kategoriregler (1.3.0, standard för nya installationer).** Bara två *avgjorda* resor av samma
+kategori slås ihop – avgjord av ägaren, en regel eller importen (godkänd eller importerad, en
+kategori, inget oavgjort, inte bara antagen med vetotid). Tjänsteresor följer
+`auto_max_minutes`/`ask_max_minutes`, privata resor `private_auto_max_minutes`/
+`private_ask_max_minutes`. En tjänsteresa och en privat, eller en resa som inte är avgjord,
+slås aldrig ihop automatiskt och ger ingen fråga. Stopp hemma eller vid en bekräftad privat
+plats slås aldrig ihop. Samma regler i manuellt och självgående läge, utan särregel för
+tankstopp. Eftersom kategorin måste vara känd körs sammanslagningen **efter** klassning,
+resekedjor och autopilot i `pipeline.after_trips_changed`, och dessutom efter ägarens beslut:
+i `feedback.after_decisions` och som ett eget steg i omräkningen i bakgrunden
+(`learning.recompute`), direkt efter autopiloten. Frågor därifrån går till telefonen som i
+pipelinen. När en befintlig installation går över sätts `merge.category_rules_since`; resor som
+fanns före den slås aldrig ihop och ger inga frågor i efterhand. En sammanslagen resa delas
+inte upp om kategorin ändras senare ("Dela upp" finns).
+
+**Det tidigare regelverket** (befintliga installationer tills ägaren sparar sektionen; migreringen
+0004 sätter `by_category = false`) körs först i pipelinen, som före 1.3.0:
 
 | Stillestånd | Åtgärd |
 | --- | --- |
@@ -118,9 +146,21 @@ rapporteras i efterhand slås ihop retroaktivt. Dessutom gäller:
 - **Överlapp** i tid eller mätarställning slås aldrig ihop utan blir ett avvikelseärende.
 - **Privata stopp.** Ett stopp hemma eller vid en bekräftad privat plats slås aldrig ihop när
   någon av resorna kommer från bilen, i något läge.
-- **Självgående läge.** För resor från bilen gäller bara: stopp på högst 15 minuter vid en
-  bekräftad tank- eller laddstation slås ihop. Inga frågor ställs. Platsens bekräftade typ
-  avgör, aldrig kartans förslag.
+- **Självgående läge (tidigare regelverket).** För resor från bilen gäller bara: stopp på högst
+  15 minuter vid en bekräftad tank- eller laddstation slås ihop. Inga frågor ställs. Platsens
+  bekräftade typ avgör, aldrig kartans förslag.
+
+## Ta bort resor
+
+Importerade och manuellt inlagda resor kan tas bort (`trips/removal.py`, `DELETE /trips/{id}`
+och `POST /trips/bulk-delete`). Borttagning är makulering: originalposten får `voided_at` och
+skälet "Borttagen av användaren", journalresan blir `voided` och borttagningen står i
+ändringshistoriken. Resor från bilen, sammanslagna resor och resor i en tjänsteresa nekas med en
+begriplig text. I anropet stängs resans ärenden och frågor, kalenderträffarna tas bort och
+resans inlärning ångras (egna regler finns kvar); luckor, mönster, förslag och övriga ärenden
+räknas om i bakgrunden efter svaret, som efter ett beslut i Granskning. Importen jämför bara
+mot resor som inte är makulerade, så en borttagen importerad resa kommer tillbaka – som den
+står i filen och bedömd på nytt – när samma resa importeras igen (`summary.rows_restored`).
 
 ## Vad som redovisas: journalomfång
 
@@ -161,7 +201,9 @@ beter sig som tidigare.
 
 Schemaläggarens `tick` kör i ordning: `autopilot.ensure_active_since`, Volvo-hämtning,
 demobilen, väckning av uppskjutna ärenden, geokodning (`places.geocode.run_pending`, med HTTP
-utan öppen databastransaktion), frågor i telefonen (`ha.notifier.ensure_open_questions`),
+utan öppen databastransaktion: först adresser för bilens stopp och bostaden, sedan positioner
+för platser som bara har en adress, högst tre per användare och körning, inom samma
+dygnsgräns), frågor i telefonen (`ha.notifier.ensure_open_questions`),
 leverans, schemalagda notiser, larm (`ha.alerts.run`) och månadsskiftet
 (`export.month_close.run_due`). Varje steg har egen session, och ett fel i ett steg stoppar
 inte de andra. Geokodningssvar cachas per ruta i `geocode_cache`; månadsskiftets läge

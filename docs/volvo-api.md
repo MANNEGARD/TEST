@@ -190,6 +190,16 @@ Resedetekteringen (`detection.process_vehicle`) är en tillståndsmaskin:
   granskningsärende) när mätarsträckan är längre än `detour_factor` × fågelväg +
   `detour_slack_km`, när mätaren ökat men positionen är oförändrad (rundresa), eller efter
   ett insamlingsuppehåll längre än `max_unobserved_minutes`.
+* **Uppehåll i hämtningen** (1.3.0): ligger hämtningen nere (Volvos API, nätet, servern) medan
+  bilen kör, ser DriveLog bara att mätaren har ökat när hämtningen är tillbaka. Resan flaggas
+  `collection_gap`, och när hämtningen låg nere och hur många km mätaren ökade sparas i
+  `raw_trips.collection_gap` (`{"from": …, "to": …, "odometer_km": 95.0}`; `TripOut.collection_gap`
+  i API:t). Resan får aldrig ett automatiskt beslut; webben, ärendet "Uppehåll i hämtningen"
+  och frågan i telefonen säger till exempel "Hämtningen från Volvo låg nere mellan mån 5/10
+  08:10 och 12:40. Under tiden ökade mätaren med 95 km, så resan kan vara flera körningar."
+  Lösningen är att importera Volvos körjournal för dagen: de importerade originalresorna
+  ersätter den rekonstruerade resan utan dubbletter (eller dela upp kilometrarna i tjänst och
+  privat). Larmet "Hämtningen från Volvo fungerar inte" (efter 6 timmar) påminner om samma sak.
 * Bränsle/energi per resa är **okänt** (`unknown`).
 * **Platsen:** ligger stoppet vid en känd plats används den. Annars skapas en ny obekräftad
   plats (radie 75 m) vars adress slås upp i OpenStreetMap i bakgrunden – aldrig under själva

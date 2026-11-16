@@ -143,7 +143,8 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "store_body_preview": False,
     },
     "privacy": {
-        # Slår upp adresser för bilens stopp (bara kartcellens mittpunkt skickas).
+        # Slår upp adresser för bilens stopp och bostaden (platsens position skickas) och
+        # positioner för platser som bara har en adress (adresstexten skickas).
         "geocoding_enabled": True,
         "geocoder_url": "https://nominatim.openstreetmap.org",
         "map_tiles_url": "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
