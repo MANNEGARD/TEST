@@ -4,6 +4,7 @@ import * as React from "react";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { MousePointerClick } from "lucide-react";
 import { useTheme } from "@/lib/theme";
+import { attributionFor, tileRequest } from "@/components/map/tiles";
 import { cn } from "@/lib/utils";
 
 export interface LatLon {
@@ -45,10 +46,6 @@ function circle(center: LatLon, radiusM: number, steps = 72) {
 
 const EMPTY = { type: "FeatureCollection" as const, features: [] };
 
-function attributionFor(url: string): string {
-  if (url.includes("openstreetmap")) return '© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>';
-  return "";
-}
 
 interface MapState {
   map: import("maplibre-gl").Map;
@@ -169,6 +166,7 @@ export function PositionPicker({
         center: start.value ? [start.value.lon, start.value.lat] : [16, 62.5],
         zoom: start.value ? 15 : 3,
         attributionControl: { compact: true },
+        transformRequest: tileRequest,
         cooperativeGestures: true,
         locale: MAP_LOCALE,
         fadeDuration: reduced ? 0 : 300,

@@ -69,7 +69,7 @@ TRIP_SOURCE_LABELS_SV = {
 class TimeQuality(StrEnum):
     EXACT = "exact"  # Faktisk tidpunkt från källan
     REPORTED = "reported"  # Fordonets egen tidsstämpel för observationen
-    ESTIMATED = "estimated"  # Uppskattad inom känt, snävt intervall
+    ESTIMATED = "estimated"  # Uträknad ur bilens avläsningar eller uppskattad ur sträckan (märks ≈ och "ca")
     BOUNDED = "bounded"  # Endast övre/undre gräns känd
     UNKNOWN = "unknown"
 

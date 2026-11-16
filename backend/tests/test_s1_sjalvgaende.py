@@ -740,7 +740,7 @@ def test_excel_writes_private_stop_for_home_and_private_places(db, user, vehicle
     rows = {r.trip_id: r for r in journal.rows}
     assert rows[merged.id].via == ("Privat stopp",)
     assert HOME not in rows[merged.id].to_text
-    assert rows[merged2.id].via == (OFFICE,)  # övriga mellanstopp är oförändrade
+    assert rows[merged2.id].via == (f"Kontoret, {OFFICE}",)  # övriga mellanstopp: namn och adress (1.2.1)
 
 
 # ----------------------------------------------------------------------------- "Alltid" och knappar

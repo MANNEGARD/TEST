@@ -48,7 +48,7 @@ SCENARIOS: dict[str, str] = {
     "commute": "Resa mellan hemmet och kontoret, observerad under färd",
     "short_stop": "Resa via bensinstation med 8 minuters stopp (regel A – slås samman automatiskt)",
     "customer_visit": "Kundbesök med 35 minuters stopp (regel B – fråga om sammanslagning)",
-    "silent": "Bilen rapporterar först efter ankomst (okänd starttid)",
+    "silent": "Bilen rapporterar först efter ankomst (starttiden uppskattas ur sträckan)",
     "round_trip": "Rundresa utan ny positionsrapport (flaggas som möjlig datalucka)",
 }
 _ROTATION = ("commute", "short_stop", "customer_visit", "commute", "silent", "round_trip")

@@ -53,7 +53,8 @@ def test_simulated_trips_go_through_the_pipeline_on_demo_vehicle_only(db, user, 
         assert any(r.possible_missed_trips for r in raws)
     if scenario == "silent":
         assert all(r.start_earliest is not None and r.start_latest is not None for r in raws)
-        assert all(r.started_at is None for r in raws)  # bara slutavläsning och K1 avstängd
+        # Bara slutavläsning och K1 avstängd: starttiden uppskattas ur sträckan (1.2.1, K4).
+        assert all(r.start_estimate_basis["method"] == "distance_speed" for r in raws)
 
 
 def test_demo_never_makes_real_connection_look_connected(db, user, vehicle):

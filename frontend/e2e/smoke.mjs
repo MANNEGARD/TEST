@@ -7,7 +7,7 @@
  * Flöde: första kontot (/setup) → import via webbgränssnittet → Översikt → Körjournal →
  * Resedetalj → Granskning → Export (förhandsvisning = API = Excel-fil) → Platser →
  * Inställningar (ersättning per mil slår igenom, Automatik, sekretess och OSM) → Integrationer
- * (demolägen, starttid "≈" och "Ange starttid", kalenderlänken utan länk och med ogiltig länk) →
+ * (demolägen, starttid "≈" och "Ange starttid", kartbildernas Referer, kalenderlänken utan länk och med ogiltig länk) →
  * Bränsle & energi → månadskortet och nedladdningslänkarna → banderollen för Home Assistant →
  * mobilvy 390×844 → mörkt tema →
  * utloggning och inloggning med retur.
@@ -59,6 +59,8 @@ const EXPECTED = [
   // Kalenderlänken: ogiltiga länkar avvisas med klartextfel (avsnittet Integrationer).
   { status: 400, url: /\/api\/v1\/integrations\/microsoft\/ics$/ },
 ];
+/** Kartbildsanrop som testet besvarat lokalt: { url, referer }. */
+const tileRequests = [];
 // 1×1 transparent PNG – kartplattor hämtas aldrig från internet under testet.
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64");
 
@@ -116,10 +118,13 @@ async function newContext(browser, { mobile = false, theme = "light", storageSta
     acceptDownloads: true,
     storageState,
   });
-  // Externa förfrågningar (kartplattor) besvaras lokalt.
-  await ctx.route(/^https?:\/\/(?!localhost|127\.0\.0\.1)/, (route) =>
-    route.fulfill({ status: 200, contentType: "image/png", body: PNG }),
-  );
+  // Externa förfrågningar (kartplattor) besvaras lokalt. Kartbildernas Referer sparas: OpenStreetMap
+  // kräver sidans ursprung, annars "403 Access blocked".
+  await ctx.route(/^https?:\/\/(?!localhost|127\.0\.0\.1)/, async (route) => {
+    const req = route.request();
+    if (/\/\d+\/\d+\/\d+\.png(\?|$)/.test(req.url())) tileRequests.push({ url: req.url(), referer: await req.headerValue("referer") });
+    await route.fulfill({ status: 200, contentType: "image/png", body: PNG });
+  });
   return ctx;
 }
 
@@ -249,6 +254,29 @@ async function checkStartTimes(page, tag) {
     if ((await removed).status() !== 200) fail(tag, "den angivna starttiden togs inte bort");
     await page.getByTestId("start-time-unknown").waitFor({ timeout: 10000 }).catch(() => fail(tag, "starttiden blev inte okänd igen"));
   } else step("  (ingen demoresa med okänd starttid – \"Ange starttid\" prövas inte)");
+}
+
+/**
+ * Kartan på resans sida: kartbilderna hämtas med sidans ursprung som Referer (bara ursprunget,
+ * aldrig sökvägen), trots att sidan i övrigt skickar Referrer-Policy: same-origin.
+ */
+async function checkTileReferer(page, tag, tripId) {
+  const before = tileRequests.length;
+  await page.goto(`${BASE}/journal/${tripId}`);
+  const deadline = Date.now() + 20000;
+  while (tileRequests.length === before && Date.now() < deadline) await page.waitForTimeout(250);
+  const seen = tileRequests.slice(before);
+  if (!seen.length) {
+    fail(tag, "kartan hämtade inga kartbilder");
+    return;
+  }
+  const policy = (await page.request.get(`${BASE}/journal/${tripId}`)).headers()["referrer-policy"];
+  if (policy !== "same-origin") fail(tag, `sidans Referrer-Policy är ${policy}, väntade same-origin`);
+  const origin = `${new URL(BASE).origin}/`;
+  const wrong = seen.filter((r) => r.referer !== origin);
+  if (wrong.length) fail(tag, `${wrong.length} av ${seen.length} kartbilder hade Referer ${JSON.stringify(wrong[0].referer)} i stället för ${origin}`);
+  else step(`  ${seen.length} kartbilder med Referer ${origin}`);
+  await shot(page, "trip-map-light");
 }
 
 // Chromium ger nedladdningar med icke-ASCII-filnamn (Körjournal_…) namnet "download" när
@@ -781,6 +809,14 @@ print(json.dumps({"sheets": wb.sheetnames, "rows": rows, "km": round(km, 2), "to
       await section("starttid", async () => {
         step("Starttid: \"≈\" med grund och \"Ange starttid\" på demoresor");
         await checkStartTimes(page, "starttid");
+      });
+      await section("karta", async () => {
+        step("Kartan: kartbilderna bär sidans ursprung som Referer (OpenStreetMaps regler)");
+        const demo = (await api(page, "GET", "/vehicles")).find((v) => v.is_demo);
+        const list = demo ? await api(page, "GET", `/trips?limit=50&vehicle_id=${demo.id}`) : { items: [] };
+        const trip = list.items.find((t) => t.ended_at);
+        if (!trip) fail("karta", "ingen demoresa med position att visa på kartan");
+        else await checkTileReferer(page, "karta", trip.id);
       });
       await page.goto(`${BASE}/integrations`);
       await page.getByTestId("card-volvo").waitFor({ timeout: 15000 });

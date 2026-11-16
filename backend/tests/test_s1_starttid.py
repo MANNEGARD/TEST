@@ -172,15 +172,16 @@ def test_engine_running_narrows_latest_start():
 # ----------------------------------------------------------------------------- (b) bara slutavläsning
 
 
-def test_silent_trip_stays_bounded_with_k1_disabled(db, user, vehicle, car):
+def test_silent_trip_with_k1_disabled_is_estimated_from_distance(db, user, vehicle, car):
+    """Utan K1–K3 uppskattas starttiden ur sträckan (1.2.1, K4): 14 km i 50 km/h = 16,8 min."""
     assert start_time.K1_ENABLED is False
     silent_trip(db, vehicle, car)
     (raw,) = raws(db)
-    assert raw.started_at is None and raw.start_time_quality == TimeQuality.BOUNDED
-    assert raw.start_estimate_basis is None
+    assert raw.start_time_quality == TimeQuality.ESTIMATED
+    assert raw.start_estimate_basis["method"] == "distance_speed"
     assert raw.start_earliest is not None and raw.start_latest is not None
     trip = db.execute(select(M.LogicalTrip)).scalar_one()
-    assert start_time.display(trip, TZ) == "" and "start_time_uncertain" in trip.quality_flags
+    assert start_time.display(trip, TZ) == "≈ 09:25" and "start_time_uncertain" not in trip.quality_flags
 
 
 def test_silent_trip_uses_trip_meter_when_k1_enabled(db, user, vehicle, car, monkeypatch):
@@ -198,7 +199,7 @@ def test_trip_meter_off_by_more_than_1_5_km_gives_no_k1(db, user, vehicle, car, 
     monkeypatch.setattr(start_time, "K1_ENABLED", True)
     silent_trip(db, vehicle, car, trip_km=15.6, speed=60)
     (raw,) = raws(db)
-    assert raw.started_at is None and raw.start_time_quality == TimeQuality.BOUNDED
+    assert raw.start_estimate_basis["method"] == "distance_speed"  # inte trippmätaren
 
 
 @pytest.mark.parametrize(
@@ -281,22 +282,22 @@ def test_owner_start_time_overrides_and_can_be_removed(db, user, vehicle, car, a
     silent_trip(db, vehicle, car)
     trip = db.execute(select(M.LogicalTrip)).scalar_one()
     trip = reload_trip(db, trip.id)
-    start_time.set_override(db, trip, m(25), actor=actor)
+    start_time.set_override(db, trip, m(21), actor=actor)
     trip = reload_trip(db, trip.id)
-    assert trip.started_at == m(25) and trip.start_time_quality == TimeQuality.EXACT
+    assert trip.started_at == m(21) and trip.start_time_quality == TimeQuality.EXACT
     assert "start_time_uncertain" not in trip.quality_flags
-    assert start_time.display(trip, TZ) == "09:25"
+    assert start_time.display(trip, TZ) == "09:21"
     # En ny omräkning (t.ex. efter klassning) behåller ägarens tid.
     seg.refresh_logical(db, trip)
-    assert trip.started_at == m(25)
+    assert trip.started_at == m(21)
     assert db.execute(select(M.AuditEvent).where(M.AuditEvent.action == "trip.start_time_override")).scalars().first()
-    # Råresan ändras inte: bilens uppgifter finns kvar.
+    # Råresan ändras inte: uppskattningen ur sträckan finns kvar under ägarens tid.
     (raw,) = raws(db)
-    assert raw.started_at is None and raw.start_time_quality == TimeQuality.BOUNDED
+    assert raw.start_time_quality == TimeQuality.ESTIMATED and raw.started_at != m(21)
     start_time.set_override(db, trip, None, actor=actor)
     trip = reload_trip(db, trip.id)
-    assert trip.started_at is None and trip.start_time_quality == TimeQuality.BOUNDED
-    assert "start_time_uncertain" in trip.quality_flags
+    assert trip.started_at == raw.started_at and trip.start_time_quality == TimeQuality.ESTIMATED
+    assert "start_time_uncertain" not in trip.quality_flags
 
 
 def test_owner_start_time_via_api(client, db, user, vehicle, car):

@@ -13,7 +13,7 @@ import { TripTime } from "./trip-time";
 
 /** RawTrip.start_estimate_basis (services/trips/start_time.py, byggkontraktet D.3). */
 export interface StartBasis {
-  method?: "trip_meter" | "odometer_speed" | "window" | string;
+  method?: "trip_meter" | "odometer_speed" | "window" | "distance_speed" | string;
   earliest?: string | null;
   latest?: string | null;
   margin_min?: number | null;
@@ -22,6 +22,10 @@ export interface StartBasis {
   speed_kmh?: number | null;
   engine_running_at?: string | null;
   window_minutes?: number | null;
+  /** K4: varifrån snittfarten kommer, antal egna resor och den uträknade körtiden. */
+  speed_source?: "route" | "similar" | "table" | string | null;
+  samples?: number | null;
+  duration_minutes?: number | null;
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -47,6 +51,9 @@ export function readBasis(raw: unknown): StartBasis {
     speed_kmh: num(b.speed_kmh),
     engine_running_at: str(b.engine_running_at),
     window_minutes: num(b.window_minutes),
+    speed_source: str(b.speed_source),
+    samples: num(b.samples),
+    duration_minutes: num(b.duration_minutes),
   };
 }
 
@@ -67,8 +74,20 @@ export function basisText(basis: StartBasis): string {
     parts.push(`Uträknad ur mätarställningen under färden, som ökade med ungefär ${formatNumber(basis.speed_kmh, 0)} km/h.`);
   } else if (basis.method === "window") {
     parts.push("Tiden är mitt i det korta fönstret mellan bilens avläsningar.");
+  } else if (basis.method === "distance_speed" && basis.speed_kmh != null && basis.trip_km != null) {
+    const from =
+      basis.speed_source === "route"
+        ? `snittfarten på dina ${formatNumber(basis.samples ?? 0, 0)} tidigare resor mellan samma platser`
+        : basis.speed_source === "similar"
+          ? `snittfarten på dina ${formatNumber(basis.samples ?? 0, 0)} tidigare resor med liknande sträcka`
+          : "en vanlig snittfart för en så lång resa";
+    parts.push(
+      `Uppskattad ur sträckan: ${formatNumber(basis.trip_km, 1)} km i ${formatNumber(basis.speed_kmh, 0)} km/h (${from}) ger ungefär ${formatNumber(basis.duration_minutes ?? 0, 0)} minuters körtid före ankomsten. Bilen rapporterade bara när resan var slut.`,
+    );
   }
-  if (basis.earliest && basis.latest) parts.push(`Bilen stod still ${formatTime(basis.earliest)} och var på väg ${formatTime(basis.latest)}.`);
+  if (basis.method === "distance_speed") {
+    if (basis.earliest && basis.latest) parts.push(`Starten låg någon gång mellan ${formatDateTime(basis.earliest)} och ${formatTime(basis.latest)}.`);
+  } else if (basis.earliest && basis.latest) parts.push(`Bilen stod still ${formatTime(basis.earliest)} och var på väg ${formatTime(basis.latest)}.`);
   else if (basis.latest) parts.push(`Bilen var på väg ${formatTime(basis.latest)}.`);
   if (basis.engine_running_at) parts.push(`Motorn gick ${formatTime(basis.engine_running_at)}.`);
   return parts.join(" ") || "Uträknad ur bilens egna uppgifter.";
@@ -84,7 +103,7 @@ export function startTimeISO(time: string, endedAt: string): string {
 
 /**
  * Starttiden på resans sida (byggkontraktet D.3):
- *  - uträknad: "≈ 07:35 (±4 min)", ett tryck visar grunden,
+ *  - uträknad (K1–K3) eller uppskattad ur sträckan (K4): "≈ 07:35 (±4 min)", ett tryck visar grunden,
  *  - okänd: "Start okänd (mellan 06:10 och 08:52)" och knappen "Ange starttid",
  *  - angiven: "07:35 · angiven av dig" med "Ändra" och "Ta bort",
  *  - från bilen eller importen: klockslaget som vanligt.

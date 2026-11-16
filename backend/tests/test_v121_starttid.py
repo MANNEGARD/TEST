@@ -25,8 +25,8 @@ from app.services.export import simple
 from app.services.ha import messages
 from app.services.places import registry as places
 from app.services.stats import common
-from app.services.trips import start_time
 from app.services.trips import segments as seg
+from app.services.trips import start_time
 from app.services.volvo import detection
 from tests.conftest import reload_trip
 from tests.test_s1_starttid import StatsCar, silent_trip

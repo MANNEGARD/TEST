@@ -3,6 +3,25 @@
 > Från 1.0.2 visar Home Assistant **Uppdatera** först när den nya versionen är färdigbyggd och
 > går att hämta – det går bra att trycka direkt.
 
+## 1.2.1
+
+Rättningar efter den första riktiga resan.
+
+- **Kartan visas igen.** OpenStreetMaps kartservrar blockerade kartbilderna ("403 Access
+  blocked") eftersom de kom utan avsändarsida. Nu skickar kartan sidans adress (bara
+  `https://din-server/`, aldrig sökvägen) med anropen efter kartbilder; allt annat är som förut.
+- **Adress i underlaget, aldrig "Hem".** Start och mål står alltid med gatuadress och ort. En
+  bekräftad plats med eget namn står som *Namn, adress*, bostaden med sin adress. Saknar
+  bostaden eller en annan bekräftad plats adress visas det före exporten, och månadens underlag
+  väntar tills den är ifylld. Adressen skrivs på platsen under *Platser*, eller hämtas med
+  knappen **Hämta adressen från kartan** (platsens position skickas då en gång till
+  OpenStreetMap).
+- **Starttid ur sträckan.** När bilen bara rapporterar efter ankomsten uppskattas starttiden ur
+  sträckan och en snittfart – från dina egna resor mellan samma platser (eller med liknande
+  längd) när de räcker, annars en vanlig fart för sträckan. Den visas som *≈ 07:35 (±5 min)*,
+  står som *ca* i underlaget, och ett tryck visar varifrån den kommer. En starttid du själv
+  angett rörs aldrig. Resor som redan saknar starttid får uppskattningen efter uppdateringen.
+
 ## 1.2.0
 
 Kalendern går nu att koppla utan appregistrering hos Microsoft.

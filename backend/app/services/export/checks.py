@@ -287,7 +287,29 @@ def reported_quality_checks(db: Session, reported: list[LogicalTrip]) -> list[di
                    "(en okänd starttid uppskattas ur sträckan). "
                    "Den står som \"ca\" i underlaget.", estimated)
         )
-    no_address = [t for t in rows if not clean(t.start_address) or not clean(t.end_address)]
+    # Bostaden eller en bekräftad plats utan adress: underlaget skriver aldrig "Hem" i stället,
+    # så raden får ingen adress. Ett fel – månadens underlag skapas inte förrän den är ifylld.
+    from app.services.export import place_text
+    from app.services.export.simple import private_stop_ids
+
+    locs = place_text.load_locations(db, rows)
+    lacking, lacking_trips = place_text.missing_address_places(
+        rows, locs, private_stop_ids([t for t in rows if t.source in LIVE_SOURCES]))
+    if lacking:
+        home_only = len(lacking) == 1 and lacking[0].type == LocationType.HOME
+        names = "bostaden" if home_only else (
+            ", ".join(clean(loc.name) for loc in lacking[:5]) + (" …" if len(lacking) > 5 else ""))
+        title = ("Bostaden saknar adress – fyll i den under Platser" if home_only
+                 else f"{len(lacking)} {'plats' if len(lacking) == 1 else 'platser'} saknar adress – "
+                      f"fyll i {'den' if len(lacking) == 1 else 'dem'} under Platser")
+        out.append(
+            _check("place_address_missing", ERROR, title,
+                   f"Underlaget skriver alltid gatuadress och ort, men {names} saknar adress. Öppna platsen under "
+                   "Platser och skriv adressen, eller tryck \"Hämta adressen från kartan\" där.",
+                   lacking_trips, location_ids=[str(loc.id) for loc in lacking])
+        )
+    lacking_ids = {t.id for t in lacking_trips}
+    no_address = [t for t in rows if t.id not in lacking_ids and (not clean(t.start_address) or not clean(t.end_address))]
     if no_address:
         out.append(
             _check("missing_address", WARNING, "Adress saknas",

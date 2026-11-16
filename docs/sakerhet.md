@@ -88,8 +88,9 @@ Månadsnotisen i självgående läge har en länk som hämtar underlaget utan in
 | Kalenderlänk (ICS) | Hämtar kalenderfilen (GET) | När en länk är sparad, var 30:e minut och vid Synka nu |
 | Home Assistant (din egen) | Notistexter | När notiser är påslagna |
 | AI-leverantör | Avidentifierat underlag för en resa, se nedan | Endast om en leverantör är ansluten och reglerna inte räcker |
-| Kartplattor | Vilket kartområde du tittar på | När en karta visas (kan stängas av eller pekas mot egen plattserver) |
+| Kartplattor | Vilket kartområde du tittar på, och sidans ursprung som Referer (t.ex. `https://drivelog.example/`, aldrig sökvägen) | När en karta visas (kan stängas av eller pekas mot egen plattserver) |
 | Geokodare (standard OpenStreetMap Nominatim) | Mittpunkten av en liten ruta (koordinat med fyra decimaler) där bilen stannat på en okänd plats | När geokodningen är på (standard från 1.1.0) och hemmet finns som plats med koordinat |
+| Geokodare, *Hämta adressen från kartan* | Den valda platsens position (fyra decimaler), en gång | Bara när du trycker på knappen på en plats (även bostaden), och geokodningen är på |
 | Home Assistant (din egen) | Signerad nedladdningslänk i månadsnotisen | Självgående läge, när underlaget är klart |
 
 Ingen telemetri eller analys skickas någonstans.
@@ -116,6 +117,24 @@ som standard hos OpenStreetMaps Nominatim.
   all text tvättas från styr- och osynliga tecken.
 - Adressdata © OpenStreetMap-bidragsgivare, under licensen ODbL. Erkännandet visas på sidan
   Platser och i inställningen.
+- **Hämta adressen från kartan** (på en plats under *Platser*) skickar just den platsens
+  position, avrundad till fyra decimaler, en gång när du trycker – samma anrop och skydd som
+  ovan. Det är det enda sättet bostadens position når karttjänsten; den slås aldrig upp av sig
+  själv. Svaret sparas inte förrän du sparar platsen.
+
+### Kartbilderna och Referer
+
+Sidan skickar `Referrer-Policy: same-origin`: webbläsaren skickar ingen Referer till andra
+webbplatser, så att inga adresser i appen (t.ex. en resas id) läcker. OpenStreetMaps kartservrar
+kräver däremot en giltig Referer och svarar annars med en blockerad bild ("403 Access blocked").
+Därför får **bara anropen efter kartbilder** policyn `strict-origin-when-cross-origin` (MapLibre
+`transformRequest`, `frontend/src/components/map/tiles.ts`): kartservern ser sidans ursprung,
+t.ex. `https://drivelog.example/`, aldrig sökvägen. Allt annat följer sidans policy, som är
+oförändrad i Next, backend, Caddy (`deploy/Caddyfile` och tillägget) och demots `_headers`.
+Helhetstesterna (`frontend/e2e`) fångar kartbildsanropen i en riktig webbläsare och kontrollerar
+rubriken. Övriga krav i OpenStreetMaps regler för kartbilder: källhänvisningen
+"© OpenStreetMap" visas på kartan, webbläsarens egen User-Agent skickas, plattorna cachas av
+webbläsaren enligt serverns svar, och plattor hämtas bara när en karta visas – aldrig i bulk.
 
 ### Kalenderlänken (ICS)
 

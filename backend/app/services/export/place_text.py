@@ -47,7 +47,7 @@ def report_text(loc: KnownLocation | None, fallback: str | None, *, live: bool) 
     resans text bara är platsens namn (t.ex. "Hem").
     """
     if loc is None:
-        return "" if live and fallback is None else clean(fallback)
+        return clean(fallback)
     address = _address(loc)
     if loc.type == LocationType.HOME:
         return address

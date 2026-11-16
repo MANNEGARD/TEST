@@ -85,6 +85,11 @@ function Facts({ d }: { d: TripDetail }) {
   const t = d.trip;
   const firstRaw = d.raw_trips[0];
   const estimatedDistance = t.quality_flags.includes("distance_estimated");
+  // Körtiden saknas från bilen; med en uträknad starttid visas den som uppskattad (≈).
+  const estimatedDriving =
+    t.start_time_source === "estimated" && t.started_at && t.ended_at
+      ? Math.max(0, Math.round((new Date(t.ended_at).getTime() - new Date(t.started_at).getTime()) / 1000))
+      : null;
   return (
     <Card>
       <CardContent className="pt-5">
@@ -96,7 +101,11 @@ function Facts({ d }: { d: TripDetail }) {
             <span className="ml-1.5 num text-xs text-fg-muted">{formatKm(t.distance_km)}</span>
           </DescriptionItem>
           <DescriptionItem label="Körtid">
-            <QualityValue value={t.driving_seconds != null ? formatDuration(t.driving_seconds) : null} missingText="Körtid saknas" />
+            {t.driving_seconds == null && estimatedDriving != null ? (
+              <QualityValue value={formatDuration(estimatedDriving)} quality="estimated" explanation="Uppskattad körtid: från den uträknade starttiden till ankomsten." />
+            ) : (
+              <QualityValue value={t.driving_seconds != null ? formatDuration(t.driving_seconds) : null} missingText="Körtid saknas" />
+            )}
           </DescriptionItem>
           <DescriptionItem label="Start">
             <StartTime trip={t} earliest={firstRaw?.start_earliest} latest={firstRaw?.start_latest} />
@@ -163,7 +172,13 @@ function Stops({ d }: { d: TripDetail }) {
             <div className="min-w-0 pb-1">
               <p className="text-xs text-fg-muted">
                 {kind}
-                {s.at ? <span className="ml-1.5 num">{formatTime(s.at)}</span> : null}
+                {s.at ? (
+                  <span className="ml-1.5 num">
+                    {/* En uträknad starttid märks "≈" även här (som på raden Start). */}
+                    {i === 0 && d.trip.start_time_source === "estimated" ? "≈ " : ""}
+                    {formatTime(i === 0 && d.trip.started_at ? d.trip.started_at : s.at)}
+                  </span>
+                ) : null}
               </p>
               <p className="truncate text-sm font-medium">{name ?? <span className="text-fg-subtle">Adress saknas</span>}</p>
               {s.location?.confirmed && s.address && s.address !== name ? <p className="truncate text-xs text-fg-muted">{s.address}</p> : null}

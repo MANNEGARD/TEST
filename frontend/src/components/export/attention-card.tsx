@@ -47,6 +47,11 @@ interface Item {
 }
 
 function checkAction(c: ExportCheck): Item["action"] {
+  if (c.code === "place_address_missing") {
+    // Adressen fylls i på platsen (Platser), inte på resan.
+    const ids = Array.isArray(c.data.location_ids) ? (c.data.location_ids as string[]) : [];
+    return { label: ids.length > 1 ? "Öppna Platser" : "Fyll i adressen", href: ids.length === 1 ? `/places?plats=${ids[0]}` : "/places" };
+  }
   if (c.trip_ids.length === 1) return { label: "Öppna resan", href: `/journal/${c.trip_ids[0]}` };
   return { label: "Granska", href: "/review" };
 }

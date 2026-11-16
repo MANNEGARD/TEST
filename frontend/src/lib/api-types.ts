@@ -978,6 +978,29 @@ export interface paths {
         patch: operations["update_location_api_v1_locations__location_id__patch"];
         trace?: never;
     };
+    "/api/v1/locations/{location_id}/lookup-address": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Hämta platsens adress från kartan (en gång, efter ägarens tryck)
+         * @description Slår upp just den här platsens adress hos användarens geokodare (standard OpenStreetMap).
+         *
+         *     Bara platsens position (avrundad till fyra decimaler) skickas, och bara när ägaren trycker
+         *     på knappen. Förslaget sparas inte: ägaren ser det i adressfältet och sparar platsen.
+         */
+        post: operations["lookup_address_api_v1_locations__location_id__lookup_address_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/locations/{location_id}/accept-suggestion": {
         parameters: {
             query?: never;
@@ -2634,6 +2657,13 @@ export interface components {
             text_input: boolean;
             /** Uri */
             uri?: string | null;
+        };
+        /** AddressLookupOut */
+        AddressLookupOut: {
+            /** Address */
+            address: string;
+            /** City */
+            city?: string | null;
         };
         /** AliasIn */
         AliasIn: {
@@ -6509,6 +6539,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LocationOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    lookup_address_api_v1_locations__location_id__lookup_address_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                location_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AddressLookupOut"];
                 };
             };
             /** @description Validation Error */

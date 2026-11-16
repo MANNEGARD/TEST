@@ -32,7 +32,7 @@ den – till exempel för historik från tiden innan bilen kopplades in.
 
 | Källa | Hur |
 | --- | --- |
-| **Volvo API** | Bilen läses av automatiskt och resor rekonstrueras. Nya platser får adress från OpenStreetMap. Starttiden räknas fram ur bilens avläsningar när de räcker, annars är den okänd (se *Starttid* nedan) |
+| **Volvo API** | Bilen läses av automatiskt och resor rekonstrueras. Nya platser får adress från OpenStreetMap. Starttiden räknas fram ur bilens avläsningar när de räcker, annars uppskattas den ur sträckan (se *Starttid* nedan) |
 | **Import** | Ladda upp körjournalen från Volvo Cars-appen (XLSX). Verifierade resor med tider, adresser, mätarställning och förbrukning |
 | **Manuellt** | *Körjournal → Lägg till resa* |
 
@@ -54,8 +54,9 @@ stegen återstår. Varje steg har en status och en knapp eller länk:
 1. **Anslut bilen (Volvo)** – under *Integrationer*. Demobilen räknas inte.
 2. **Markera bostaden** – ställ dig hemma med bilen och tryck **Bilen står hemma nu**. Bilens
    senast rapporterade position blir din bostad, och kortet visar när bilen rapporterade den
-   (*Markerad med bilens position kl. 21:14*). Skriv gärna adressen som ska stå i underlaget;
-   lämnar du fältet tomt står det *Hem*. Har bilen inte rapporterat någon position än säger
+   (*Markerad med bilens position kl. 21:14*). Skriv gärna bostadens adress (gatuadress och
+   ort) – den står i underlaget i stället för ordet *Hem*. Lämnar du fältet tomt påminner kortet
+   om det, och du fyller i adressen senare under *Platser* (se *Adresser* nedan). Har bilen inte rapporterat någon position än säger
    kortet det. Vill du hellre peka ut bostaden själv väljer du *Markera på kartan i stället*
    (sidan Platser). Först när bostaden är markerad slår DriveLog upp adresser för dina resor –
    hemadressen skickas aldrig till karttjänsten, och stopp vid bostaden slås aldrig upp.
@@ -162,15 +163,38 @@ OpenStreetMap ser serverns publika adress och när uppslagen görs. Geokodningen
 *Inställningar → Sekretess*; då får nya platser ingen adress och du namnger dem själv.
 Adressdata © OpenStreetMap-bidragsgivare, under licensen ODbL.
 
+**Adressen i underlaget.** Underlaget skriver alltid start och mål med gatuadress och ort,
+aldrig *Hem*. En bekräftad plats med eget namn står som *Acme AB, Kundvägen 2, Exempelstad*,
+bostaden med sin adress. I appen i övrigt visas platsernas namn som förut. Bostadens adress
+slås aldrig upp av sig själv, så den kan saknas. Saknar bostaden eller en annan bekräftad
+plats adress står det på exportsidan (*Bostaden saknar adress – fyll i den under Platser*),
+och månadens underlag skapas inte förrän den är ifylld. Öppna platsen under **Platser** och
+skriv adressen i fältet **Adress**, eller tryck **Hämta adressen från kartan**: då skickas
+just den platsens position (fyra decimaler) en gång till OpenStreetMap, och svaret fylls i
+fältet så att du kan kontrollera det innan du sparar. Knappen kräver att platsen har en
+sparad position och att geokodningen är på.
+
 ### Starttid
 
 Volvo rapporterar bilens position först när en körning är slut. Räcker bilens avläsningar
 under färden räknar DriveLog fram starttiden och visar den som **≈ 07:35 (±4 min)**; ett tryck
 visar grunden ("Bilen stod still … och var på väg …"). I underlaget skrivs den **ca 07:35**,
-med en fotnot. Räcker avläsningarna inte visas *Start okänd (mellan 06:10 och 08:52)* och
-knappen **Ange starttid**. En tid du anger märks *angiven av dig*. Underlaget skriver då bara
-sluttiden, "–08:52". En saknad starttid stoppar inte månadens underlag, men den står i
-månadsnotisen och på exportsidan.
+med en fotnot.
+
+Rapporterar bilen bara när resan är slut **uppskattas starttiden ur sträckan**: körtiden är
+sträckan delad med en snittfart, och starttiden är ankomsten minus körtiden – aldrig utanför
+det fönster bilens avläsningar tillåter. Snittfarten tas från dina egna resor med kända tider
+mellan samma platser (minst 3), annars med liknande längd (minst 5), annars från en enkel
+tabell (under 3 km 25 km/h, under 10 km 35, under 30 km 50, under 80 km 65, längre 80 km/h).
+Exempel: 9 km, framme 16:42, inga egna resor → 35 km/h, 15 minuter → **≈ 16:27 (±5 min)**.
+Tiden märks precis som en uträknad tid: "≈" och felmarginal i appen, **ca** i underlaget, och
+körtiden visas som uppskattad. Ett tryck på tiden visar varifrån farten kommer. Resor som
+saknade starttid före 1.2.1 får uppskattningen vid nästa hämtning från bilen.
+
+Saknas mätarställning eller en säker ankomsttid visas *Start okänd (mellan 06:10 och 08:52)*
+och knappen **Ange starttid**. En tid du anger märks *angiven av dig* och ändras aldrig av
+DriveLog. Underlaget skriver vid okänd start bara sluttiden, "–08:52". En saknad starttid
+stoppar inte månadens underlag, men den står i månadsnotisen och på exportsidan.
 
 ### Månadsskiftet
 
@@ -185,7 +209,7 @@ när det här inte längre gäller:
 | Tjänsteresor som inte är godkända | *N tjänsteresor är inte godkända* |
 | Vetotid för antagna resor | *Väntar till … på ditt veto* |
 | Adresser som slås upp (högst 48 h) | *Adresser slås upp*, eller *Adressen kunde inte slås upp än – nytt försök görs varje dygn* om karttjänsten inte svarar |
-| Fel i kontrollen, t.ex. överlappande resor eller privat adress i underlaget | Felets rubrik |
+| Fel i kontrollen, t.ex. överlappande resor, privat adress i underlaget eller en plats utan adress | Felets rubrik, t.ex. *Bostaden saknar adress – fyll i den under Platser* |
 
 - **Klar:** underlaget skapas och notisen *Oktober klart* kommer, med *Öppna underlaget* och,
   när det finns antagna rader, *Se antagna*. Notisen säger också hur många resor som saknar
@@ -269,8 +293,8 @@ och syfte. Snabbfiltren *Alla / Arbete / Privat / Att granska* ligger överst.
 | Behöver granskas | Underlaget räcker inte – du väljer |
 
 Faktiska värden visas som vanlig text, uppskattade kursivt med "≈", och saknade som "–".
-En okänd starttid visas som "okänd" eller *Start okänd (mellan … och …)*, aldrig som ett
-gissat klockslag. En uträknad starttid visas med "≈" och felmarginal, se *Starttid* ovan.
+En okänd starttid visas som "okänd" eller *Start okänd (mellan … och …)*. En uträknad eller ur
+sträckan uppskattad starttid visas alltid med "≈" och felmarginal, se *Starttid* ovan.
 
 ## Resedetaljer
 

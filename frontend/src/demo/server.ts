@@ -1621,6 +1621,15 @@ on("GET", "/locations/suggestions", () => ({
 on("POST", "/locations", ({ body }) => createLocation(body));
 on("POST", "/locations/home-from-vehicle", ({ body }) => homeFromVehicle(body));
 on("PATCH", "/locations/:id", ({ m, body }) => patchLocation(m[1], body));
+// "Hämta adressen från kartan": demot slår aldrig upp något – platsens egen (påhittade) adress,
+// annars en påhittad, fylls i som förslag.
+on("POST", "/locations/:id/lookup-address", ({ m }) => {
+  const loc = S().locations.find((l) => l.id === m[1]);
+  if (!loc) throw notFound("Platsen");
+  if (loc.latitude == null || loc.longitude == null) throw new HttpError(400, "Platsen har ingen position. Sätt ut den på kartan och spara först.", "no_position");
+  const address = loc.address ?? "Exempelvägen 1, 123 45 Exempelstad";
+  return { address, city: address.split(",").pop()?.trim() ?? null };
+});
 on("POST", "/locations/:id/accept-suggestion", ({ m }) => {
   const loc = S().locations.find((l) => l.id === m[1]);
   if (!loc) throw notFound("Platsen");

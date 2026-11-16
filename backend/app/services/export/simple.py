@@ -31,6 +31,7 @@ from xlsxwriter.utility import xl_rowcol_to_cell
 
 from app.models import LogicalTrip, Vehicle
 from app.models.enums import TimeQuality, TripSource
+from app.services.export import place_text
 from app.services.export.workbook import safe_text
 from app.services.places.normalize import clean, fold
 from app.services.stats import common
@@ -283,19 +284,24 @@ def needs_time_note(trip: LogicalTrip, text: str) -> bool:
     return text.startswith("–") and getattr(trip, "source", None) in LIVE_SOURCES
 
 
-def _via(trip: LogicalTrip, private_ids: frozenset[str] = frozenset()) -> tuple[str, ...]:
+def _via(
+    trip: LogicalTrip, private_ids: frozenset[str] = frozenset(), locs: dict[uuid.UUID, Any] | None = None
+) -> tuple[str, ...]:
     """Mellanstoppens adresser i ordning, utan tomma och utan upprepningar i följd.
 
-    Ett stopp hemma eller vid en privat plats (``private_ids``) skrivs "Privat stopp".
+    Ett stopp hemma eller vid en privat plats (``private_ids``) skrivs "Privat stopp"; övriga
+    stopp skrivs som start och mål (``place_text.report_text``).
     """
     out: list[str] = []
+    live = getattr(trip, "source", None) in LIVE_SOURCES
     for stop in trip.via or []:
         if not isinstance(stop, dict):
             continue
         if stop.get("location_id") and str(stop["location_id"]) in private_ids:
             address = PRIVATE_STOP
         else:
-            address = clean(stop.get("address"))
+            loc = place_text.via_location(stop, locs or {})
+            address = place_text.report_text(loc, stop.get("address"), live=live)
         if address and (not out or out[-1] != address):
             out.append(address)
     return tuple(out)
@@ -341,18 +347,30 @@ def _row_time(trip: LogicalTrip) -> datetime | None:
     return trip.started_at or common.trip_time(trip)
 
 
-def build_row(trip: LogicalTrip, tz: ZoneInfo, private_ids: frozenset[str] = frozenset()) -> SimpleRow:
+def build_row(
+    trip: LogicalTrip, tz: ZoneInfo, private_ids: frozenset[str] = frozenset(),
+    locs: dict[uuid.UUID, Any] | None = None,
+) -> SimpleRow:
+    """En rad i underlaget. ``locs`` är resans platser (``place_text.load_locations``); utan dem
+    slås de upp i resans session."""
     when = _row_time(trip)
     km = common.reported_work_km(trip)
     per_category = common.segment_km(trip)
     time = time_text(trip, tz)
+    if locs is None:
+        from sqlalchemy.orm import object_session
+
+        locs = place_text.load_locations(object_session(trip), [trip])
+    live = getattr(trip, "source", None) in LIVE_SOURCES
+    start = locs.get(trip.start_location_id) if trip.start_location_id else None
+    end = locs.get(trip.end_location_id) if trip.end_location_id else None
     return SimpleRow(
         trip_id=trip.id,
         date=when.astimezone(tz).date() if when is not None else None,
         time=time,
-        from_address=clean(trip.start_address),
-        to_address=clean(trip.end_address),
-        via=_via(trip, private_ids),
+        from_address=place_text.report_text(start, trip.start_address, live=live),
+        to_address=place_text.report_text(end, trip.end_address, live=live),
+        via=_via(trip, private_ids, locs),
         purpose=purpose_text(trip),
         odometer_start=trip.odometer_start,
         odometer_end=trip.odometer_end,
@@ -458,7 +476,11 @@ def build_journal(
     # "Privat stopp" gäller bara resor från bilen; importerade och manuellt inlagda resor
     # skrivs som förut (A.5), på samma sätt som kontrollen private_address_in_report.
     private_ids = private_stop_ids([t for t in reported if t.source in LIVE_SOURCES])
-    rows = [build_row(t, tz, private_ids if t.source in LIVE_SOURCES else frozenset()) for t in reported]
+    # Start och mål skrivs alltid med gatuadress och ort, aldrig "Hem" (place_text).
+    from sqlalchemy.orm import object_session
+
+    locs = place_text.load_locations(object_session(reported[0]) if reported else None, reported)
+    rows = [build_row(t, tz, private_ids if t.source in LIVE_SOURCES else frozenset(), locs) for t in reported]
     return SimpleJournal(
         vehicle=vehicle,
         tz=tz,

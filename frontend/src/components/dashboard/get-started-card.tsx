@@ -103,16 +103,27 @@ function HomeStep({ done, marked, onDone }: { done: boolean; marked: Marked | nu
     if (!marked) return <>Adresser för dina resor slås upp automatiskt.</>;
     const { result, old } = marked;
     return (
-      <p data-testid="get-started-home-result">
-        Markerad med bilens position {positionTime(result.position_reported_at)}.{" "}
-        {old ? (
-          <>
-            Stod bilen inte hemma då? <Link href="/places" className="font-medium text-accent-ink underline underline-offset-2">Flytta bostaden på kartan</Link>.
-          </>
-        ) : (
-          "Adresser för dina resor slås nu upp automatiskt."
-        )}
-      </p>
+      <div className="space-y-1">
+        <p data-testid="get-started-home-result">
+          Markerad med bilens position {positionTime(result.position_reported_at)}.{" "}
+          {old ? (
+            <>
+              Stod bilen inte hemma då? <Link href="/places" className="font-medium text-accent-ink underline underline-offset-2">Flytta bostaden på kartan</Link>.
+            </>
+          ) : (
+            "Adresser för dina resor slås nu upp automatiskt."
+          )}
+        </p>
+        {!result.location.address ? (
+          <p data-testid="get-started-home-address-missing" className="text-warn-ink">
+            Bostadens adress saknas – den står i underlaget i stället för ordet &quot;Hem&quot;.{" "}
+            <Link href={`/places?plats=${result.location.id}`} className="font-medium text-accent-ink underline underline-offset-2">
+              Fyll i adressen
+            </Link>
+            .
+          </p>
+        ) : null}
+      </div>
     );
   }
 
@@ -131,7 +142,7 @@ function HomeStep({ done, marked, onDone }: { done: boolean; marked: Marked | nu
           onChange={(e) => setAddress(e.target.value)}
           disabled={mark.isPending}
         />
-        <FieldHint>Står bara i din körjournal. Lämna tomt så står det &quot;Hem&quot;.</FieldHint>
+        <FieldHint>Gatuadress och ort. Står i underlaget i stället för ordet &quot;Hem&quot; och skickas aldrig vidare. Kan också fyllas i senare under Platser.</FieldHint>
       </div>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
         <Button size="sm" variant="primary" onClick={submit} disabled={mark.isPending} data-testid="get-started-home-button">

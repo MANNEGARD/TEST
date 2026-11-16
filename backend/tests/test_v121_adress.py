@@ -24,9 +24,8 @@ import app.models as M
 from app.models.enums import Category, DistanceQuality, LocationType, ReviewStatus, TimeQuality, TripSource
 from app.services import settings as settings_svc
 from app.services.export import checks as checks_mod
-from app.services.export import month_close
+from app.services.export import month_close, simple
 from app.services.export import service as export_svc
-from app.services.export import simple
 from app.services.places import geocode
 from app.services.places import registry as places
 from app.services.stats import common
@@ -246,7 +245,7 @@ def test_patch_sets_address_and_city(client, db, user):
     db.commit()
     r = client.patch(f"/api/v1/locations/{home.id}", json={"address": " Låtsasgatan 4,  123 45 Påhittby "})
     assert r.status_code == 200, r.text
-    assert r.json()["address"] == HOME_ADDR and r.json()["city"] == "Påhittby"
+    assert r.json()["address"] == HOME_ADDR and r.json()["city"] == "123 45 Påhittby"  # som parse_address
     db.expire_all()
     assert places.find_by_address(db, user.id, HOME_ADDR).id == home.id
     # Tom text tar bort adressen.

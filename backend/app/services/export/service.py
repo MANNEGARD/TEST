@@ -28,7 +28,6 @@ from app.models import (
     ExportJob,
     ImportedFile,
     ImportRow,
-    KnownLocation,
     LogicalTrip,
     User,
     Vehicle,
@@ -39,6 +38,7 @@ from app.services import audit
 from app.services import settings as settings_svc
 from app.services.audit import Actor
 from app.services.export import checks as checks_mod
+from app.services.export import place_text
 from app.services.export import simple as simple_mod
 from app.services.export.simple import SimpleJournal
 from app.services.export.workbook import ExportContext, build_workbook
@@ -168,12 +168,8 @@ def build_context(
     export_cfg = settings_svc.get_section(db, user_id, "export")
     tol = float(settings_svc.get_section(db, user_id, "merge")["odometer_tolerance_km"])
 
-    loc_ids = {t.start_location_id for t in trips if t.start_location_id} | {t.end_location_id for t in trips if t.end_location_id}
-    locations = (
-        {loc.id: loc for loc in db.execute(select(KnownLocation).where(KnownLocation.id.in_(loc_ids))).scalars()}
-        if loc_ids
-        else {}
-    )
+    # Start, mål och mellanstopp: underlaget skriver platsernas adresser (place_text).
+    locations = place_text.load_locations(db, list(trips))
     drivers = {d.id: d.name for d in db.execute(select(Driver).where(Driver.owner_user_id == user_id)).scalars()}
 
     raw_row_ids = {r.import_row_id: r.id for t in trips for r in seg.ordered_raws(t) if r.import_row_id is not None}

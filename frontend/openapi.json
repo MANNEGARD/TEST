@@ -3373,6 +3373,50 @@
     }
    }
   },
+  "/api/v1/locations/{location_id}/lookup-address": {
+   "post": {
+    "tags": [
+     "Locations"
+    ],
+    "summary": "Hämta platsens adress från kartan (en gång, efter ägarens tryck)",
+    "description": "Slår upp just den här platsens adress hos användarens geokodare (standard OpenStreetMap).\n\nBara platsens position (avrundad till fyra decimaler) skickas, och bara när ägaren trycker\npå knappen. Förslaget sparas inte: ägaren ser det i adressfältet och sparar platsen.",
+    "operationId": "lookup_address_api_v1_locations__location_id__lookup_address_post",
+    "parameters": [
+     {
+      "name": "location_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid",
+       "title": "Location Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/AddressLookupOut"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
   "/api/v1/locations/{location_id}/accept-suggestion": {
    "post": {
     "tags": [
@@ -8474,6 +8518,30 @@
      "title"
     ],
     "title": "ActionOut"
+   },
+   "AddressLookupOut": {
+    "properties": {
+     "address": {
+      "type": "string",
+      "title": "Address"
+     },
+     "city": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "City"
+     }
+    },
+    "type": "object",
+    "required": [
+     "address"
+    ],
+    "title": "AddressLookupOut"
    },
    "AliasIn": {
     "properties": {

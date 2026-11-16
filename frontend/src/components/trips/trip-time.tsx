@@ -58,7 +58,7 @@ export function TripTime({
     <QualityValue
       value={fmt(at)}
       quality={quality === "estimated" ? "estimated" : "actual"}
-      explanation={`${label(TIME_QUALITY_LABELS, quality)} – ungefärligt klockslag inom ett snävt intervall.`}
+      explanation={`${label(TIME_QUALITY_LABELS, quality)} – ungefärligt klockslag; grunden och felmarginalen visas på resans sida.`}
     />
   );
 }

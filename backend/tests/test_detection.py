@@ -91,21 +91,23 @@ def test_trip_is_not_closed_while_still_moving(db, user, vehicle, car):
     assert len(pending) == 2
 
 
-def test_silent_trip_has_bounds_but_no_invented_start_time(db, user, vehicle, car):
-    """Bilen rapporterar först efter ankomst – starttiden är okänd."""
+def test_silent_trip_has_bounds_and_start_estimated_from_distance(db, user, vehicle, car):
+    """Bilen rapporterar först efter ankomst: gränserna kommer från bilen, och starttiden
+    uppskattas ur sträckan (1.2.1, K4) – märkt som uppskattning, aldrig som bilens tid."""
     parked_since = car.odo_ts
     poll_every(db, vehicle, car, m(0), m(30))
     car.drive_to(B, 14, m(42))  # ingen rapport under färd
     poll_every(db, vehicle, car, m(45), m(70))
     (raw,) = raws(db)
-    assert raw.started_at is None and raw.start_time_quality == TimeQuality.BOUNDED
+    assert raw.start_time_quality == TimeQuality.ESTIMATED
+    assert raw.start_estimate_basis["method"] == "distance_speed"
     assert raw.start_earliest == parked_since  # bilen stod bevisligen still vid sin senaste rapport
     assert raw.start_latest < raw.ended_at == m(42)
     assert raw.start_latest <= m(42) - timedelta(hours=14 / detection.MAX_AVG_SPEED_KMH)
-    assert raw.duration_seconds is None
-    # Inget fält innehåller ett gissat klockslag mellan gränserna.
+    assert raw.start_earliest <= raw.started_at <= raw.start_latest
+    assert raw.duration_seconds is None  # bilens egen körtid finns inte
     trip = db.execute(select(M.LogicalTrip)).scalar_one()
-    assert trip.started_at is None and "start_time_uncertain" in trip.quality_flags
+    assert trip.start_time_quality == TimeQuality.ESTIMATED and "start_time_uncertain" not in trip.quality_flags
 
 
 def test_round_trip_without_position_change_is_flagged(db, user, vehicle, car):

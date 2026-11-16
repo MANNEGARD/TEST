@@ -4,6 +4,7 @@ import * as React from "react";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
+import { attributionFor, tileRequest } from "./tiles";
 
 export interface MapPoint {
   lat: number;
@@ -26,10 +27,6 @@ function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string);
 }
 
-function attributionFor(url: string): string {
-  if (url.includes("openstreetmap")) return '© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>';
-  return "";
-}
 
 /**
  * Karta med kända punkter (MapLibre GL, rasterplattor från användarens inställning).
@@ -81,6 +78,7 @@ export function PointMap({
         center: [points[0].lon, points[0].lat],
         zoom: 12,
         attributionControl: { compact: true },
+        transformRequest: tileRequest,
         cooperativeGestures: true,
         fadeDuration: reduced ? 0 : 300,
       });

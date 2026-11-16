@@ -80,6 +80,18 @@ export function useHomeFromVehicle() {
   });
 }
 
+export type AddressLookupResult = components["schemas"]["AddressLookupOut"];
+
+/**
+ * "Hämta adressen från kartan": slår upp just den platsens adress en gång (platsens position
+ * skickas till karttjänsten). Förslaget sparas inte – det fylls i adressfältet.
+ */
+export function useLookupAddress() {
+  return useMutation({
+    mutationFn: (id: string) => api.post<AddressLookupResult>(`/locations/${id}/lookup-address`),
+  });
+}
+
 export function usePlaceSuggestions() {
   return useQuery({
     queryKey: placeKeys.suggestions,

@@ -43,8 +43,27 @@ const TYPES = {
   ".txt": "text/plain; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".woff2": "font/woff2",
   ".mjs": "text/javascript", ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ".ico": "image/x-icon",
 };
+// Rubrikerna för alla sidor ur _headers (avsnittet "/*"), som Netlify skickar dem: bl.a.
+// Referrer-Policy och Content-Security-Policy, så att kartbildernas anrop prövas under samma villkor.
+const SITE_HEADERS = (() => {
+  const out = {};
+  const file = path.join(DIR, "_headers");
+  if (!existsSync(file)) return out;
+  let inAll = false;
+  for (const line of readFileSync(file, "utf8").split("\n")) {
+    if (!line.trim() || line.startsWith("#")) continue;
+    if (!/^\s/.test(line)) {
+      inAll = line.trim() === "/*";
+      continue;
+    }
+    const i = line.indexOf(":");
+    if (inAll && i > 0) out[line.slice(0, i).trim().toLowerCase()] = line.slice(i + 1).trim();
+  }
+  return out;
+})();
 const server = createServer((req, res) => {
   const url = new URL(req.url, BASE);
+  for (const [k, v] of Object.entries(SITE_HEADERS)) res.setHeader(k, v);
   let p = path.join(DIR, decodeURIComponent(url.pathname));
   if (!p.startsWith(DIR)) p = DIR;
   if (existsSync(p) && statSync(p).isDirectory()) {
@@ -69,6 +88,8 @@ const problems = [];
 let current = "start";
 const fail = (msg) => problems.push(`[${current}] ${msg}`);
 const step = (msg) => console.log(`• ${msg}`);
+/** Kartbildsanrop som testet besvarat lokalt: { url, referer }. */
+const tileRequests = [];
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64");
 
 function watch(page) {
@@ -91,8 +112,11 @@ function watch(page) {
 
 async function newContext(browser, opts = {}) {
   const ctx = await browser.newContext({ locale: "sv-SE", timezoneId: "Europe/Stockholm", acceptDownloads: true, viewport: { width: 1360, height: 900 }, ...opts });
-  // Kartplattor hämtas aldrig från internet under testet.
-  await ctx.route(/tile\.openstreetmap\.org/, (r) => r.fulfill({ status: 200, contentType: "image/png", body: PNG }));
+  // Kartplattor hämtas aldrig från internet under testet; deras Referer sparas.
+  await ctx.route(/tile\.openstreetmap\.org/, async (r) => {
+    tileRequests.push({ url: r.request().url(), referer: await r.request().headerValue("referer") });
+    await r.fulfill({ status: 200, contentType: "image/png", body: PNG });
+  });
   return ctx;
 }
 
@@ -205,6 +229,22 @@ try {
     for (const key of SETTINGS) await visit(page, `/settings/?sektion=${key}`, `ljus-installningar-${key}`);
     for (const t of trips.slice(0, 6)) await visit(page, `/journal/${t.id}/`);
     for (const q of questions) await visit(page, `/m/q/${q.public_id}/`);
+  });
+
+  await section("karta", async () => {
+    step("Kartan: kartbilderna bär sidans ursprung som Referer, trots Referrer-Policy: same-origin");
+    const withMap = trips.find((t) => t.source === "demo" || t.source === "volvo_api") ?? trips[0];
+    const before = tileRequests.length;
+    const res = await page.goto(`${BASE}/journal/${withMap.id}/`);
+    if (res.headers()["referrer-policy"] !== "same-origin") fail(`sidans Referrer-Policy är ${res.headers()["referrer-policy"]}`);
+    const deadline = Date.now() + 15000;
+    while (tileRequests.length === before && Date.now() < deadline) await page.waitForTimeout(250);
+    const seen = tileRequests.slice(before);
+    if (!seen.length) fail("kartan hämtade inga kartbilder");
+    const wrong = seen.filter((r) => r.referer !== `${BASE}/`);
+    if (wrong.length) fail(`${wrong.length} av ${seen.length} kartbilder hade Referer ${JSON.stringify(wrong[0].referer)} i stället för ${BASE}/`);
+    else if (seen.length) step(`  ${seen.length} kartbilder med Referer ${BASE}/`);
+    await page.screenshot({ path: path.join(SHOTS, "karta-resa.png"), fullPage: true });
   });
 
   const reviewTotal = async () => (await api(page, "GET", `/review?status=open&limit=200&vehicle_id=${seed.vehicleId}`)).open_total;
@@ -391,6 +431,13 @@ try {
     const name = page.getByLabel("Namn", { exact: true });
     await name.waitFor({ timeout: 8000 });
     await name.fill("Exempelkund Nord AB");
+    // Adressen i underlaget: fältet och knappen "Hämta adressen från kartan" (demot slår inte upp något).
+    const address = page.getByTestId("place-address");
+    await address.fill("");
+    await page.getByTestId("place-address-missing").waitFor({ timeout: 5000 }).catch(() => fail("tom adress visas inte som saknad"));
+    await page.getByTestId("place-address-lookup").click();
+    await page.getByText("Adressen är ifylld från kartan").waitFor({ timeout: 5000 }).catch(() => fail("adressen fylldes inte i från kartan"));
+    if ((await address.inputValue()) !== target.address) fail(`adressfältet fick ${await address.inputValue()}`);
     await page.getByRole("button", { name: /^Spara( och bekräfta)?$/ }).click();
     await page.waitForTimeout(800);
     const after = (await api(page, "GET", "/locations")).find((l) => l.id === target.id);

@@ -26,6 +26,13 @@ Nothing is sold, and nothing is used for advertising or profiling.
 * Requests to the Volvo Cars APIs, to read the owner's own vehicle data.
 * Address lookups: a rounded position is sent to OpenStreetMap's Nominatim service to get a
   street address.
+* Only when the owner presses "Hämta adressen från kartan" (fetch the address from the map) on
+  a saved place: that place's position, rounded to four decimals, is sent once to the same
+  service. This is the only way the position of the owner's home can reach it; it is never
+  looked up automatically.
+* Map tiles: when a map is shown, the browser fetches map images from the configured tile
+  server (by default OpenStreetMap). The tile server sees the viewer's IP address, the map area
+  and the site's origin (for example `https://drivelog.example/`, never the page path).
 * Only if the owner has added a calendar link (ICS): DriveLog fetches that calendar file from
   the calendar provider (for Outlook, Microsoft) every 30 minutes and when the owner asks for
   it. The provider sees the server's address and when the file is fetched. Removing the link

@@ -135,7 +135,7 @@ export function isAutoApproval(source: string | null | undefined): boolean {
 /** Varifrån starttiden kommer (TripOut.start_time_source). */
 export const START_TIME_SOURCE_LABELS: Record<string, string> = {
   car: "Bilens tidsstämpel",
-  estimated: "Uträknad ur bilens egna uppgifter",
+  estimated: "Uträknad ur bilens egna uppgifter eller uppskattad ur sträckan",
   user: "Angiven av dig",
   unknown: "Starttiden är okänd",
 };

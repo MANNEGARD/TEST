@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { ArrowRight, Check, CircleDashed, Home, MapPinOff, Merge, Sparkles, X } from "lucide-react";
+import { ArrowRight, Check, CircleDashed, Home, MapPinOff, MapPinned, Merge, Sparkles, X } from "lucide-react";
 import { toast } from "sonner";
 import { MapPlaceholder } from "@/components/map/map-placeholder";
 import { useMapSettings } from "@/components/map/use-map-settings";
@@ -16,7 +16,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { ApiError, errorMessage } from "@/lib/api";
 import { formatDate, formatMil, formatNumber } from "@/lib/format";
 import type { Place, PlaceInput } from "@/lib/places-types";
-import { useUpdatePlace } from "@/lib/queries/places";
+import { useLookupAddress, useUpdatePlace } from "@/lib/queries/places";
 import { LocationTypeSelect, PlaceAvatar, typeLabel, typeText } from "./location-type";
 import { PlaceAdvanced, type AdvancedSection } from "./place-advanced";
 import { PositionPicker, type LatLon } from "./position-picker";
@@ -90,11 +90,14 @@ function PlaceEditor({
   onOpenPlace: (id: string) => void;
 }) {
   const update = useUpdatePlace();
+  const lookup = useLookupAddress();
   const mapSettings = useMapSettings();
   const initialPos: LatLon | null = place.latitude != null && place.longitude != null ? { lat: place.latitude, lon: place.longitude } : null;
 
   const [name, setName] = React.useState(place.name);
   const [type, setType] = React.useState(place.type);
+  const [address, setAddress] = React.useState(place.address ?? "");
+  const [lookupNote, setLookupNote] = React.useState<string | null>(null);
   const [company, setCompany] = React.useState(place.company ?? "");
   const [notes, setNotes] = React.useState(place.notes ?? "");
   const [radius, setRadius] = React.useState(String(place.radius_m));
@@ -130,6 +133,7 @@ function PlaceEditor({
   const patch: PlaceInput = {};
   if (name.trim() !== place.name) patch.name = name.trim();
   if (type !== place.type) patch.type = type;
+  if (address.trim() !== (place.address ?? "")) patch.address = address.trim() || null;
   if (company.trim() !== (place.company ?? "")) patch.company = company.trim();
   if (notes.trim() !== (place.notes ?? "")) patch.notes = notes.trim();
   if (radiusValue !== null && radiusValue !== place.radius_m) patch.radius_m = radiusValue;
@@ -156,6 +160,22 @@ function PlaceEditor({
     if (a === null && b === null) setPos(null);
     else if (a !== null && b !== null && !Number.isNaN(a) && !Number.isNaN(b) && Math.abs(a) <= 90 && Math.abs(b) <= 180) setPos({ lat: a, lon: b });
   };
+  // "Hämta adressen från kartan": bara den sparade positionen slås upp, och bara efter ett tryck.
+  const positionSaved = !!initialPos && patch.latitude === undefined && !patch.clear_coordinates;
+  const fetchAddress = () => {
+    setError(null);
+    setLookupNote(null);
+    lookup.mutate(place.id, {
+      onSuccess: (r) => {
+        setAddress(r.address);
+        setLookupNote("Adressen är ifylld från kartan. Kontrollera den och spara.");
+      },
+      onError: (err) => setError(errorMessage(err)),
+    });
+  };
+  // Att spara bekräftar platsen, och en bekräftad plats behöver en adress i underlaget.
+  const addressMissing = !address.trim();
+
   const clearPosition = () => {
     setPos(null);
     setLatText("");
@@ -194,7 +214,7 @@ function PlaceEditor({
 
   const stats = place.stats;
   const purposes = stats.top_purposes ?? [];
-  const address = place.address && place.address !== place.name ? place.address : null;
+  const headerAddress = place.address && place.address !== place.name ? place.address : null;
 
   return (
     <>
@@ -205,7 +225,7 @@ function PlaceEditor({
             <SheetTitle className="break-words">{place.name}</SheetTitle>
             <SheetDescription className="break-words">
               {typeText(place.type)}
-              {address ? ` · ${address}` : place.city && !place.name.includes(place.city) ? ` · ${place.city}` : ""}
+              {headerAddress ? ` · ${headerAddress}` : place.city && !place.name.includes(place.city) ? ` · ${place.city}` : ""}
             </SheetDescription>
           </div>
         </div>
@@ -348,6 +368,51 @@ function PlaceEditor({
                   </div>
                 ) : null}
               </div>
+            ) : null}
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="place-address">
+              Adress <span className="font-normal text-fg-muted">(gatuadress och ort – står i underlaget)</span>
+            </Label>
+            <Input
+              id="place-address"
+              data-testid="place-address"
+              value={address}
+              onChange={(e) => {
+                setAddress(e.target.value);
+                setLookupNote(null);
+              }}
+              maxLength={300}
+              autoComplete="off"
+              placeholder="t.ex. Gatan 1, 123 45 Orten"
+              aria-describedby="place-address-hint"
+              aria-invalid={addressMissing || undefined}
+            />
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={fetchAddress}
+                loading={lookup.isPending}
+                disabled={!positionSaved || place.is_demo}
+                data-testid="place-address-lookup"
+              >
+                <MapPinned aria-hidden /> Hämta adressen från kartan
+              </Button>
+              {!positionSaved && !place.is_demo ? <span className="text-xs text-fg-muted">Sätt ut och spara positionen först.</span> : null}
+            </div>
+            <FieldHint id="place-address-hint">
+              {type === "home" ? "Bostaden står med sin adress i underlaget, aldrig som ”Hem”. " : "Underlaget skriver platsens namn och adress. "}
+              Knappen skickar platsens position till OpenStreetMap en gång för att slå upp adressen; inget skickas utan att du trycker.
+            </FieldHint>
+            {lookupNote ? (
+              <p role="status" className="text-xs text-ok-ink">
+                {lookupNote}
+              </p>
+            ) : addressMissing ? (
+              <p className="text-xs text-warn-ink" data-testid="place-address-missing">
+                Adress saknas – underlaget för månaden skapas inte förrän den är ifylld.
+              </p>
             ) : null}
           </div>
           <div className="space-y-1.5">

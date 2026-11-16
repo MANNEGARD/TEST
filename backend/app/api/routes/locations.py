@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 
 from app.api.deps import DbDep, PrincipalDep, WebPrincipalDep, owned_vehicle_ids
-from app.api.errors import bad_request, conflict, not_found
+from app.api.errors import ApiError, bad_request, conflict, not_found
 from app.api.serializers import location_out
 from app.models import (
     KnownLocation,
@@ -356,6 +356,23 @@ def update_location(location_id: uuid.UUID, body: LocationIn, principal: WebPrin
         loc.latitude, loc.longitude, loc.coordinate_source = data["latitude"], data["longitude"], "user"
     if body.clear_coordinates:
         loc.latitude, loc.longitude, loc.coordinate_source = None, None, None
+    if "address" in data:
+        # Adressen som står i underlaget (gatuadress och ort). Tom text tar bort den.
+        address = clean(data["address"]) or None
+        if address:
+            owner = places.find_by_address(db, principal.user.id, address)
+            if owner is not None and owner.id != loc.id:
+                raise conflict(
+                    f"Adressen tillhör redan platsen {owner.name!r}. Slå ihop platserna i stället.",
+                    "address_exists", {"location_id": str(owner.id)},
+                )
+        before["address"] = loc.address
+        loc.address, loc.city = address, parse_address(address).city if address else None
+        if address:
+            places.add_alias(db, loc, address)
+            if loc.geocode_status in (GeocodeStatus.PENDING, GeocodeStatus.FAILED):
+                loc.geocode_status = GeocodeStatus.OFF  # ägaren har skrivit adressen; den slås inte upp
+            geocode._fill_trips(db, loc)
     for field in ("name", "type", "company", "radius_m", "notes", "confirmed"):
         if field in data and data[field] is not None:
             setattr(loc, field, data[field].strip() if isinstance(data[field], str) else data[field])
@@ -383,6 +400,49 @@ def update_location(location_id: uuid.UUID, body: LocationIn, principal: WebPrin
     _reevaluate(db, principal)  # platstyper påverkar klassningen av oavgjorda resor
     db.commit()
     return location_out(loc, suggest.location_stats(db, principal.user.id).get(loc.id))
+
+
+class AddressLookupOut(BaseModel):
+    address: str
+    city: str | None = None
+
+
+@router.post(
+    "/locations/{location_id}/lookup-address", response_model=AddressLookupOut,
+    summary="Hämta platsens adress från kartan (en gång, efter ägarens tryck)",
+)
+def lookup_address(location_id: uuid.UUID, principal: WebPrincipalDep, db: DbDep) -> AddressLookupOut:
+    """Slår upp just den här platsens adress hos användarens geokodare (standard OpenStreetMap).
+
+    Bara platsens position (avrundad till fyra decimaler) skickas, och bara när ägaren trycker
+    på knappen. Förslaget sparas inte: ägaren ser det i adressfältet och sparar platsen.
+    """
+    loc = _owned(db, principal, location_id)
+    if loc.is_demo:
+        raise bad_request("Demoplatsernas positioner är påhittade och slås inte upp.", "demo_place")
+    if loc.latitude is None or loc.longitude is None or not valid_coordinates(loc.latitude, loc.longitude):
+        raise bad_request("Platsen har ingen position. Sätt ut den på kartan och spara först.", "no_position")
+    if not geocode.geocoding_enabled(db, principal.user.id):
+        raise bad_request(
+            "Adressuppslagning är avstängd under Inställningar → Sekretess. Skriv adressen själv, eller slå på "
+            "uppslagningen.", "geocoding_off",
+        )
+    from app.services import settings as settings_svc
+
+    raw_url = settings_svc.get_section(db, principal.user.id, "privacy").get("geocoder_url") or ""
+    try:
+        url = settings_svc.validate_geocoder_url(raw_url)
+        found = geocode.reverse(provider_url=url, lat_key=geocode.cell_key(loc.latitude),
+                                lon_key=geocode.cell_key(loc.longitude))
+    except (ValueError, geocode.GeocodeError) as exc:
+        raise ApiError(502, "Kartan gick inte att nå just nu. Försök igen om en stund, eller skriv adressen själv.",
+                       "lookup_failed") from exc
+    audit.record(db, principal.actor, "location.address_lookup", "known_location", loc.id,
+                 after={"found": found is not None})
+    db.commit()
+    if found is None:
+        raise ApiError(404, "Kartan har ingen adress för den här positionen. Skriv adressen själv.", "address_not_found")
+    return AddressLookupOut(address=found.label, city=found.city)
 
 
 @router.post("/locations/{location_id}/accept-suggestion", response_model=LocationOut, summary="Godkänn föreslagen typ och namn")

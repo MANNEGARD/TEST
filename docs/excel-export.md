@@ -11,9 +11,9 @@ följt av en rad per tjänsteresa:
 | Kolumn | Innehåll |
 | --- | --- |
 | Datum | Resans datum |
-| Tid | Start- och sluttid. En tid som DriveLog räknat fram ur bilens uppgifter skrivs "ca 07:35"; en okänd starttid lämnas bort ("–08:52") |
-| Från | Startadress (gatuadress utan kartans företagsnamn; hemmets adress kan stå här) |
-| Till | Slutadress (mellanstopp anges som "via …", ett stopp hemma eller vid en privat plats som "Privat stopp") |
+| Tid | Start- och sluttid. En tid som DriveLog räknat fram ur bilens uppgifter, eller uppskattat ur sträckan när bilen bara rapporterat ankomsten, skrivs "ca 07:35"; en okänd starttid lämnas bort ("–08:52") |
+| Från | Start med gatuadress och ort – aldrig "Hem". Bostaden står med sin adress; en bekräftad plats med eget namn som "Acme AB, Kundvägen 2, Exempelstad" |
+| Till | Mål på samma sätt (mellanstopp anges som "via …", ett stopp hemma eller vid en privat plats som "Privat stopp") |
 | Ärende | Resans syfte, med besökt företag eller kontaktperson när det är ifyllt |
 | Mätarställning start / slut | Ur bilens körjournal |
 | Km | Körd sträcka, en decimal |
@@ -93,7 +93,8 @@ eftersom de gör underlaget lätt att kontrollera.
 | Mätarställning vid start och slut | Mätarställning start / slut |
 | Registreringsnummer, år | Sidhuvud |
 
-Personnummer och bostadsadress skrivs inte ut – din arbetsgivare har redan de uppgifterna.
+Personnummer skrivs inte ut, och bostadsadressen står bara som start eller mål för en resa som
+börjar eller slutar hemma (i stället för ordet "Hem").
 
 ### Ersättning per mil
 
@@ -118,6 +119,7 @@ Innan filen skapas kontrolleras tjänsteresorna i perioden:
 | Resor som väntar på godkännande eller inte är avgjorda | Varning – de tas inte med |
 | Resa från bilen saknar starttid | Varning – stoppar inte underlaget |
 | Resa saknar adress | Varning |
+| Bostaden eller en bekräftad plats i underlaget saknar adress (*Bostaden saknar adress – fyll i den under Platser*) | Fel – fyll i adressen på platsen under Platser, eller tryck *Hämta adressen från kartan* där |
 | Resan kan vara flera körningar | Varning |
 | Uträknade tider ("ca") | Upplysning |
 | En privat adress (hemmet eller en privat plats) skulle hamna i underlaget för en resa från bilen | Fel |
