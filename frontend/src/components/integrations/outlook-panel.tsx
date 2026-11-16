@@ -21,6 +21,7 @@ import {
   useSaveMicrosoftCredentials,
   useSelectMicrosoftCalendars,
 } from "@/lib/queries/integrations";
+import { IcsLinkSection } from "./ics-link";
 import { ConfirmButton, CopyField, DemoBlock, DemoVehicleSwitch, Field, Note, notifyError, Section, SecretField, StatusNote } from "./shared";
 
 /** "Synka nu" med kvitto – används både på kortet och i panelen. */
@@ -179,6 +180,8 @@ export function OutlookPanel({ status }: { status: MicrosoftStatus }) {
         reauthHint="Åtkomsten har gått ut eller återkallats. Kalendern synkas inte förrän du ansluter på nytt."
       />
 
+      <IcsLinkSection />
+
       <Section
         step={1}
         done={hasApp}
@@ -186,7 +189,7 @@ export function OutlookPanel({ status }: { status: MicrosoftStatus }) {
         description={
           editing ? (
             <>
-              Registrera en app i{" "}
+              Eller, om du kan registrera en app hos Microsoft: gör det i{" "}
               <a href="https://entra.microsoft.com" target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 font-medium text-accent-ink underline-offset-2 hover:underline">
                 Microsoft Entra <ExternalLink className="size-3" aria-hidden />
               </a>{" "}

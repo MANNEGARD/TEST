@@ -103,6 +103,9 @@ Från 1.1.0 sköter körjournalen sig själv utan Excel-uppladdning när Volvo �
   bilen, markera bostaden (*Bilen står hemma nu* använder bilens senaste position) och anslut
   telefonen. Adresser slås upp först när bostaden är markerad; hemadressen skickas aldrig till
   karttjänsten. Kortet försvinner när allt är klart.
+- **Kalendern (valfritt):** under *Integrationer → Microsoft Outlook* kan du klistra in en
+  kalenderlänk (ICS) från Outlook på webben – ingen inloggning eller appregistrering behövs.
+  Mötena ger förslag på ärende. Länken sparas krypterad och visas aldrig igen.
 
 **Om nedladdningslänken:** den gäller i 7 dagar och för högst 10 hämtningar. Notisen går via
 Home Assistant, så den som har en Home Assistant-token eller kommer åt Home Assistants

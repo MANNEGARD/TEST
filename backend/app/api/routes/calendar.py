@@ -27,7 +27,8 @@ from app.models import CalendarEvent, CalendarMatch, Vehicle
 from app.models.enums import IntegrationProvider, IntegrationStatus
 from app.services import audit, integrations, oauth_state
 from app.services import settings as settings_svc
-from app.services.calendar import graph, matching, sync
+from app.services.calendar import graph, ics, matching, sync
+from app.services.calendar.ics_fetch import IcsError
 from app.services.learning import feedback
 
 router = APIRouter(tags=["Calendar matching"])
@@ -53,8 +54,47 @@ class DisconnectOptions(BaseModel):
     forget_app: bool = False  # radera även Microsoft-appens klient-ID och klienthemlighet
 
 
+class IcsLink(BaseModel):
+    url: str = Field(min_length=1, max_length=2000)  # hemlig: ekas aldrig tillbaka, inte heller i fel
+
+
+class IcsStatus(BaseModel):
+    provider: str
+    status: str
+    has_link: bool
+    host: str | None
+    last_sync_at: datetime | None
+    last_success_at: datetime | None
+    last_error: str | None
+    last_error_at: datetime | None
+    stored_events: int
+    events_with_location: int | None
+    tip: str | None
+    stores_body_preview: bool
+    sync_days_back: int
+    sync_days_forward: int
+
+
+class IcsSyncResult(BaseModel):
+    status: str
+    created: int
+    updated: int
+    removed: int
+    events: int
+    skipped: int
+    truncated: bool
+    tip: str | None
+    trips_with_match: int
+
+
 def _calendar_error(exc: sync.CalendarError) -> ApiError:
     status = {"not_connected": 409, "not_configured": 409, "needs_reauth": 409, "throttled": 429}.get(exc.code, 502)
+    return ApiError(status, exc.message, exc.code)
+
+
+def _ics_error(exc: IcsError) -> ApiError:
+    """Kalenderlänkens fel. Texten är alltid en fast svensk text utan länken."""
+    status = {"invalid_url": 400, "not_configured": 409}.get(exc.code, 502)
     return ApiError(status, exc.message, exc.code)
 
 
@@ -78,7 +118,8 @@ def status(principal: PrincipalDep, db: DbDep) -> dict[str, Any]:
     cal = settings_svc.get_section(db, principal.user.id, "calendar")
     events = db.execute(
         select(CalendarEvent.id).where(CalendarEvent.user_id == principal.user.id, CalendarEvent.is_demo.is_(False),
-                                       CalendarEvent.removed_at.is_(None))
+                                       CalendarEvent.removed_at.is_(None),
+                                       CalendarEvent.calendar_id != ics.ICS_CALENDAR_ID)  # bara Graph
     ).all()
     demo_events = db.execute(
         select(func.count(CalendarEvent.id)).where(
@@ -200,6 +241,55 @@ def disconnect(principal: WebPrincipalDep, db: DbDep, body: DisconnectOptions | 
     audit.record(db, principal.actor, "integration.disconnected", "integration", None, after={"provider": PROVIDER})
     db.commit()
     return integrations.public_view(integrations.get(db, principal.user.id, PROVIDER), PROVIDER)
+
+
+@router.get("/integrations/microsoft/ics", summary="Status för kalenderlänken (ICS)", tags=["Integration health"],
+            response_model=IcsStatus)
+def ics_status(principal: PrincipalDep, db: DbDep) -> dict[str, Any]:
+    return ics.status(db, principal.user.id)
+
+
+@router.put("/integrations/microsoft/ics", summary="Spara eller byt kalenderlänk (ICS)", tags=["Integration health"],
+            response_model=IcsStatus)
+def ics_save(body: IcsLink, principal: WebPrincipalDep, db: DbDep) -> dict[str, Any]:
+    """Länken hämtas och tolkas innan den sparas. Går det inte sparas ingenting."""
+    try:
+        ics.save_link(db, principal.user.id, body.url)
+    except IcsError as exc:
+        db.rollback()
+        raise _ics_error(exc) from None
+    _rematch(db, principal)
+    conn = integrations.get(db, principal.user.id, ics.PROVIDER)
+    audit.record(db, principal.actor, "integration.connected", "integration", conn.id if conn else None,
+                 after={"provider": ics.PROVIDER})
+    db.commit()
+    return ics.status(db, principal.user.id)
+
+
+@router.delete("/integrations/microsoft/ics", summary="Ta bort kalenderlänken och dess händelser",
+               tags=["Integration health"], response_model=IcsStatus)
+def ics_remove(principal: WebPrincipalDep, db: DbDep) -> dict[str, Any]:
+    conn = integrations.get(db, principal.user.id, ics.PROVIDER)
+    conn_id = conn.id if conn else None
+    if ics.remove_link(db, principal.user.id):
+        _rematch(db, principal, since_days=3650)
+        audit.record(db, principal.actor, "integration.disconnected", "integration", conn_id,
+                     after={"provider": ics.PROVIDER})
+    db.commit()
+    return ics.status(db, principal.user.id)
+
+
+@router.post("/integrations/microsoft/ics/sync", summary="Synka kalenderlänken nu och matcha mot resor",
+             tags=["Integration health"], response_model=IcsSyncResult)
+def ics_sync_now(principal: WebPrincipalDep, db: DbDep) -> dict[str, Any]:
+    try:
+        result = ics.sync_user(db, principal.user.id)
+    except IcsError as exc:
+        db.commit()  # felet sparas i last_error
+        raise _ics_error(exc) from None
+    result["trips_with_match"] = _rematch(db, principal)
+    db.commit()
+    return result
 
 
 @router.post("/integrations/microsoft/demo/enable", summary="Demoläge: påhittade kalenderposter för demobilen",

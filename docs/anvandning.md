@@ -284,6 +284,21 @@ originalresor och ändringshistorik.
   måste stämma med den uppmätta sträckan, och bara tjänstedelen hamnar i underlaget.
 - **Ångra ändring** återställer både resan och det systemet lärt sig av ändringen.
 
+## Kalendern
+
+Kalendern är en ledtråd: ett möte nära resans ankomst, på en plats som stämmer med målet,
+ger ett förslag på ärende. Den kopplas under *Integrationer → Microsoft Outlook* på ett av två
+sätt – eller båda, utan att mötena dubbleras:
+
+- **Kalenderlänk (ICS)** – enklast, ingen inloggning och ingen appregistrering. Skapa en länk i
+  Outlook på webben (*Inställningar → Kalender → Delade kalendrar*, publicera och välj *Kan visa
+  rubriker och platser*), klistra in den och tryck *Spara*. Länken är som ett lösenord: den
+  sparas krypterad och visas aldrig igen. DriveLog hämtar kalendern var 30:e minut, och *Synka
+  nu* hämtar direkt.
+- **Appregistrering hos Microsoft** – för den som kan registrera en app i organisationen.
+
+Steg för steg och vad som läses finns i [Microsoft Outlook](microsoft-graph.md).
+
 ## Sammanslagning av resor
 
 | Stillestånd | Vad som händer |

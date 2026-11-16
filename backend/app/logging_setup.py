@@ -24,11 +24,44 @@ _VIN = re.compile(r"\b(?=[A-HJ-NPR-Z0-9]{17}\b)(?=[A-HJ-NPR-Z0-9]*\d)(?=[A-HJ-NP
                   r"[A-HJ-NPR-Z0-9]{13}([A-HJ-NPR-Z0-9]{4})\b")
 # Nedladdningslänken till underlaget: själva token är behörigheten och får aldrig loggas.
 _PUBLIC_LINK = re.compile(r"(/public/exports/)[^\s\"'?#]+")
+# Kalenderlänken (ICS) ger läsrätt till kalendern: hela adressen döljs. Alla webcal-adresser,
+# och https-adresser som ser ut som en delad/publicerad kalender (Outlook) eller en .ics-fil.
+# Adresserna plockas ut som hela ord (allt fram till blanksteg eller citattecken) och prövas
+# sedan med vanliga strängsökningar – linjär tid även på elak indata, som en frågesträng full av
+# "https://" i accessloggen.
+_URL_TOKEN = re.compile(r"(?i)\b(?:webcals?|https?)://[^\s\"'<>]*")
+_CALENDAR_PATHS = ("/owa/calendar/", "/calendar/published/")
+_WORD_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_-")
+
+
+def _is_calendar_link(url: str) -> bool:
+    lower = url.lower()
+    if lower.startswith("webcal"):
+        return True
+    rest = lower.split("://", 1)[1]
+    cut = min((i for i in (rest.find("?"), rest.find("#")) if i >= 0), default=len(rest))
+    head = rest[:cut]
+    host_end = head.find("/")
+    if host_end > 0 and any(marker in head[host_end:] for marker in _CALENDAR_PATHS):
+        return True
+    i = head.find(".ics")
+    while i >= 0:
+        nxt = head[i + 4:i + 5]
+        if i > 0 and (not nxt or nxt not in _WORD_CHARS):
+            return True
+        i = head.find(".ics", i + 1)
+    return False
+
+
+def _mask_calendar_link(match: re.Match[str]) -> str:
+    url = match.group(0)
+    return "[KALENDERLÄNK DOLD]" if _is_calendar_link(url) else url
 
 
 def redact(text: str) -> str:
     """Maskerar hemligheter och VIN i en loggtext."""
-    out = _SECRET_KV.sub(r"\1\2[DOLD]", text)
+    out = _URL_TOKEN.sub(_mask_calendar_link, text)  # först, så att resten inte delar upp adressen
+    out = _SECRET_KV.sub(r"\1\2[DOLD]", out)
     out = _BEARER.sub(r"\1[DOLD]", out)
     out = _PUBLIC_LINK.sub(r"\1[DOLD]", out)
     return _VIN.sub(r"[VIN …\1]", out)

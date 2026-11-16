@@ -157,7 +157,7 @@ def _newest_report(db: Session, vehicle_id: uuid.UUID) -> datetime | None:
 def _calendar_alerts(db: Session, user_id: uuid.UUID, now: datetime, tz) -> list[Alert]:
     conn = _conn(db, user_id, IntegrationProvider.MICROSOFT)
     if conn is None or conn.status not in _ACTIVE:
-        return []
+        return _calendar_link_alerts(db, user_id, now, tz)
     if not settings_svc.get_section(db, user_id, "calendar")["enabled"]:
         return []
     last = conn.last_success_at
@@ -173,6 +173,27 @@ def _calendar_alerts(db: Session, user_id: uuid.UUID, now: datetime, tz) -> list
         message = "Outlook-kalendern har inte gått att synka. DriveLog försöker igen av sig självt."
     # Episoden är den senaste lyckade synken – aldrig dagens datum eller felets tidpunkt –
     # så att en kalender som felar i flera dygn ger ett enda larm.
+    return [Alert(_stamp(last), "Kalendern synkas inte", message)]
+
+
+def _calendar_link_alerts(db: Session, user_id: uuid.UUID, now: datetime, tz) -> list[Alert]:
+    """Samma larm för kalenderlänken (ICS) när Outlook via Graph inte är anslutet."""
+    conn = _conn(db, user_id, IntegrationProvider.CALENDAR_ICS)
+    if conn is None or conn.status not in _ACTIVE or not conn.secrets_encrypted:
+        return []
+    if not settings_svc.get_section(db, user_id, "calendar")["enabled"]:
+        return []
+    last = conn.last_success_at
+    broken = conn.status == IntegrationStatus.ERROR
+    stale = last is None or now - last > CALENDAR_STALE_AFTER
+    if not broken and not stale:
+        return []
+    if broken:
+        message = "Kalenderlänken har inte gått att synka. Kontrollera länken under Integrationer → Microsoft Outlook."
+    elif last is not None:
+        message = f"Kalenderlänken har inte synkats sedan {_when(last, tz)}. DriveLog försöker igen av sig självt."
+    else:
+        message = "Kalenderlänken har inte gått att synka. DriveLog försöker igen av sig självt."
     return [Alert(_stamp(last), "Kalendern synkas inte", message)]
 
 
@@ -312,7 +333,9 @@ def run(db: Session, now: datetime | None = None, *, force: bool = False) -> dic
             u
             for (u,) in db.execute(
                 select(IntegrationConnection.user_id).where(
-                    IntegrationConnection.provider.in_((IntegrationProvider.VOLVO, IntegrationProvider.MICROSOFT))
+                    IntegrationConnection.provider.in_(
+                        (IntegrationProvider.VOLVO, IntegrationProvider.MICROSOFT, IntegrationProvider.CALENDAR_ICS)
+                    )
                 )
             ).all()
         }

@@ -194,6 +194,7 @@ class IntegrationProvider(StrEnum):
     HOME_ASSISTANT = "home_assistant"
     AI = "ai"
     GEOCODER = "geocoder"
+    CALENDAR_ICS = "calendar_ics"  # hemlig kalenderlänk (ICS) utan inloggning
 
 
 class IntegrationStatus(StrEnum):

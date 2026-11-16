@@ -2,7 +2,8 @@
  * Handskrivna typer för integrationsvyn. Backend beskriver svaren som dict[str, Any]:
  *   backend/app/api/routes/integrations.py  (AI)
  *   backend/app/api/routes/volvo.py         (Volvo Cars)
- *   backend/app/api/routes/calendar.py      (Microsoft Outlook, /integrations/microsoft/*)
+ *   backend/app/api/routes/calendar.py      (Microsoft Outlook, /integrations/microsoft/*,
+ *                                           kalenderlänk /integrations/microsoft/ics*)
  *   backend/app/api/routes/ha.py            (Home Assistant, /integrations/home-assistant/*)
  *   backend/app/api/routes/notifications.py (demotelefonen)
  *   backend/app/api/routes/auth.py          (API-tokens)
@@ -163,6 +164,39 @@ export interface MicrosoftSyncResult {
   removed?: number;
   calendars?: number;
   trips_with_match?: number;
+}
+
+// ----------------------------------------------------------------------------- Kalenderlänk (ICS)
+
+/** routes/calendar.py → GET/PUT/DELETE /integrations/microsoft/ics. Länken lämnas aldrig ut. */
+export interface IcsStatus {
+  provider: "calendar_ics";
+  status: IntegrationStatusCode;
+  has_link: boolean;
+  host: string | null;
+  last_sync_at: string | null;
+  last_success_at: string | null;
+  last_error: string | null;
+  last_error_at: string | null;
+  stored_events: number;
+  events_with_location: number | null;
+  tip: string | null;
+  stores_body_preview: boolean;
+  sync_days_back: number;
+  sync_days_forward: number;
+}
+
+/** routes/calendar.py → POST /integrations/microsoft/ics/sync. */
+export interface IcsSyncResult {
+  status: "ok";
+  created: number;
+  updated: number;
+  removed: number;
+  events: number;
+  skipped: number;
+  truncated: boolean;
+  tip: string | null;
+  trips_with_match: number;
 }
 
 // ----------------------------------------------------------------------------- Home Assistant

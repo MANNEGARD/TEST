@@ -12,11 +12,13 @@ owner is the one responsible for the data in their installation.
 * The trip journal built from that data: trips, places, purposes and exports.
 * The owner's login (e-mail address and a hashed password) and the settings they choose.
 * Only if the owner turns it on: calendar entries from their own calendar, used to suggest the
-  purpose of a trip.
+  purpose of a trip. For each entry: subject, time, location, free/busy status and whether it
+  is marked private. The body text is only stored if the owner enables it.
 
 ## Where it is stored
 
-Everything is stored on the owner's own server. Access tokens and other secrets are encrypted.
+Everything is stored on the owner's own server. Access tokens and other secrets, including a
+calendar link (ICS) if the owner has added one, are encrypted.
 Nothing is sold, and nothing is used for advertising or profiling.
 
 ## What leaves the server
@@ -24,6 +26,10 @@ Nothing is sold, and nothing is used for advertising or profiling.
 * Requests to the Volvo Cars APIs, to read the owner's own vehicle data.
 * Address lookups: a rounded position is sent to OpenStreetMap's Nominatim service to get a
   street address.
+* Only if the owner has added a calendar link (ICS): DriveLog fetches that calendar file from
+  the calendar provider (for Outlook, Microsoft) every 30 minutes and when the owner asks for
+  it. The provider sees the server's address and when the file is fetched. Removing the link
+  deletes it and all entries fetched from it.
 * Only if the owner turns it on: the minimum information needed is sent to the AI provider the
   owner has chosen, to suggest a category for a trip, and notifications are sent to the owner's
   own Home Assistant.

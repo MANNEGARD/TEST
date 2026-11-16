@@ -20,6 +20,8 @@ import type {
   HaStatus,
   HaTestNotification,
   HaTestResult,
+  IcsStatus,
+  IcsSyncResult,
   MicrosoftCalendar,
   MicrosoftStatus,
   MicrosoftSyncResult,
@@ -37,6 +39,7 @@ export const integrationKeys = {
   volvoVehicles: ["integrations", "volvo", "vehicles"] as const,
   microsoft: ["integrations", "microsoft", "status"] as const,
   microsoftCalendars: ["integrations", "microsoft", "calendars"] as const,
+  ics: ["integrations", "microsoft", "ics"] as const,
   ha: ["integrations", "home-assistant", "status"] as const,
   haDevices: ["integrations", "home-assistant", "devices"] as const,
   ai: ["integrations", "ai"] as const,
@@ -195,6 +198,30 @@ export function useMicrosoftDemo() {
     (enable: boolean) => api.post<{ status: string; events_created?: number; events_removed?: number }>(`/integrations/microsoft/demo/${enable ? "enable" : "disable"}`),
     { journal: true, vehicles: true },
   );
+}
+
+// ----------------------------------------------------------------------------- Kalenderlänk (ICS)
+
+/** Status för kalenderlänken. Länken själv lämnas aldrig ut av servern – bara att den finns och värdnamnet. */
+export function useIcsStatus() {
+  return useQuery({
+    queryKey: integrationKeys.ics,
+    queryFn: ({ signal }) => api.get<IcsStatus>("/integrations/microsoft/ics", { signal }),
+  });
+}
+
+/** Sparar eller byter länk. Servern hämtar och tolkar länken först – går det inte sparas ingenting. */
+export function useSaveIcsLink() {
+  return useIntegrationMutation((url: string) => api.put<IcsStatus>("/integrations/microsoft/ics", { url }), { journal: true });
+}
+
+export function useIcsSync() {
+  return useIntegrationMutation(() => api.post<IcsSyncResult>("/integrations/microsoft/ics/sync"), { journal: true });
+}
+
+/** Tar bort länken och alla händelser som har hämtats från den. */
+export function useRemoveIcsLink() {
+  return useIntegrationMutation(() => api.del<IcsStatus>("/integrations/microsoft/ics"), { journal: true });
 }
 
 // ----------------------------------------------------------------------------- Home Assistant

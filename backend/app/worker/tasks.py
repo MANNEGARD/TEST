@@ -76,10 +76,15 @@ def tick() -> dict[str, Any]:
 
 @jobs.register("calendar.sync_due")
 def calendar_sync_due() -> dict[str, Any]:
-    from app.services.calendar import sync
+    """Kalendersynken: först Outlook (Graph), sedan kalenderlänken (ICS) i en egen session.
+    Ett fel i den ena stoppar aldrig den andra."""
+    from app.services.calendar import ics, sync
 
     with session_scope() as db:
-        return _safe("calendar.sync_all_due", sync.sync_all_due, db)
+        graph_result = _safe("calendar.sync_all_due", sync.sync_all_due, db)
+    with session_scope() as db:
+        ics_result = _safe("calendar.ics.sync_all_due", ics.sync_all_due, db)
+    return {**graph_result, "ics": ics_result}
 
 
 @jobs.register("classify.pending")

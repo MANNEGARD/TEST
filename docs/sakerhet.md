@@ -31,12 +31,18 @@ användares resor, platser, importer och exporter ger 404.
 
 ## Hemligheter
 
-- OAuth-tokens, klienthemligheter, Home Assistant-token och AI-nycklar lagras krypterade
-  (Fernet) med nyckeln i `DRIVELOG_ENCRYPTION_KEYS`. Nyckelrotation stöds.
+- OAuth-tokens, klienthemligheter, Home Assistant-token, AI-nycklar och kalenderlänken lagras
+  krypterade (Fernet) med nyckeln i `DRIVELOG_ENCRYPTION_KEYS`. Nyckelrotation stöds.
 - API:t lämnar aldrig ut en hemlighet – bara *att* den finns.
 - Inga lösenord, nycklar, VIN eller privata adresser finns i koden eller dokumentationen.
 - Loggarna maskerar tokens, nycklar, lösenord, `Authorization`-huvuden och VIN – i API:t,
   i webbserverns åtkomstlogg och i bakgrundsjobben (worker och schemaläggare).
+- **Kalenderlänken (ICS)** ger läsrätt till kalendern och behandlas som ett lösenord. API:t
+  visar bara *att* den finns och vilken server den går till. Den skrivs aldrig i
+  ändringsloggen, i felmeddelanden eller i loggarna – felen är fasta texter utan adressen, och
+  som extra skydd ersätts varje `webcal://`-adress och varje adress som ser ut som en delad
+  eller publicerad kalender (`/owa/calendar/`, `/calendar/published/`, `.ics`) med
+  `[KALENDERLÄNK DOLD]` i loggarna. *Ta bort länken* raderar den och dess händelser.
 - OAuth-flödena använder PKCE och ett serverlagrat engångs-`state` med kort livslängd.
 
 ## Filuppladdning
@@ -79,6 +85,7 @@ Månadsnotisen i självgående läge har en länk som hämtar underlaget utan in
 | --- | --- | --- |
 | Volvo Cars API | Anrop för din bils mätarställning, position, nivåer | När Volvo är anslutet |
 | Microsoft Graph | Läsning av valda kalendrar | När Outlook är anslutet |
+| Kalenderlänk (ICS) | Hämtar kalenderfilen (GET) | När en länk är sparad, var 30:e minut och vid Synka nu |
 | Home Assistant (din egen) | Notistexter | När notiser är påslagna |
 | AI-leverantör | Avidentifierat underlag för en resa, se nedan | Endast om en leverantör är ansluten och reglerna inte räcker |
 | Kartplattor | Vilket kartområde du tittar på | När en karta visas (kan stängas av eller pekas mot egen plattserver) |
@@ -109,6 +116,28 @@ som standard hos OpenStreetMaps Nominatim.
   all text tvättas från styr- och osynliga tecken.
 - Adressdata © OpenStreetMap-bidragsgivare, under licensen ODbL. Erkännandet visas på sidan
   Platser och i inställningen.
+
+### Kalenderlänken (ICS)
+
+Med en sparad kalenderlänk hämtar servern kalenderfilen hos kalendertjänsten (för Outlook:
+Microsoft). Tjänsten ser serverns publika adress och när hämtningarna görs.
+
+- Bara `GET` med en neutral User-Agent (`SMGD-DriveLog/<version> (self-hosted logbook;
+  calendar link)`). Inga kakor, ingen Referer och inga proxyinställningar från miljön.
+- Länken måste vara https på port 443 utan användarnamn eller lösenord, och får inte peka på
+  `localhost` eller en lokal, privat, länklokal, CGNAT- eller reserverad adress (även
+  molnleverantörernas metadataadress). Varje DNS-svar och den faktiska motparten efter
+  anslutningen kontrolleras, så att ett namn inte kan bytas till en intern adress mellan
+  kontroll och anslutning (DNS-ombindning). Samma hjälpfunktioner som geokodaren använder.
+- Högst tre omdirigeringar följs, och varje hopp prövas på nytt med samma regler och en ny
+  anslutning. Tidsgräns 5 sekunder för anslutning, 10 sekunder per läsning och 20 sekunder
+  totalt. Svaret läses strömmat och avbryts vid 10 MB. Packade svar (gzip m.fl.) avvisas.
+- Innehållet är opålitlig indata. Bara rubrik, tid, plats, ledig/upptagen, privat-flagga,
+  UID och – om du har slagit på det – en kort brödtext läses. All text tvättas från styr- och
+  osynliga tecken och kapas. Taken (25 000 händelser, 5 000 tillfällen i synkfönstret, inga
+  täta upprepningar) hindrar en elak fil från att belasta servern.
+- Tolkningen använder biblioteken `icalendar` (BSD-2-Clause) och `recurring-ical-events`
+  med `x-wr-timezone` (LGPL-3.0-or-later). De används oförändrade som installerade paket.
 
 ### AI-leverantören
 

@@ -3,6 +3,22 @@
 > Från 1.0.2 visar Home Assistant **Uppdatera** först när den nya versionen är färdigbyggd och
 > går att hämta – det går bra att trycka direkt.
 
+## 1.2.0
+
+Kalendern går nu att koppla utan appregistrering hos Microsoft.
+
+- **Kalenderlänk (ICS).** Under *Integrationer → Microsoft Outlook* klistrar du in en
+  kalenderlänk från Outlook på webben (*Inställningar → Kalender → Delade kalendrar*, välj *Kan
+  visa rubriker och platser*). Ingen inloggning behövs. `webcal://`-länkar fungerar också.
+- Länken är som ett lösenord: den sparas **krypterad** och visas aldrig igen – inte i appen,
+  inte i loggarna. DriveLog provar länken innan den sparas och säger i klartext vad som är fel.
+- Kalendern hämtas **var 30:e minut** i samma tidsfönster som tidigare, och *Synka nu* hämtar
+  direkt. *Ta bort länken* raderar länken och mötena som hämtats från den; resorna finns kvar.
+- **Tips** visas när länken bara visar ledig/upptagen-tid eller när inga möten har plats, så
+  att du kan dela kalendern på rätt sätt.
+- Outlook via appregistrering fungerar som förut. Båda sätten kan användas samtidigt, utan att
+  mötena dubbleras.
+
 ## 1.1.0
 
 Körjournalen sköter sig själv utan Excel-uppladdning: resorna kommer från bilen, får adress,

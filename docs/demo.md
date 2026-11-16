@@ -85,6 +85,10 @@ samma inspelade exempel oavsett fil. Sådant som backenden gör av sig själv ef
 exempel att godkänna hemresan eller skapa *Oktober uppdaterad*) simuleras inte. *Logga ut* leder
 till den vanliga inloggningssidan, där vilka uppgifter som helst släpper in.
 
+Kalenderlänken (ICS) i Outlook-panelen visas alltid i läget *ingen länk*. *Spara* svarar
+*Kalenderlänken går inte att prova i demot – den hämtar en riktig kalender.*, eftersom demot
+aldrig hämtar någon kalender.
+
 ## Göra om startdatat
 
 Startdatat skapas med backendens egna vägar mot en tom SQLite-databas: en simulerad bil (som

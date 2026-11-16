@@ -305,6 +305,23 @@ try {
       }
     }
     await page.keyboard.press("Escape");
+
+    step("Integrationer: Outlook-panelen visar Kalenderlänk (ICS) utan länk; Spara ger demots klartextfel");
+    await page.getByTestId("configure-microsoft").click();
+    const ics = page.getByTestId("ics-section");
+    await ics.waitFor({ timeout: 8000 });
+    await settled(page, "Outlook-panelen");
+    if (!(await page.getByText("Kalenderlänk (ICS)", { exact: true }).count())) fail("rubriken Kalenderlänk (ICS) saknas");
+    const icsInput = page.getByTestId("ics-link-input").locator("input");
+    if ((await icsInput.getAttribute("type")) !== "password") fail("kalenderlänkens fält är inget lösenordsfält");
+    if (await icsInput.inputValue()) fail("kalenderlänkens fält är förifyllt");
+    if (!(await page.getByTestId("ics-save").isDisabled())) fail("Spara är aktiv med tomt fält");
+    await page.screenshot({ path: path.join(SHOTS, "kalenderlank.png"), fullPage: true });
+    await icsInput.fill("https://calendar.example.com/owa/calendar/demo/calendar.ics");
+    await page.getByTestId("ics-save").click();
+    await expectText(page, "Kalenderlänken går inte att prova i demot");
+    await page.keyboard.press("Escape");
+
     await page.getByTestId("card-volvo").getByRole("button", { name: /Synka nu/ }).click();
     await expectText(page, "Synkad – inga nya resor sedan sist.");
     await page.getByRole("button", { name: "Skicka testnotis" }).first().click();

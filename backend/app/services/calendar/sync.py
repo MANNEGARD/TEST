@@ -18,6 +18,7 @@ from app.models.enums import IntegrationProvider, IntegrationStatus
 from app.services import integrations, oauth_state
 from app.services import settings as settings_svc
 from app.services.calendar import graph
+from app.services.calendar.ics import ICS_CALENDAR_ID
 
 logger = logging.getLogger(__name__)
 
@@ -303,6 +304,7 @@ def retire_unselected(db: Session, user_id: uuid.UUID, calendar_ids: list[str]) 
             CalendarEvent.is_demo.is_(False),
             CalendarEvent.removed_at.is_(None),
             CalendarEvent.calendar_id.not_in(calendar_ids),
+            CalendarEvent.calendar_id != ICS_CALENDAR_ID,  # kalenderlänkens händelser är en egen källa
         )
     ).scalars():
         ev.removed_at = now
@@ -321,7 +323,10 @@ def disconnect(db: Session, user_id: uuid.UUID, *, delete_events: bool = True, f
         return
     if delete_events:
         for ev in db.execute(
-            select(CalendarEvent).where(CalendarEvent.user_id == user_id, CalendarEvent.is_demo.is_(False))
+            select(CalendarEvent).where(
+                CalendarEvent.user_id == user_id, CalendarEvent.is_demo.is_(False),
+                CalendarEvent.calendar_id != ICS_CALENDAR_ID,  # kalenderlänken kopplas bort för sig
+            )
         ).scalars():
             db.delete(ev)
     client_cfg = {k: v for k, v in (conn.config or {}).items() if k in ("client_id", "tenant")}
@@ -347,11 +352,6 @@ def sync_all_due(db: Session, *, now: datetime | None = None, min_interval_minut
     NEEDS_REAUTH försöks inte: där behövs en ny inloggning. Efter en lyckad synk
     matchas resorna mot kalendern och klassas om, som efter "Synka nu" (fynd 20).
     """
-    from app.models import Vehicle
-    from app.services import audit
-    from app.services.calendar import matching
-    from app.services.learning import feedback
-
     now = now or utcnow()
     done = failed = 0
     conns = db.execute(
@@ -376,14 +376,26 @@ def sync_all_due(db: Session, *, now: datetime | None = None, min_interval_minut
             db.commit()
             continue
         done += 1
-        try:
-            for vehicle in db.execute(
-                select(Vehicle).where(Vehicle.owner_user_id == user_id, Vehicle.is_demo.is_(False))
-            ).scalars().all():
-                matching.match_vehicle(db, user_id=user_id, vehicle=vehicle, since=now - timedelta(days=90))
-                feedback.after_decisions(db, user_id=user_id, vehicle_id=vehicle.id, actor=audit.SYSTEM)
-            db.commit()
-        except Exception:
-            logger.exception("Omklassning efter kalendersynk misslyckades")
-            db.rollback()
+        rematch_after_sync(db, user_id, now)
     return {"synced": done, "failed": failed}
+
+
+def rematch_after_sync(db: Session, user_id: uuid.UUID, now: datetime) -> None:
+    """Matchar ägarens riktiga fordons resor mot kalendern och klassar om efter en lyckad
+    schemalagd synk (Graph eller kalenderlänk). Ett fel här rullas tillbaka och loggas; den
+    redan sparade synken står kvar."""
+    from app.models import Vehicle
+    from app.services import audit
+    from app.services.calendar import matching
+    from app.services.learning import feedback
+
+    try:
+        for vehicle in db.execute(
+            select(Vehicle).where(Vehicle.owner_user_id == user_id, Vehicle.is_demo.is_(False))
+        ).scalars().all():
+            matching.match_vehicle(db, user_id=user_id, vehicle=vehicle, since=now - timedelta(days=90))
+            feedback.after_decisions(db, user_id=user_id, vehicle_id=vehicle.id, actor=audit.SYSTEM)
+        db.commit()
+    except Exception:
+        logger.exception("Omklassning efter kalendersynk misslyckades")
+        db.rollback()

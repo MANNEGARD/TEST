@@ -9,9 +9,10 @@ import { PageHeader } from "@/components/ui/page-header";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { SkeletonBlock } from "@/components/ui/skeleton";
 import type { ProviderKey } from "@/lib/integrations-types";
-import { useAiStatus, useHaStatus, useMicrosoftStatus, useVolvoStatus } from "@/lib/queries/integrations";
+import { useAiStatus, useHaStatus, useIcsStatus, useMicrosoftStatus, useVolvoStatus } from "@/lib/queries/integrations";
 import { AI_PROVIDER_LABELS, AiPanel, useAiTestAction } from "./ai-panel";
 import { DELIVERY_LABELS, HaPanel, useTestNotificationAction } from "./ha-panel";
+import { useIcsSyncAction } from "./ics-link";
 import { IntegrationCard, type IntegrationCardData } from "./integration-card";
 import { OutlookPanel, useMicrosoftSyncAction } from "./outlook-panel";
 import { DemoVehicleSwitch, Note, StatusBadge } from "./shared";
@@ -108,6 +109,7 @@ function useOAuthReturn(open: (provider: ProviderKey) => void) {
 export function IntegrationsView() {
   const volvo = useVolvoStatus();
   const microsoft = useMicrosoftStatus();
+  const ics = useIcsStatus();
   const ha = useHaStatus();
   const ai = useAiStatus();
   const [open, setOpen] = React.useState<ProviderKey | null>(null);
@@ -120,6 +122,7 @@ export function IntegrationsView() {
 
   const volvoSync = useVolvoSyncAction();
   const microsoftSync = useMicrosoftSyncAction();
+  const icsSync = useIcsSyncAction();
   const testNotification = useTestNotificationAction();
   const aiTest = useAiTestAction();
 
@@ -156,7 +159,25 @@ export function IntegrationsView() {
 
   // ---- Outlook
   let microsoftCard: IntegrationCardData | undefined;
-  if (microsoft.data) {
+  const link = ics.data;
+  if (microsoft.data && link?.has_link && (microsoft.data.status === "not_configured" || microsoft.data.status === "configured")) {
+    // Ingen Graph-anslutning men en kalenderlänk: kortet visar länkens läge.
+    microsoftCard = {
+      status: link.status,
+      successLabel: "Senast synkad",
+      lastSuccessAt: link.last_success_at,
+      lastError: link.last_error,
+      lastErrorAt: link.last_error_at,
+      capabilityLabel: "Källa",
+      capability: <span className="block truncate">Kalenderlänk (ICS) · {link.host ?? "okänd värd"}</span>,
+      action:
+        link.status === "connected" ? (
+          <Button variant="ghost" size="sm" onClick={icsSync.run} loading={icsSync.isPending}>
+            <RefreshCw aria-hidden /> Synka nu
+          </Button>
+        ) : null,
+    };
+  } else if (microsoft.data) {
     const s = microsoft.data;
     const permissions = (s.scopes.length ? s.scopes.filter((p) => p.includes(".")) : s.required_permissions).filter((p) => p !== "offline_access");
     microsoftCard = {

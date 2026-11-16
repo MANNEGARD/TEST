@@ -5,6 +5,89 @@ ankomst, på en plats som stämmer med målet, är en stark indikation på tjän
 ett förslag till syfte. Kalendern är en informationskälla – aldrig ett bevis och aldrig en
 instruktion till systemet.
 
+Det finns två sätt att koppla kalendern:
+
+- **Kalenderlänk (ICS)** – enklast. Ingen inloggning och ingen appregistrering. Passar dig som
+  inte är administratör i din organisation. Se nästa avsnitt.
+- **Appregistrering (Microsoft Graph)** – kräver att du kan registrera en app hos Microsoft.
+  Se *Vad som krävs* längre ned.
+
+Båda kan användas samtidigt.
+
+## Utan appregistrering: kalenderlänk (ICS)
+
+En kalenderlänk är en hemlig adress som Outlook skapar när du delar eller publicerar din
+kalender. DriveLog hämtar kalenderfilen bakom länken och läser händelserna därifrån.
+
+### Skapa länken i Outlook på webben
+
+1. Öppna Outlook på webben och gå till *Inställningar* (kugghjulet) → *Kalender* →
+   *Delade kalendrar*.
+2. Under *Publicera en kalender*: välj din kalender och **Kan visa rubriker och platser**.
+   (Väljer du *Kan visa när jag är upptagen* ser DriveLog bara upptagen-tid och kan inte
+   föreslå några ärenden.)
+3. Klicka *Publicera* och kopiera **ICS-länken**. En länk som börjar med `webcal://` fungerar
+   också – DriveLog gör om den till `https://`.
+
+### Lägg in länken i DriveLog
+
+1. Gå till *Integrationer → Microsoft Outlook → Kalenderlänk (ICS)*.
+2. Klistra in länken och klicka **Spara**. DriveLog hämtar kalendern direkt. Går det inte
+   sparas ingenting, och du får veta varför i klartext.
+3. **Synka nu** hämtar kalendern på nytt. Annars sker det av sig självt var 30:e minut.
+4. **Ta bort länken** raderar länken och alla händelser som har hämtats från den.
+   Kalenderträffarna på resorna försvinner, men resorna finns kvar.
+
+### Länken är som ett lösenord
+
+Den som har länken kan läsa kalendern. DriveLog sparar den krypterad, visar den aldrig igen
+(bara vilken server den går till) och skriver den aldrig i loggar, ändringsloggen eller
+felmeddelanden. Dela den inte med någon annan.
+
+Har länken kommit i fel händer: gå till samma ställe i Outlook, klicka *Sluta publicera*
+och publicera sedan igen. Då blir den gamla länken ogiltig och du får en ny. Klistra in den
+nya i DriveLog med **Byt länk**.
+
+### Vad som läses
+
+Rubrik, tid, plats, ledig/upptagen och om händelsen är privat. Händelsens brödtext sparas
+bara om du har slagit på *Spara förhandsvisning av brödtext* under *Inställningar → Kalender*
+(av som standard). Allt i kalenderfilen behandlas som opålitlig text – aldrig som
+instruktioner – och tvättas från osynliga tecken och styrtecken innan det sparas.
+
+Upprepade möten, undantag och flyttade eller inställda tillfällen hanteras, och tiderna
+räknas om rätt även när Outlook skriver sina egna tidszonsnamn. Heldagsposter, inställda
+möten och poster markerade som *Ledig* ignoreras, precis som med appregistreringen.
+
+Synken använder samma fönster som appregistreringen (60 dagar bakåt och 14 dagar framåt,
+inställbart). Händelser som har tagits bort i Outlook tas bort i DriveLog vid nästa synk.
+
+### Tips som kan visas
+
+- *Länken visar bara ledig/upptagen-tid* – du har delat med *Kan visa när jag är upptagen*.
+  Dela på nytt med **Kan visa rubriker och platser** och klistra in den nya länken.
+  DriveLog sparar inga händelser från en sådan länk.
+- *Länken innehåller inga händelser i synkfönstret* – kontrollera att du har delat rätt kalender.
+- *Ingen händelse i länken har någon plats* – förslagen blir svagare, eftersom DriveLog bara
+  kan jämföra tider.
+
+### Båda sätten samtidigt
+
+Har du både kalenderlänk och appregistrering används båda. Ett möte som finns i båda räknas
+bara en gång. Att koppla bort Outlook (appregistreringen) rör inte länkens händelser, och att
+ta bort länken rör inte Outlooks.
+
+### Gränser
+
+För att en trasig eller elak kalenderfil inte ska kunna belasta servern:
+
+- Kalenderfilen får vara högst 10 MB och innehålla högst 25 000 händelser.
+- Högst 5 000 tillfällen i synkfönstret läses; de senare hoppas över (ett tips visas).
+- Mycket täta upprepningar (varje sekund, minut eller timme) och serier som skulle kräva
+  orimligt många beräkningar hoppas över. En trasig händelse hoppas över, resten läses.
+- Länken måste vara `https://` (eller `webcal://`) på den vanliga porten, utan användarnamn
+  eller lösenord. Den får inte peka på en lokal adress, och högst tre omdirigeringar följs.
+
 ## Vad som krävs
 
 - Ett Microsoft-konto (privat eller arbets-/skolkonto).
@@ -85,7 +168,11 @@ den föreslagna – ditt val behålls vid senare synk.
   lagras krypterade.
 - Vid 429 från Microsoft respekteras `Retry-After`.
 - Återkallas åtkomsten visas *Behöver anslutas på nytt* – klicka *Anslut* igen.
-- *Koppla bort* raderar tokens och alla lagrade kalenderposter.
+- *Koppla bort* raderar tokens och alla kalenderposter som har hämtats med appregistreringen
+  (kalenderlänkens händelser står kvar).
+- Kalenderlänken synkas av samma bakgrundsjobb och med samma regler: högst var 30:e minut,
+  efter tre fel i rad status *fel* och ett nytt försök högst varannan timme. Larmet
+  *Kalendern synkas inte* gäller även länken när appregistreringen inte är ansluten.
 
 ## Inte verifierat mot verklig tjänst
 
@@ -93,3 +180,8 @@ Flödet är testat mot simulerade Graph-svar (OAuth med PKCE, sidindelning, toke
 `invalid_grant`, throttling). Inloggning mot en riktig tenant, organisationers
 samtyckespolicyer och privata Microsoft-kontons tokenlivslängd har inte kunnat prövas utan
 dina uppgifter.
+
+Kalenderlänken är testad mot påhittade kalenderfiler formade som Outlooks (Windows-tidszoner,
+upprepningar med undantag och flyttade tillfällen, heldag, ledig/upptagen, privata poster)
+och mot simulerade servrar (omdirigeringar, fel, för stora svar, lokala adresser). Den har
+inte provats mot en riktig länk från Outlook eller Microsoft 365.

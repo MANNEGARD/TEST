@@ -1647,6 +1647,34 @@ on("PATCH", "/settings/:id", ({ m, body }) => patchSettings(m[1], body));
 // Integrationer
 on("GET", "/integrations/home-assistant", () => clone(S().ha));
 on("GET", "/integrations/volvo/status", () => clone(S().volvo));
+// Kalenderlänken (ICS) hämtar en riktig kalender, så demot visar alltid läget "ingen länk".
+const ICS_NONE = {
+  provider: "calendar_ics",
+  status: "not_configured",
+  has_link: false,
+  host: null,
+  last_sync_at: null,
+  last_success_at: null,
+  last_error: null,
+  last_error_at: null,
+  stored_events: 0,
+  events_with_location: null,
+  tip: null,
+  stores_body_preview: false,
+  sync_days_back: 60,
+  sync_days_forward: 14,
+};
+const icsNotInDemo = () => new HttpError(501, "Kalenderlänken går inte att prova i demot – den hämtar en riktig kalender.", "demo_unavailable");
+on("GET", "/integrations/microsoft/ics", () => clone(ICS_NONE));
+on("PUT", "/integrations/microsoft/ics", () => {
+  throw icsNotInDemo();
+});
+on("DELETE", "/integrations/microsoft/ics", () => {
+  throw icsNotInDemo();
+});
+on("POST", "/integrations/microsoft/ics/sync", () => {
+  throw icsNotInDemo();
+});
 // Synka och testa: svarar som en frisk anslutning (inga nya resor sedan sist).
 on("POST", "/integrations/volvo/sync", () => {
   const now = nowIso();

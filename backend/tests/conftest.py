@@ -42,6 +42,7 @@ from app.models.enums import (  # noqa: E402
 from app.security import passwords, ratelimit  # noqa: E402
 from app.services import audit  # noqa: E402
 from app.services import settings as settings_svc  # noqa: E402
+from app.services.calendar import ics_fetch  # noqa: E402
 from app.services.places import geocode  # noqa: E402
 from app.services.places import registry as places  # noqa: E402
 from app.services.trips import segments as seg  # noqa: E402
@@ -90,6 +91,14 @@ class OfflineTransport(httpx.BaseTransport):
 def offline_geocoder(monkeypatch) -> OfflineTransport:
     transport = OfflineTransport()
     monkeypatch.setattr(geocode, "_default_transport", transport)
+    return transport
+
+
+@pytest.fixture(autouse=True)
+def offline_calendar_link(monkeypatch) -> OfflineTransport:
+    """Kalenderlänkens transport i testerna: inget nätverk (samma som för geokodaren)."""
+    transport = OfflineTransport()
+    monkeypatch.setattr(ics_fetch, "_default_transport", transport)
     return transport
 
 
