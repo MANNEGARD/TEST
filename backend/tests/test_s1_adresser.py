@@ -419,9 +419,12 @@ def test_failed_lookup_is_retried_on_schedule(db, user, offline_geocoder, no_dns
         geocode.run_pending(now=at)
     assert len(offline_geocoder.requests) == 5
     cache = reload(db, cache)
-    assert cache.attempts == 5 and cache.next_attempt_at is None
-    geocode.run_pending(now=t + timedelta(hours=60))
+    # Efter de fem snabba försöken: ett försök per dygn (karttjänsten kan vara nere länge).
+    assert cache.attempts == 5 and cache.next_attempt_at == t + timedelta(hours=34) + geocode.SLOW_DELAY
+    geocode.run_pending(now=t + timedelta(hours=50))
     assert len(offline_geocoder.requests) == 5
+    geocode.run_pending(now=t + timedelta(hours=60))
+    assert len(offline_geocoder.requests) == 6
 
 
 def test_match_by_address_merges_with_imported_place(db, user, vehicle, monkeypatch, no_dns):

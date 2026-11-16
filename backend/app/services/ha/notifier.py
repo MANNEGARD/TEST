@@ -152,9 +152,13 @@ def export_link_url(db: Session | None, req: NotificationRequest, uri: str) -> s
 
 
 def resolved_actions(db: Session | None, req: NotificationRequest, *, web: bool = False) -> list[dict[str, Any]]:
-    """Notisens knappar med ``export-link:`` översatt (i webben alltid till exportsidan)."""
+    """Notisens knappar med ``export-link:`` översatt (i webben alltid till exportsidan).
+
+    I webben visas ``detail_title`` (den riktiga rubriken när låsskärmen döljer platser)."""
     out: list[dict[str, Any]] = []
     for a in req.actions or []:
+        if web and a.get("detail_title"):
+            a = {**a, "title": a["detail_title"]}
         uri = a.get("uri")
         if isinstance(uri, str) and uri.startswith(A.EXPORT_LINK_PREFIX):
             a = {**a, "uri": "/export" if web else export_link_url(db, req, uri)}
@@ -1039,8 +1043,8 @@ def outbox_ack(
         error = (entry.get("error") or "Leveransen misslyckades i Home Assistant.")[:300]
         r.last_error = error
         bad += 1
-        if self_driving and _no_service_error(error):
-            # Ingen telefon vald: notisen ligger kvar i utkorgen och tappas aldrig.
+        if _no_service_error(error):
+            # Ingen telefon vald: notisen ligger kvar i utkorgen och tappas aldrig (i alla lägen).
             set_context(r, no_phone=True)
             continue
         r.delivery_attempts = (r.delivery_attempts or 0) + 1

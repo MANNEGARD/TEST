@@ -127,7 +127,8 @@ kalenderrubrik kan inte ändra en klassning eller smyga in påhittade uppgifter.
 Notiser innehåller aldrig husnummer. Hemmet visas som "Hemmet" och privata platser som
 "Privat plats". Obekräftade platser visas bara som "företagsnamn, ort" eller "gata utan
 husnummer, ort"; hela adressen syns först i webben efter inloggning. Med *Dölj platser på
-låsskärmen* är notistexten helt utan platser, bara dag och mil. Från 1.1.0 är den
+låsskärmen* är notistexten helt utan platser, bara dag och mil, och knapparna visar
+bara "föreslaget ärende" i stället för ärendet (som ofta innehåller platsens namn). Från 1.1.0 är den
 inställningen av som standard om du aldrig har ändrat den. Larm och månadsnotiser innehåller
 aldrig platser, VIN eller belopp per resa. Textsvar från telefonen tvättas och får vara
 1–200 tecken. iOS har ingen inställning i notisen för detta – välj dessutom *Visa

@@ -22,7 +22,7 @@ from __future__ import annotations
 import statistics
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any, Literal
 
 from sqlalchemy import select, update
@@ -206,6 +206,7 @@ def config(db: Session, user_id: uuid.UUID, now: datetime | None = None) -> dict
         "scope": settings_svc.journal_scope(db, user_id),
         "tz": settings_svc.user_timezone(db, user_id),
         "abbreviations": settings_svc.get_section(db, user_id, "abbreviations")["map"],
+        "employer": settings_svc.get_section(db, user_id, "general").get("employer_name") or "",
     }
 
 
@@ -476,15 +477,65 @@ def _poi_name(loc: KnownLocation | None) -> str | None:
     return None
 
 
+def _place_kind(loc: KnownLocation) -> str | None:
+    """Platsens art. Kartans typ prövas igen, så att platser som sparats före en ändring i
+    tabellen (t.ex. office=government, som inte längre är "work") följer tabellen."""
+    from app.services.places import geocode
+
+    if loc.place_kind == PlaceKind.WORK and loc.osm_class and "=" in loc.osm_class:
+        cat, _, typ = loc.osm_class.partition("=")
+        return geocode.classify_place(cat, typ)
+    return loc.place_kind
+
+
 def _assumable_place(loc: KnownLocation | None) -> bool:
     """Kan platsen över huvud taget antas vara en kund? (obekräftad, ej återkallad, rätt art)"""
     return (
         loc is not None
         and not loc.confirmed
         and loc.assumption != PlaceAssumption.REVOKED
-        and loc.place_kind in (PlaceKind.WORK, PlaceKind.UNCLEAR)
+        and _place_kind(loc) in (PlaceKind.WORK, PlaceKind.UNCLEAR)
         and loc.type not in _NEVER_ASSUMED_TYPES
     )
+
+
+WORKPLACE_NEAR_M = 1000.0
+WORKPLACE_QUESTION = "Kan vara din arbetsplats"
+
+
+def _is_employer_place(db: Session, loc: KnownLocation, *, user_id: uuid.UUID, cfg: dict[str, Any]) -> bool:
+    """Bär platsen arbetsgivarens namn, eller ligger den inom 1 km från ett tjänsteställe?
+    Då kan det vara arbetsplatsen (en annan byggnad eller parkering) och inte en kund."""
+    from app.models import WorkplacePeriod
+    from app.services.places.normalize import fold, haversine_m
+
+    employer = fold(cfg.get("employer") or "")
+    if len(employer) >= 3:
+        for text in (loc.company, loc.name):
+            folded = fold(text or "")
+            if folded and (folded == employer or employer in folded):
+                return True
+    if loc.latitude is None or loc.longitude is None:
+        return False
+    period_ids = {
+        i for (i,) in db.execute(
+            select(WorkplacePeriod.location_id).where(
+                WorkplacePeriod.user_id == user_id, WorkplacePeriod.location_id.is_not(None)
+            )
+        ).all()
+    }
+    cond = KnownLocation.type == LocationType.REGULAR_WORKPLACE
+    if period_ids:
+        cond = cond | KnownLocation.id.in_(period_ids)
+    for wp in db.execute(
+        select(KnownLocation).where(
+            KnownLocation.owner_user_id == user_id, KnownLocation.id != loc.id,
+            KnownLocation.latitude.is_not(None), KnownLocation.longitude.is_not(None), cond,
+        )
+    ).scalars():
+        if haversine_m(loc.latitude, loc.longitude, wp.latitude, wp.longitude) <= WORKPLACE_NEAR_M:
+            return True
+    return False
 
 
 def assumed_purpose_text(name: str) -> str:
@@ -524,6 +575,32 @@ def _ai_purpose(trip: LogicalTrip, ctx: Any, rules: Any) -> str | None:
     return text if ok else None
 
 
+def _easter(year: int) -> date:
+    """Påskdagen (gregoriansk kalender, Meeus/Jones/Butchers algoritm)."""
+    a, b, c = year % 19, year // 100, year % 100
+    d, e = b // 4, b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i, k = c // 4, c % 4
+    m = (32 + 2 * e + 2 * i - h - k) % 7
+    n = (a + 11 * h + 22 * m) // 451
+    month, day = divmod(h + m - 7 * n + 114, 31)
+    return date(year, month, day + 1)
+
+
+def is_swedish_holiday(day: date) -> bool:
+    """Svenska röda dagar och aftnar som brukar vara lediga på vardagar."""
+    fixed = {(1, 1), (1, 6), (5, 1), (6, 6), (12, 24), (12, 25), (12, 26), (12, 31)}
+    if (day.month, day.day) in fixed:
+        return True
+    easter = _easter(day.year)
+    if day in (easter - timedelta(days=2), easter + timedelta(days=1), easter + timedelta(days=39)):
+        return True
+    # Midsommarafton: fredagen mellan 19 och 25 juni.
+    return day.month == 6 and 19 <= day.day <= 25 and day.weekday() == 4
+
+
 def _in_office_hours(when: datetime | None, cfg: dict[str, Any]) -> bool:
     """Ligger tidpunkten inom kontorstiden (``automation.office_hours``)?"""
     if when is None:
@@ -532,6 +609,8 @@ def _in_office_hours(when: datetime | None, cfg: dict[str, Any]) -> bool:
     local = when.astimezone(cfg["tz"])
     if local.weekday() not in set(hours.get("days") or []):
         return False
+    if is_swedish_holiday(local.date()):
+        return False  # röd dag eller afton: en fråga i stället för ett antagande
     hhmm = local.strftime("%H:%M")
     return str(hours.get("start", "07:00")) <= hhmm < str(hours.get("end", "18:00"))
 
@@ -550,7 +629,11 @@ def _assumption_rule(
     if not _assumable_place(dest):
         return None
     name = _poi_name(dest)
-    if dest.place_kind == PlaceKind.WORK:
+    if _is_employer_place(db, dest, user_id=user_id, cfg=cfg):
+        # Arbetsgivarens namn eller nära tjänstestället: aldrig ett antagande, en vanlig fråga.
+        return AutoDecision("ask", reason=WORKPLACE_QUESTION,
+                            candidates=tuple(purpose_candidates(db, trip, user_id=user_id)))
+    if _place_kind(dest) == PlaceKind.WORK:
         if not name:
             return AutoDecision("ask_company", reason=COMPANY_QUESTION)
         purpose = assumed_purpose_text(name)
@@ -956,22 +1039,75 @@ def on_owner_decision(db: Session, trip: LogicalTrip, *, before: dict[str, Any],
     * R-resa som rättas: regeln blir "fråga alltid".
     * H-resa: rättelsen räknas i historiken, så H gäller inte längre för rutten.
     * Antagen resa: A.3 (b) (S1d).
+    * En godkänd tjänsteresa som får annan kategori eller annat ärende, oavsett vem som
+      godkände den: hemresor som T godkänt efter den ("Hemresa efter …") öppnas igen och
+      får en fråga, eftersom deras ärende byggde på utresan.
     """
     source = before.get("approval_source")
-    if source not in AUTO_APPROVAL_SOURCES:
-        return None
     corrected = before.get("category") != trip.category or (before.get("purpose") or None) != (trip.purpose or None)
     if not corrected:
         return None
+    text: str | None = None
     if source == ApprovalSource.RULE:
         pat = _set_ask_always(db, (before.get("approval_basis") or {}).get("pattern_id"), actor)
-        if pat is None:
-            return None
-        dest = db.get(KnownLocation, pat.destination_location_id)
-        return f"Regeln för {_label(dest)} frågar dig nu i stället."
-    if source == ApprovalSource.ASSUMED:
-        return _on_assumed_correction(db, trip, before=before, actor=actor)
-    return None
+        if pat is not None:
+            dest = db.get(KnownLocation, pat.destination_location_id)
+            text = f"Regeln för {_label(dest)} frågar dig nu i stället."
+    elif source == ApprovalSource.ASSUMED:
+        text = _on_assumed_correction(db, trip, before=before, actor=actor)
+    if before.get("review_status") == ReviewStatus.APPROVED and before.get("category") == Category.WORK:
+        if _reopen_return_trips(db, trip, actor=actor):
+            extra = "Hemresan efter den frågas om igen."
+            text = f"{text} {extra}" if text else extra
+    return text
+
+
+def _reopen(db: Session, t: LogicalTrip, *, actor: audit.Actor, user_id: uuid.UUID, action: str, reason: str) -> None:
+    """Öppnar en automatiskt godkänd resa igen (``proposed``, ``approval_source`` NULL) med en
+    fråga. Ligger den i en månad som redan har ett automatiskt underlag blir månaden
+    ``stale``; resan försvinner då ur avtrycket och filen ersätts när frågan är besvarad."""
+    from app.services.trips import pipeline
+
+    mc = _exported_month(db, t.vehicle_id, _trip_month(db, t, user_id))
+    if mc is not None and mc.state != MonthCloseState.STALE:
+        mc.state = MonthCloseState.STALE
+        audit.record(db, actor, "month_close.stale", "month_close", mc.id,
+                     after={"month": mc.month, "reason": reason}, user_id=user_id)
+    old = {"review_status": t.review_status, "approval_source": t.approval_source}
+    t.review_status = ReviewStatus.PROPOSED
+    t.approval_source = None
+    t.approval_basis = None
+    t.auto_approved_at = None
+    t.purpose_confirmed = False
+    t.updated_by = actor.label
+    audit.record(db, actor, action, "logical_trip", t.id, before=old,
+                 after={"review_status": ReviewStatus.PROPOSED, "approval_source": None}, user_id=user_id)
+    db.flush()
+    pipeline.sync_trip_review_items(db, t)
+
+
+def _reopen_return_trips(db: Session, trip: LogicalTrip, *, actor: audit.Actor) -> int:
+    """Hemresor (T, även antagna) som fortfarande bygger på ``trip`` öppnas igen."""
+    vehicle = db.get(Vehicle, trip.vehicle_id)
+    if vehicle is None:
+        return 0
+    count = 0
+    for t in db.execute(
+        select(LogicalTrip).where(
+            LogicalTrip.vehicle_id == trip.vehicle_id,
+            LogicalTrip.state == LogicalState.ACTIVE,
+            LogicalTrip.review_status == ReviewStatus.APPROVED,
+            LogicalTrip.approval_source.in_((ApprovalSource.RETURN_TRIP, ApprovalSource.ASSUMED)),
+            LogicalTrip.id != trip.id,
+        )
+    ).scalars():
+        if str((t.approval_basis or {}).get("related_trip_id") or "") != str(trip.id):
+            continue
+        _reopen(db, t, actor=actor, user_id=vehicle.owner_user_id, action="trip.return_trip_reopened",
+                reason="outbound_corrected")
+        count += 1
+    db.flush()
+    return count
 
 
 class AssumptionError(TripError, ValueError):
@@ -1031,8 +1167,9 @@ def _on_assumed_correction(db: Session, trip: LogicalTrip, *, before: dict[str, 
 
     Platsens antagande återkallas (``assumption="revoked"``). Övriga antagna resor dit, och
     antagna hemresor efter dem, öppnas igen (``proposed``, ``approval_source`` NULL) och får
-    frågor. Resor i en månad som redan har ett automatiskt underlag öppnas inte; månaden
-    blir i stället ``stale``. Byter ägaren bara ärende ("Annat ärende") återkallas inget.
+    frågor, också i en månad som redan har ett automatiskt underlag. Den månaden blir
+    ``stale``, och filen ersätts när frågorna är besvarade. Byter ägaren bara ärende
+    ("Annat ärende") återkallas inget.
     """
     from app.services.trips import pipeline
 
@@ -1083,24 +1220,7 @@ def _on_assumed_correction(db: Session, trip: LogicalTrip, *, before: dict[str, 
     for t in assumed:
         if t.id not in affected:
             continue
-        mc = _exported_month(db, t.vehicle_id, _trip_month(db, t, user_id))
-        if mc is not None:
-            if mc.state != MonthCloseState.STALE:
-                mc.state = MonthCloseState.STALE
-                audit.record(db, actor, "month_close.stale", "month_close", mc.id,
-                             after={"month": mc.month, "reason": "assumption_revoked"}, user_id=user_id)
-            continue
-        old = {"review_status": t.review_status, "approval_source": t.approval_source}
-        t.review_status = ReviewStatus.PROPOSED
-        t.approval_source = None
-        t.approval_basis = None
-        t.auto_approved_at = None
-        t.purpose_confirmed = False
-        t.updated_by = actor.label
-        audit.record(db, actor, "trip.assumption_reopened", "logical_trip", t.id, before=old,
-                     after={"review_status": ReviewStatus.PROPOSED, "approval_source": None}, user_id=user_id)
-        db.flush()
-        pipeline.sync_trip_review_items(db, t)
+        _reopen(db, t, actor=actor, user_id=user_id, action="trip.assumption_reopened", reason="assumption_revoked")
         reopened += 1
     db.flush()
     text = f"{_label(dest)} räknas inte längre som kund."

@@ -381,6 +381,7 @@ def create_export(
             }
             journal, _ = build_simple_journal(db, vehicle=vehicle, start=start, end=end, tz=tz, trip_ids=ids)
             job.rows_fingerprint = rows_fingerprint(journal)
+            summary["work_totals"] = journal.totals()  # tjänstesiffrorna till månadsnotisen
         path.chmod(0o600)
         job.file_path = str(path)
         job.sha256 = hashlib.sha256(path.read_bytes()).hexdigest()

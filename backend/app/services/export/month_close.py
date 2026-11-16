@@ -308,7 +308,12 @@ def _address_blocker(reported: list[LogicalTrip], locs: dict[Any, KnownLocation]
     ]
     if not trips:
         return None
-    return Blocker("addresses_pending", "Adresser slås upp", count=len(trips), trip_ids=_ids(trips))
+    pending = any(
+        locs.get(i) is not None and locs[i].geocode_status == GeocodeStatus.PENDING
+        for t in trips for i in (t.start_location_id, t.end_location_id)
+    )
+    text = "Adresser slås upp" if pending else "Adressen kunde inte slås upp än – nytt försök görs varje dygn"
+    return Blocker("addresses_pending", text, count=len(trips), trip_ids=_ids(trips))
 
 
 # ----------------------------------------------------------------------------- upplysningar
@@ -566,6 +571,19 @@ def run_for(
                                            "previous_export_id": str(old.id) if old else None}, user_id=user_id)
             status.state, status.export_id = "exported", job.id
             _notify_ready(db, record, status, job, now, update=old is not None)
+        elif changed and not real_blockers:
+            # Inga tjänsteresor kvar: den gamla filen återkallas (länken ger 410) och
+            # månaden blir tom. En återkallad fil pekar på sig själv i superseded_by_id.
+            old = db.get(ExportJob, record.export_id) if record.export_id else None
+            if old is not None and old.superseded_by_id is None:
+                old.superseded_by_id = old.id
+            record.state, record.export_id, record.rows_fingerprint = (
+                MonthCloseState.EMPTY, None, facts.fingerprint)
+            audit.record(db, audit.Actor("system", "month_close"), "month_close.revoked", "month_close",
+                         record.id, after={"month": status.month,
+                                           "previous_export_id": str(old.id) if old else None}, user_id=user_id)
+            status.state, status.export_id = "empty", None
+            _notify_ready(db, record, status, None, now, update=False)
     elif status.state == "exported":
         record.state = MonthCloseState.EXPORTED
         job = db.get(ExportJob, record.export_id) if record.export_id else None

@@ -263,7 +263,9 @@ notiser. Användbart efter att DriveLog varit nere.
   obekräftade platser bara som *företagsnamn, ort* eller *gata utan husnummer, ort*.
   Hela adressen syns först i `/m/q` efter inloggning.
 - Med **Dölj platser på låsskärmen** innehåller notistexten inga platser alls, bara dag
-  och mil. Från 1.1.0 är inställningen **av** som standard om du aldrig har ändrat den
+  och mil. Knapparna med ett föreslaget ärende heter då bara *Tjänst: föreslaget ärende*
+  eller *Föreslaget ärende 1*, eftersom ärendet ofta innehåller platsens namn. Trycker du
+  på knappen sparas det riktiga ärendet, och i `/m/q` ser du vad det är. Från 1.1.0 är inställningen **av** som standard om du aldrig har ändrat den
   (tidigare på). Har du själv satt den gäller ditt val.
 - Larm och månadsnotiser innehåller aldrig platser, VIN eller belopp per resa.
 - iOS har inget sätt att via notisens innehåll dölja den på låsskärmen. Ställ in

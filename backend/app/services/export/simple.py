@@ -455,8 +455,10 @@ def build_journal(
     reported = [t for t in trips if common.is_reported(t)]
     # Stabil sortering: resor utan känd tid (ovanligt) behåller sin plats sist.
     reported.sort(key=lambda t: (_row_time(t) is None, _row_time(t) or datetime.min.replace(tzinfo=tz)))
-    private_ids = private_stop_ids(reported)
-    rows = [build_row(t, tz, private_ids) for t in reported]
+    # "Privat stopp" gäller bara resor från bilen; importerade och manuellt inlagda resor
+    # skrivs som förut (A.5), på samma sätt som kontrollen private_address_in_report.
+    private_ids = private_stop_ids([t for t in reported if t.source in LIVE_SOURCES])
+    rows = [build_row(t, tz, private_ids if t.source in LIVE_SOURCES else frozenset()) for t in reported]
     return SimpleJournal(
         vehicle=vehicle,
         tz=tz,

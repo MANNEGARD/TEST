@@ -193,6 +193,16 @@ def _button(prefix: str, text: str) -> str:
     return title if len(title) <= MAX_BUTTON_TITLE else title[: MAX_BUTTON_TITLE - 1] + "…"
 
 
+def _pick(key: str, prefix: str, text: str, hide_locations: bool, hidden: str) -> dict[str, Any]:
+    """Knapp med ett föreslaget ärende. Ärendet innehåller ofta platsens namn, så med
+    ``hide_locations`` får telefonen en allmän rubrik; den riktiga rubriken ligger kvar i
+    ``detail_title`` för webbappen och ärendet i ``purpose`` (det som sparas)."""
+    title = _button(prefix, text)
+    if not hide_locations:
+        return {"key": key, "title": title, "purpose": text}
+    return {"key": key, "title": _button(prefix, hidden), "detail_title": title, "purpose": text}
+
+
 def _same_text(a: str | None, b: str | None) -> bool:
     return bool(address_key(a)) and address_key(a) == address_key(b)
 
@@ -293,9 +303,9 @@ def classify_v2(
     message = f"{day} · {distance}. {tail}" if hide_locations else detail
     acts: list[dict[str, Any]] = []
     if suggestion and not multi:
-        acts.append({"key": f"{A.WORK_PICK}0", "title": _button("Tjänst: ", suggestion), "purpose": suggestion})
+        acts.append(_pick(f"{A.WORK_PICK}0", "Tjänst: ", suggestion, hide_locations, "föreslaget ärende"))
         if remember_work:
-            acts.append({"key": f"{A.WORK_ALWAYS}0", "title": _button("Alltid: ", suggestion), "purpose": suggestion})
+            acts.append(_pick(f"{A.WORK_ALWAYS}0", "Alltid: ", suggestion, hide_locations, "föreslaget ärende"))
     acts.append({"key": A.WORK_TEXT, "title": "Tjänst – skriv ärende", "text_input": True, "placeholder": "Ärende"})
     acts.append({"key": A.PRIVATE, "title": "Privat"})
     if remember_private:
@@ -320,9 +330,9 @@ def purpose_v2(
     message = f"{day}, {distance}" if hide_locations else detail
     acts: list[dict[str, Any]] = []
     for i, text in enumerate(candidates[:2]):
-        acts.append({"key": f"{A.PURPOSE_PICK}{i}", "title": _button("", text), "purpose": text})
+        acts.append(_pick(f"{A.PURPOSE_PICK}{i}", "", text, hide_locations, f"Föreslaget ärende {i + 1}"))
     if candidates and remember:
-        acts.append({"key": f"{A.PURPOSE_ALWAYS}0", "title": _button("Alltid: ", candidates[0]), "purpose": candidates[0]})
+        acts.append(_pick(f"{A.PURPOSE_ALWAYS}0", "Alltid: ", candidates[0], hide_locations, "föreslaget ärende 1"))
     acts.append({"key": A.PURPOSE_TEXT, "title": "Skriv ärende", "text_input": True, "placeholder": "Ärende"})
     acts.append({"key": A.PRIVATE, "title": "Privat"})
     acts.append({"key": A.LATER, "title": "Senare"})
@@ -422,6 +432,13 @@ def _note_count(notes: list[Any], code: str) -> int:
     return 0
 
 
+def _work_totals(summary: dict[str, Any] | None) -> dict[str, Any]:
+    """Tjänstesiffrorna (trips, km, mil, amount) ur en exports summering, oavsett format."""
+    summary = summary or {}
+    totals = summary.get("work_totals")
+    return totals if isinstance(totals, dict) else summary
+
+
 def month_ready(
     month: str, *, summary: dict[str, Any] | None, notes: list[Any], export_id: Any | None,
     previous: dict[str, Any] | None = None,
@@ -435,7 +452,8 @@ def month_ready(
         title, message = f"{name}: inga tjänsteresor", "Inget underlag behövs för månaden."
         acts.append({"key": A.OPEN, "title": "Öppna", "uri": "/export"})
     else:
-        summary = summary or {}
+        # Den fullständiga arbetsboken räknar alla resor; tjänstesiffrorna ligger i work_totals.
+        summary = _work_totals(summary)
         trips_n = int(summary.get("trips") or 0)
         parts = [_count(trips_n, "tjänsteresa", "tjänsteresor")]
         if summary.get("mil") is not None:
@@ -445,6 +463,7 @@ def month_ready(
             parts.append(amount)
         if previous is not None:
             title = f"{name} uppdaterad"
+            previous = _work_totals(previous)
             d_trips = trips_n - int(previous.get("trips") or 0)
             d_km = round(float(summary.get("km") or 0) - float(previous.get("km") or 0))
             message = f"{d_trips:+d} {'resa' if abs(d_trips) == 1 else 'resor'}, {d_km:+d} km"

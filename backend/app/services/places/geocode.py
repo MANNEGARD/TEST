@@ -62,8 +62,12 @@ DEADLINE_S = 4.0  # total tid för ett anrop
 MAX_BODY_BYTES = 64 * 1024
 MAX_ATTEMPTS = 5
 RETRY_DELAYS = (timedelta(minutes=5), timedelta(hours=1), timedelta(hours=6), timedelta(hours=24))
-# Misslyckade platser prövas igen bara så länge omförsöken pågår (5 min + 1 h + 6 h + 24 h).
-FAILED_RETRY_WINDOW = timedelta(days=3)
+# Därefter, om karttjänsten är nere länge: ett försök per dygn i 30 dygn.
+SLOW_RETRIES = 30
+SLOW_DELAY = timedelta(days=1)
+# Misslyckade platser prövas igen så länge omförsöken pågår (5 min + 1 h + 6 h + 24 h +
+# 30 dygn). Ett nytt besök på platsen ger ett nytt försök (place_for_position).
+FAILED_RETRY_WINDOW = timedelta(days=35)
 
 # Kartobjekt vars namn är en gata, ort eller ett område, inte ett företag eller ställe.
 _NO_POI_CATEGORIES = {"highway", "place", "boundary", "landuse", "natural", "waterway", "railway", "route"}
@@ -77,6 +81,14 @@ _NEVER_CATEGORIES = {"shop", "amenity", "leisure", "tourism", "healthcare"}
 _WORK_TYPES = {("man_made", "works"), ("landuse", "industrial")} | {
     ("building", t) for t in ("industrial", "warehouse", "office")
 }
+# Kontor och hantverk där man oftare uträttar privata ärenden (myndighet, advokat, mäklare,
+# försäkring, samfund, vingård …): aldrig ett antagande på typen ensam, alltså "unclear".
+_UNCLEAR_TYPES = {
+    ("office", t) for t in (
+        "government", "lawyer", "estate_agent", "insurance", "religion", "employment_agency",
+        "diplomatic", "association", "educational_institution",
+    )
+} | {("craft", t) for t in ("winery", "brewery", "distillery")}
 _NEVER_TYPES = {("landuse", "residential"), ("place", "house")} | {
     ("building", t) for t in ("residential", "house", "apartments", "detached", "terrace")
 }
@@ -141,6 +153,8 @@ def place_for_position(
     Demofordon får platser med status ``off`` och slås aldrig upp.
     """
     loc, _ = places.resolve_position(db, user_id, lat, lon, demo=demo)
+    if loc is not None and loc.geocode_status == GeocodeStatus.FAILED and not demo and not loc.is_demo:
+        _retry_on_visit(db, loc)
     if loc is not None or not valid_coordinates(lat, lon):
         return loc
     enabled = geocoding_enabled(db, user_id)
@@ -164,6 +178,25 @@ def place_for_position(
     return loc
 
 
+def _retry_on_visit(db: Session, loc: KnownLocation) -> None:
+    """Ett nytt besök på en plats vars adress inte gick att slå upp: platsen prövas igen
+    vid nästa körning, även om de vanliga omförsöken tagit slut."""
+    loc.geocode_status = GeocodeStatus.PENDING
+    if loc.latitude is None or loc.longitude is None:
+        return
+    for row in db.execute(
+        select(GeocodeCache).where(
+            GeocodeCache.owner_user_id == loc.owner_user_id,
+            GeocodeCache.lat_key == cell_key(loc.latitude),
+            GeocodeCache.lon_key == cell_key(loc.longitude),
+            GeocodeCache.status == GeocodeStatus.FAILED,
+        )
+    ).scalars():
+        row.attempts = min(int(row.attempts or 0), MAX_ATTEMPTS)
+        row.next_attempt_at = None
+    db.flush()
+
+
 def address_for(loc: KnownLocation | None) -> str | None:
     """Adresstext för en resa. En plats som väntar på (eller saknar) adress ger None."""
     if loc is None:
@@ -185,6 +218,8 @@ def classify_place(osm_category: str | None, osm_type: str | None) -> str:
     """Platsens art ur kartans typ (tabellen i A.3): ``work``, ``never`` eller ``unclear``."""
     cat = (osm_category or "").strip().lower()
     typ = (osm_type or "").strip().lower()
+    if (cat, typ) in _UNCLEAR_TYPES:
+        return PlaceKind.UNCLEAR.value
     if cat in _WORK_CATEGORIES or (cat, typ) in _WORK_TYPES:
         return PlaceKind.WORK.value
     if cat in _NEVER_CATEGORIES or (cat, typ) in _NEVER_TYPES:
@@ -309,7 +344,8 @@ def _collect(db: Session, *, now: datetime, limit: int, out: dict[str, Any]) -> 
             continue
         if cache is not None and cache.status == GeocodeStatus.FAILED:
             due = cache.next_attempt_at is None or cache.next_attempt_at <= now
-            if cache.attempts >= MAX_ATTEMPTS or not due:
+            gave_up = cache.attempts >= MAX_ATTEMPTS + SLOW_RETRIES and cache.next_attempt_at is None
+            if gave_up or not due:
                 loc.geocode_status = GeocodeStatus.FAILED
                 continue
         if job.cell in plan.fetch:
@@ -339,11 +375,14 @@ def _user_provider(db: Session, user_id: uuid.UUID) -> tuple[str, str] | None:
 
 
 def _home_has_coordinate(db: Session, user_id: uuid.UUID) -> bool:
+    """Finns ägarens riktiga, bekräftade hem med koordinat? Demobilens påhittade hem räknas inte."""
     return (
         db.execute(
             select(KnownLocation.id).where(
                 KnownLocation.owner_user_id == user_id,
                 KnownLocation.type == LocationType.HOME,
+                KnownLocation.is_demo.is_(False),
+                KnownLocation.confirmed.is_(True),
                 KnownLocation.merged_into_id.is_(None),
                 KnownLocation.latitude.is_not(None),
                 KnownLocation.longitude.is_not(None),
@@ -386,6 +425,8 @@ def _store_result(
     row.fetched_at = now
     if status == GeocodeStatus.FAILED and row.attempts < MAX_ATTEMPTS:
         row.next_attempt_at = now + RETRY_DELAYS[min(row.attempts, len(RETRY_DELAYS)) - 1]
+    elif status == GeocodeStatus.FAILED and row.attempts < MAX_ATTEMPTS + SLOW_RETRIES:
+        row.next_attempt_at = now + SLOW_DELAY  # karttjänsten nere länge: ett försök per dygn
     else:
         row.next_attempt_at = None
     db.flush()

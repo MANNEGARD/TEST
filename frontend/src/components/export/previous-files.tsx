@@ -24,7 +24,7 @@ function jobMeta(job: ExportJob): string {
   if (typeof job.summary.km === "number") parts.push(formatKm(job.summary.km));
   if (job.params.layout === "detailed") parts.push("detaljerad");
   if (job.link_downloads) parts.push(`hämtad ${plural(job.link_downloads, "gång", "gånger")} via länk`);
-  if (job.superseded_by_id) parts.push("ersatt av en nyare fil");
+  if (job.superseded_by_id) parts.push(job.superseded_by_id === job.id ? "återkallad, månaden har inga tjänsteresor" : "ersatt av en nyare fil");
   return parts.join(" · ");
 }
 

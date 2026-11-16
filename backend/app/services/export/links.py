@@ -30,6 +30,7 @@ LINK_MAX_DOWNLOADS = 10
 INVALID_TEXT = "Länken fungerar inte. Öppna den senaste notisen eller logga in i DriveLog."
 EXPIRED_TEXT = "Länken har gått ut. Öppna den senaste notisen eller logga in i DriveLog."
 SUPERSEDED_TEXT = "En nyare fil finns – öppna senaste notisen"
+REVOKED_TEXT = "Filen är återkallad – månaden har inga tjänsteresor längre"
 
 PUBLIC_PATH = "/api/v1/public/exports/"
 _TOKEN_RE = re.compile(r"^([0-9a-f]{32})\.([0-9]{1,12})\.([A-Za-z0-9_-]{20,100})$")
@@ -117,7 +118,8 @@ def verify(db: Session, token: str, now: datetime) -> ExportJob:
     if not hmac.compare_digest(expected.encode("ascii"), sig.encode("ascii")):
         raise LinkInvalid()
     if job.superseded_by_id is not None:
-        raise LinkExpired(SUPERSEDED_TEXT)
+        # En återkallad fil (månaden blev tom) pekar på sig själv.
+        raise LinkExpired(REVOKED_TEXT if job.superseded_by_id == job.id else SUPERSEDED_TEXT)
     if int(job.link_downloads or 0) >= LINK_MAX_DOWNLOADS:
         raise LinkInvalid()
     try:
