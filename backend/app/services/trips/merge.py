@@ -127,13 +127,18 @@ def stop_gap(prev: RawTrip, nxt: RawTrip) -> StopGap:
 
 
 def decide(gap: StopGap, *, auto_max: float, ask_max: float, odometer_tolerance: float) -> str:
-    """Returnerar 'auto', 'ask', 'none', 'overlap' eller 'odometer_gap'."""
+    """Returnerar 'auto', 'ask', 'none', 'overlap' eller 'odometer_gap'.
+
+    Ett glapp eller överlapp i mätarställningen som ryms i avrundningen till hela kilometer
+    räknas aldrig (seg.odometer_slack), hur låg toleransen än är.
+    """
     if gap.overlap:
         return "overlap"
     if gap.odometer_gap_km is not None:
-        if gap.odometer_gap_km > odometer_tolerance:
+        slack = seg.odometer_slack(odometer_tolerance)
+        if gap.odometer_gap_km > slack:
             return "odometer_gap"  # körning saknas mellan resorna – ingen sammanhängande resa
-        if gap.odometer_gap_km < -odometer_tolerance:
+        if gap.odometer_gap_km < -slack:
             return "overlap"
     if not gap.known:
         return "none"
@@ -242,7 +247,7 @@ def merge_trips(
         g = stop_gap(_edge_raws(a)[1], _edge_raws(b)[0])
         if g.overlap:
             raise TripError("Resorna överlappar varandra i tid eller mätarställning.", "overlap")
-        if g.odometer_gap_km is not None and g.odometer_gap_km > odometer_tolerance:
+        if g.odometer_gap_km is not None and g.odometer_gap_km > seg.odometer_slack(odometer_tolerance):
             gap_km_total += g.odometer_gap_km
         gaps.append(
             {
@@ -325,7 +330,7 @@ def merge_trips(
 
     db.add(merged)
     seg.refresh_logical(db, merged)
-    merged.has_gap = merged.gap_km > odometer_tolerance
+    merged.has_gap = merged.gap_km > seg.odometer_slack(odometer_tolerance)
     db.flush()
 
     for t in trips:
@@ -785,6 +790,7 @@ def evaluate_vehicle(
     self_driving = vehicle is not None and autopilot.is_active(db, vehicle.owner_user_id)
 
     trips = seg.active_trips(db, vehicle_id)
+    overlap_keys: set[str] = set()
     i = 0
     while i < len(trips) - 1:
         a, b = trips[i], trips[i + 1]
@@ -796,6 +802,7 @@ def evaluate_vehicle(
         verdict = decide(gap, auto_max=auto_max, ask_max=ask_max, odometer_tolerance=tol)
 
         if verdict == "overlap":
+            overlap_keys.add(f"overlap:{prev_raw.id}:{next_raw.id}")
             _, created = review.upsert(
                 db,
                 vehicle_id=vehicle_id,
@@ -858,6 +865,12 @@ def evaluate_vehicle(
             if created:
                 result["questions"].append(item)
         i += 1
+    # Öppna frågor om överlapp som inte längre gäller (t.ex. bara avrundning i mätarställningen)
+    # stängs av sig själva. Avvikelsesökningens ärenden med samma nyckel saknar first_trip_id.
+    review.close_stale(
+        db, vehicle_id, prefixes=("overlap:",), keep=overlap_keys, data_type="overlap", note=review.OVERLAP_GONE_NOTE,
+        when=lambda item: "first_trip_id" in (item.data or {}),
+    )
     return result
 
 

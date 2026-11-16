@@ -69,11 +69,23 @@ def recompute(
             select(DataGap).where(DataGap.vehicle_id == vehicle_id, DataGap.kind == GapKind.ODOMETER)
         ).scalars()
     }
+    # Avrundning till hela kilometer ger aldrig lucka eller ärende (seg.ODOMETER_ROUNDING_KM).
+    slack = seg.odometer_slack(tolerance_km)
     seen: set[str] = set()
+    flagged: set[str] = set()
     overlaps = 0
-    for a, b in zip(raws, raws[1:], strict=False):
+    # Varje resa jämförs med den resa som hittills når längst i mätarställning – inte bara
+    # med föregående. En resa som ligger inuti en annan ger då ett överlapp, men ingen falsk
+    # lucka mot nästa resa.
+    reach: RawTrip | None = None
+    for b in raws:
+        a = reach
+        if a is None or b.odometer_end > a.odometer_end:  # type: ignore[operator]
+            reach = b
+        if a is None:
+            continue
         diff = b.odometer_start - a.odometer_end  # type: ignore[operator]
-        if diff > tolerance_km:
+        if diff > slack:
             key = f"odo:{a.odometer_end:.0f}:{b.odometer_start:.0f}"
             seen.add(key)
             gap = existing.get(key)
@@ -86,13 +98,15 @@ def recompute(
             gap.to_time = b.started_at or b.start_earliest
             gap.before_raw_trip_id, gap.after_raw_trip_id = a.id, b.id
             gap.is_current = True
-        elif diff < -tolerance_km:
+        elif diff < -slack:
             overlaps += 1
+            key = f"odo-overlap:{a.id}:{b.id}"
+            flagged.add(key)
             review.upsert(
                 db,
                 vehicle_id=vehicle_id,
                 kind=ReviewKind.ANOMALY,
-                dedupe_key=f"odo-overlap:{a.id}:{b.id}",
+                dedupe_key=key,
                 title="Motstridiga mätarställningar",
                 detail=(
                     f"Två resor överlappar i mätarställning ({a.odometer_end:.0f} km respektive "
@@ -100,6 +114,11 @@ def recompute(
                 ),
                 data={"type": "odometer_overlap", "first_raw_trip_id": str(a.id), "second_raw_trip_id": str(b.id)},
             )
+    # Öppna ärenden vars överlapp inte längre finns (t.ex. bara avrundning) stängs av sig själva.
+    review.close_stale(
+        db, vehicle_id, prefixes=("odo-overlap:",), keep=flagged, data_type="odometer_overlap",
+        note=review.OVERLAP_GONE_NOTE,
+    )
     for key, gap in existing.items():
         if key not in seen:
             gap.is_current = False

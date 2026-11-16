@@ -33,6 +33,7 @@ from app.models.enums import (
 from app.services import integrations
 from app.services import settings as settings_svc
 from app.services.trips import review
+from app.services.trips.segments import odometer_slack
 
 LARGE_GAP_KM = 500.0
 MIN_CONSUMPTION_SAMPLES = 20
@@ -117,7 +118,8 @@ def scan_vehicle(db: Session, vehicle: Vehicle, *, user_id: uuid.UUID, now: date
     scope = settings_svc.journal_scope(db, user_id)
     # Luckor i mätarställningen är privat körning när endast tjänsteresor redovisas.
     gaps_are_expected = scope == settings_svc.SCOPE_BUSINESS_ONLY
-    tol = float(settings_svc.get_section(db, user_id, "merge")["odometer_tolerance_km"])
+    # Avrundning till hela kilometer larmar aldrig, oavsett sammanslagningens tolerans.
+    tol = odometer_slack(float(settings_svc.get_section(db, user_id, "merge")["odometer_tolerance_km"]))
     volvo_cfg = settings_svc.get_section(db, user_id, "volvo")
     created: dict[str, int] = {}
     found: dict[str, int] = {}
@@ -172,6 +174,7 @@ def scan_vehicle(db: Session, vehicle: Vehicle, *, user_id: uuid.UUID, now: date
                 ),
             )
     timed = [r for r in raws if r.sort_time is not None]
+    conflicting: set[str] = set()
     for a, b in zip(timed, timed[1:], strict=False):
         if a.odometer_end is not None and b.odometer_start is not None and b.odometer_start < a.odometer_end - tol:
             # Samma nyckel som gaps.recompute använder när ordningen sammanfaller – inga dubbla ärenden.
@@ -179,6 +182,7 @@ def scan_vehicle(db: Session, vehicle: Vehicle, *, user_id: uuid.UUID, now: date
                 key = f"anomaly:odo_order:{a.id}:{b.id}"
             else:
                 key = f"odo-overlap:{a.id}:{b.id}"
+            conflicting.add(key)
             hit(
                 "odometer_backwards",
                 _upsert(
@@ -188,6 +192,11 @@ def scan_vehicle(db: Session, vehicle: Vehicle, *, user_id: uuid.UUID, now: date
                     {"type": "odometer_backwards", "first_raw_trip_id": str(a.id), "second_raw_trip_id": str(b.id)},
                 ),
             )
+    # Tidigare fynd som inte längre gäller (t.ex. bara avrundning) stängs av sig själva.
+    review.close_stale(
+        db, vehicle.id, prefixes=("odo-overlap:", "anomaly:odo_order:"), keep=conflicting,
+        data_type="odometer_backwards", note=review.OVERLAP_GONE_NOTE,
+    )
 
     # 3. Möjliga dubbletter (samma tid och sträcka)
     for i, a in enumerate(timed):

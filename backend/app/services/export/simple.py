@@ -60,10 +60,10 @@ PRIVATE_STOP = "Privat stopp"
 # delar därför en gemensam rubrik ("Mätarställning" över "start" och "slut").
 COLUMNS: list[tuple[str, str, float]] = [
     ("date", "Datum", 10),
-    ("time", "Tid", 10.5),
+    ("time", "Tid", 14.5),  # rymmer "ca 12:31–12:46" på en rad
     ("from", "Från", 25.5),
-    ("to", "Till", 28),
-    ("purpose", "Ärende", 33.5),
+    ("to", "Till", 26.5),
+    ("purpose", "Ärende", 31),
     ("odometer_start", "Mätarställning start", 9),
     ("odometer_end", "Mätarställning slut", 9),
     ("km", "Km", 7.5),

@@ -40,6 +40,18 @@ def _in_address(text: str, address: str) -> bool:
     return _part(text) in {_part(p) for p in parts} | {fold(p.strip()) for p in parts}
 
 
+def _repeats_address(name: str, address: str) -> bool:
+    """Säger namnet bara det som redan står i adressen? Ett namn utan komma jämförs som en egen
+    del ("Lund" finns i "Lundavägen 1, Lund" men "Berg" inte i "Bergsgatan 2, Ort"). Ett namn
+    som självt är en adress ("Kundvägen 2, Ort") upprepar adressen när varje del av namnet är
+    en del av adressen – postnumret räknas inte."""
+    if _in_address(name, address):
+        return True
+    own = {_part(p) for p in name.split(",") if p.strip()}
+    theirs = {_part(p) for p in address.split(",") if p.strip()}
+    return len(own) > 1 and own <= theirs
+
+
 def _address(loc: KnownLocation) -> str:
     """Platsens adress med ort, eller tom text."""
     address = clean(loc.address)
@@ -112,7 +124,7 @@ def report_text(
     if not address:
         return "" if live or needs_address(loc) else clean(fallback)
     name = clean(loc.name)
-    if loc.confirmed and loc.type != LocationType.PRIVATE and name and not _in_address(name, address):
+    if loc.confirmed and loc.type != LocationType.PRIVATE and name and not _repeats_address(name, address):
         return f"{name}, {address}"
     return address
 

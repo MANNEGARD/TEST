@@ -18,6 +18,17 @@ from app.models import LogicalTrip, RawTrip, TripSegment
 from app.models.enums import Category, LogicalState, ReviewStatus, TimeQuality, TripSource
 
 KM_EPS = 0.05
+# Bilen och Volvos körjournal anger mätarställningen i hela kilometer. Var och en av två
+# avläsningar kan då vara upp till 1 km fel, så två resor i följd kan skilja (eller
+# överlappa) med under 2 km utan att något är fel. Avvikelser upp till så här mycket ger
+# aldrig ärende eller lucka, oavsett sammanslagningens tolerans.
+ODOMETER_ROUNDING_KM = 2.0
+
+
+def odometer_slack(tolerance_km: float) -> float:
+    """Gränsen för när två mätarställningar skiljer sig på riktigt: toleransen, men aldrig
+    mindre än avrundningen (ODOMETER_ROUNDING_KM)."""
+    return max(float(tolerance_km), ODOMETER_ROUNDING_KM)
 
 
 class TripError(Exception):

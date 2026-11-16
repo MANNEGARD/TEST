@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.db import utcnow
@@ -147,6 +148,52 @@ def wake_snoozed(db: Session, now: datetime | None = None) -> int:
 SCOPE_REASON = "journal_scope"
 # Orsak när ett ärende stängs för att resan det gäller inte längre finns i journalen.
 INACTIVE_REASON = "trip_inactive"
+
+# Orsak när ett ärende stängs för att villkoret som skapade det inte längre gäller
+# (t.ex. ett överlapp i mätarställningen som bara var avrundning).
+NO_LONGER_REASON = "no_longer_applies"
+OVERLAP_GONE_NOTE = (
+    "Stängt automatiskt: resorna överlappar inte mer än avrundningen till hela kilometer "
+    "(eller så har resorna ändrats)."
+)
+
+
+def close_stale(
+    db: Session,
+    vehicle_id: uuid.UUID,
+    *,
+    prefixes: tuple[str, ...],
+    keep: set[str],
+    data_type: str,
+    note: str,
+    when: Callable[[ReviewItem], bool] | None = None,
+) -> int:
+    """Stänger öppna (och uppskjutna) ärenden vars villkor inte längre är uppfyllt.
+
+    Gäller ärenden med nyckel som börjar med något av ``prefixes`` och ``data["type"]`` lika
+    med ``data_type``, vars nyckel inte finns i ``keep`` (de som fortfarande gäller). Ärenden
+    som ägaren har avgjort eller avfärdat rörs inte. Lösningen visar varför ärendet stängdes.
+    """
+    items = (
+        db.execute(
+            select(ReviewItem).where(
+                ReviewItem.vehicle_id == vehicle_id,
+                ReviewItem.status.in_((ReviewState.OPEN, ReviewState.SNOOZED)),
+                or_(*(ReviewItem.dedupe_key.startswith(p, autoescape=True) for p in prefixes)),
+            )
+        )
+        .scalars()
+        .all()
+    )
+    closed = 0
+    for item in items:
+        if item.dedupe_key in keep or (item.data or {}).get("type") != data_type or (when and not when(item)):
+            continue
+        item.snoozed_until = None
+        resolve(db, item, by="system", resolution={"auto": True, "reason": NO_LONGER_REASON, "note": note})
+        closed += 1
+    return closed
+
 
 # Ärenden som gäller en viss journalresa och saknar mening när resan inte längre är aktiv.
 _PER_TRIP_KINDS = (
