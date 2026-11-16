@@ -29,7 +29,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useTripActions } from "@/components/trips/use-trip-actions";
 import { api, errorMessage } from "@/lib/api";
 import { formatDate, formatNumber, formatPercent } from "@/lib/format";
-import { CATEGORY_LABELS, DECISION_SOURCE_LABELS, label, REVIEW_KIND_LABELS, REVIEW_KIND_SHORT } from "@/lib/labels";
+import { CATEGORY_LABELS, decisionSourceInSentence, label, REVIEW_KIND_LABELS, REVIEW_KIND_SHORT } from "@/lib/labels";
 import { invalidateJournalData, qk } from "@/lib/queries/keys";
 import { HIDDEN_REVIEW_KINDS, useAnswerMerge, useReviewAction, useReviewItems } from "@/lib/queries/review";
 import { useTripDetail } from "@/lib/queries/trips";
@@ -139,7 +139,7 @@ function TripDecision({
             {trip.purpose ? <> – {trip.purpose}</> : null}
             <span className="text-fg-muted">
               {" "}
-              ({label(DECISION_SOURCE_LABELS, trip.category_source).toLowerCase()}
+              ({decisionSourceInSentence(trip.category_source)}
               {trip.confidence != null ? `, ${formatPercent(trip.confidence)} säkerhet` : ""})
             </span>
           </p>

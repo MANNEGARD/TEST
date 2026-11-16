@@ -13,7 +13,7 @@ import { approvalReasonText, ReviewStatusBadge } from "@/components/trips/review
 import { useTripActions } from "@/components/trips/use-trip-actions";
 import { errorMessage } from "@/lib/api";
 import { formatPercent } from "@/lib/format";
-import { DECISION_SOURCE_LABELS, isAutoApproval, label, SUBCATEGORY_LABELS } from "@/lib/labels";
+import { decisionSourceInSentence, isAutoApproval, label, SUBCATEGORY_LABELS } from "@/lib/labels";
 import { useSettings } from "@/lib/queries/settings";
 import { useRejectCalendarPurpose, useUpdateTrip } from "@/lib/queries/trips";
 import type { PurposeHistoryEntry, TripDetail } from "@/lib/types";
@@ -150,7 +150,7 @@ export function ClassificationCard({ detail }: { detail: TripDetail }) {
             <CategoryToggle value={t.category} size="lg" onChange={(c) => void actions.setCategory(t.id, c).catch(() => {})} />
           )}
           <p className="mt-2 text-xs text-fg-muted">
-            {t.category_source === "user" ? "Avgjord av dig" : `Avgjord av ${label(DECISION_SOURCE_LABELS, t.category_source).toLowerCase()}`}
+            {t.category_source === "user" ? "Avgjord av dig" : `Avgjord av ${decisionSourceInSentence(t.category_source)}`}
             {t.confidence != null && (t.category_source === "ai" || t.category_source === "rule" || t.category_source === "pattern")
               ? ` · ${formatPercent(t.confidence)} säkerhet`
               : ""}

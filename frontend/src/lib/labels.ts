@@ -111,6 +111,16 @@ export const DECISION_SOURCE_LABELS: Record<string, string> = {
 };
 
 /**
+ * Beslutskällan mitt i en mening ("Avgjord av …"). Bara första bokstaven blir liten, och inte
+ * i förkortningar – "AI" och "Home Assistant" behåller sina versaler.
+ */
+export function decisionSourceInSentence(code: string | null | undefined): string {
+  const text = label(DECISION_SOURCE_LABELS, code);
+  if (/^[A-ZÅÄÖ]{2}/.test(text)) return text;
+  return text.charAt(0).toLowerCase() + text.slice(1);
+}
+
+/**
  * Vem som godkände resan (LogicalTrip.approval_source). Skälen för automatiken är de
  * som ägaren ser i appen (byggkontraktet A.2). NULL betyder ägaren själv före 1.1.0.
  */
