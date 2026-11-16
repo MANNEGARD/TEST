@@ -55,6 +55,13 @@ function boot(): Promise<void> {
     state.undo ??= {};
     state.workplaces ??= rec("/settings/workplaces/list");
     state.odometer ??= rec(`/vehicles/${state.vehicleId}/odometer`);
+    // Körtiden saknas på de rekonstruerade resorna i inspelningen; räkna den ur start- och sluttid.
+    for (const d of Object.values(state.trips)) {
+      const t = d.trip;
+      if (t.driving_seconds == null && t.started_at && t.ended_at && !["bounded", "unknown"].includes(t.start_time_quality)) {
+        t.driving_seconds = Math.max(0, Math.round((Date.parse(t.ended_at) - Date.parse(t.started_at)) / 1000));
+      }
+    }
   })();
   return booting;
 }
@@ -1054,6 +1061,7 @@ function summarize(base: Json, start: string, end: string): Json {
     };
     out.trips.preliminary = rows.filter((t) => t.category !== "undecided" && !approved(t)).length;
     out.trips.needs_review = rows.filter((t) => t.review_status === "needs_review").length;
+    out.trips.driving_hours = round1(rows.filter((t) => t.category === "work").reduce((a, t) => a + (Number(t.driving_seconds) || 0), 0) / 3600);
   }
   if (out.review) {
     const list = reviewList(new URLSearchParams("status=open"));

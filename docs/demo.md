@@ -53,13 +53,19 @@ vanlig takt, så att "i dag", vetotiden och månadskortet stämmer med uppgifter
   *Integrationer → Home Assistant*: kategori och ärende, *Alltid privat här*, företagsnamn,
   *Stämmer*/*Fel – privat* på antaget kundbesök, *Senare*. Nästa fråga skickas till telefonen.
 - Godkänna och ändra resor (kategori, ärende, *Ange starttid* och ta bort den), lägga till en
-  manuell resa.
+  manuell resa. *Ångra* i kvittot och *Ångra ändring* i resans ändringshistorik (och under
+  *Platser → AI-minne*) återställer resan; besluten syns i ändringshistoriken.
 - *Stämmer*/*Fel* i månadens genomgång (`/m/month/<månad>`).
 - *Bilen står hemma nu* i Kom igång (det enda steget som återstår).
-- Platser: bekräfta, byta namn och typ, skapa ny.
+- Platser: bekräfta, byta namn och typ, skapa ny, godkänna eller avvisa förslag (förslaget
+  försvinner ur listan).
 - Inställningar: byta läge under *Automatik* (Kom igång försvinner i *Jag godkänner allt själv*),
-  vetotid, kontorstid och övriga inställningar.
-- Export: *Skapa Excel* och *Hämta underlaget* ger exempelfilen; *Stäng alla nedladdningslänkar*.
+  vetotid, kontorstid och övriga inställningar, fordonets namn och registreringsnummer,
+  tjänsteställen och mätarställningar.
+- Integrationer: *Synka nu* (inga nya resor sedan sist), *Testa* och *Skicka testnotis* (notisen
+  syns i demotelefonen).
+- Export: förhandsvisningen och kontrollerna räknas om ur resorna för vilken månad eller period
+  som helst; *Skapa Excel* och *Hämta underlaget* ger exempelfilen; *Stäng alla nedladdningslänkar*.
 - Import: förhandsgranskningen visar ett inspelat exempel oavsett vilken fil som väljs.
 
 Följderna syns som i appen: listor, granskningens räknare, översikten (sträckor, ersättning, att
@@ -68,11 +74,16 @@ localStorage; *Återställ demot* börjar om.
 
 ## Vad som inte simuleras
 
-Det här svarar **Det här går inte att prova i demot**: att ansluta eller synka Volvo, Outlook,
-Home Assistant och AI, testnotiser, importens *Bekräfta*, säkerhetskopior, tokens, lösenord,
-radera historik, tankning och laddning, sammanslagning och delning av resor, egna regler under
-Platser och andra ändringar som inte står ovan. Statistik som inte räknas om (destinationer,
-resvägar, energi, exportens förhandsvisning) visar de inspelade siffrorna.
+Det här svarar **Det här går inte att prova i demot**: att ansluta, koppla bort eller byta
+demoläge för Volvo, Outlook, Home Assistant och AI, importens *Bekräfta*, säkerhetskopior,
+tokens, lösenord, radera historik, att lägga till, ändra eller ta bort tankning och laddning,
+sammanslagning och delning av resor, egna regler och mönster under Platser och andra ändringar
+som inte står ovan. Statistik som inte räknas om (resvägar, energi, månadsjämförelsen, *Veckan i
+korthet*) visar de inspelade siffrorna; destinationerna följer platsernas namn och resornas
+kategori. Alla Excel-filer är samma exempelfil (oktober), och importens förhandsgranskning är
+samma inspelade exempel oavsett fil. Sådant som backenden gör av sig själv efter ett svar (till
+exempel att godkänna hemresan eller skapa *Oktober uppdaterad*) simuleras inte. *Logga ut* leder
+till den vanliga inloggningssidan, där vilka uppgifter som helst släpper in.
 
 ## Göra om startdatat
 
