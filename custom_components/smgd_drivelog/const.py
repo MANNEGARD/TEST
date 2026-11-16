@@ -7,7 +7,7 @@ from typing import Final
 
 DOMAIN: Final = "smgd_drivelog"
 NAME: Final = "SMGD DriveLog"
-INTEGRATION_VERSION: Final = "1.2.3"
+INTEGRATION_VERSION: Final = "1.3.0"
 
 CONF_URL: Final = "url"
 CONF_TOKEN: Final = "token"

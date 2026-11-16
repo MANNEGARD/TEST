@@ -3,7 +3,7 @@
  "info": {
   "title": "SMGD DriveLog API",
   "description": "REST-API för SMGD DriveLog – intelligent körjournal. Webbappen autentiserar med sessionskaka + X-CSRF-Token; Home Assistant-integrationen med Bearer-token.",
-  "version": "1.2.3"
+  "version": "1.3.0"
  },
  "paths": {
   "/api/v1/auth/setup-status": {
