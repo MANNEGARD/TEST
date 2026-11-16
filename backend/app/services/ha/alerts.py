@@ -124,7 +124,8 @@ def _volvo_alerts(db: Session, user_id: uuid.UUID, now: datetime, tz) -> dict[st
         out[VOLVO_FETCH_FAILING].append(Alert(
             _stamp(last),
             "Hämtningen från Volvo fungerar inte",
-            f"Ingen lyckad hämtning från bilen sedan {_when(last, tz)}. DriveLog försöker igen av sig självt.",
+            f"Ingen lyckad hämtning från bilen sedan {_when(last, tz)}. DriveLog försöker igen av sig självt. "
+            "Kör du under tiden kan resorna behöva kompletteras med Volvos körjournal (Import).",
         ))
     elif last is not None and conn.status == IntegrationStatus.CONNECTED:
         # Hämtningen fungerar – men har bilen skickat något nytt på länge?

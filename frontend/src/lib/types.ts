@@ -12,8 +12,26 @@ import type { components } from "./api-types";
 
 type S = components["schemas"];
 
-export type Trip = S["TripOut"];
-export type TripList = S["TripListOut"];
+/** Uppehåll i hämtningen från Volvo före resan (1.3.0, serializers.trips_out → CollectionGapOut). */
+export interface CollectionGap {
+  from: string;
+  to: string;
+  /** Hur mycket mätaren ökade under uppehållet, eller null om det inte är känt. */
+  odometer_km: number | null;
+}
+
+/** "imported" | "manual" = resan kan tas bort (spärrarna prövas av servern), null = resa från bilen. */
+export type DeletableKind = "imported" | "manual";
+
+/**
+ * TripOut med fälten från 1.3.0 (collection_gap, deletable). De är valfria så att typen
+ * fungerar både före och efter att api-types.ts genererats om.
+ */
+export type Trip = S["TripOut"] & {
+  collection_gap?: CollectionGap | null;
+  deletable?: DeletableKind | null;
+};
+export type TripList = Omit<S["TripListOut"], "items"> & { items: Trip[] };
 /** Fält med standardvärde i backend (t.ex. approve=false) är valfria här. */
 export type TripUpdate = Partial<S["TripUpdate"]>;
 export type BulkUpdate = Partial<S["BulkUpdate"]> & { trip_ids: string[] };

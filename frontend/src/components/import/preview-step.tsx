@@ -40,7 +40,7 @@ function Metric({
   );
 }
 
-function FileRow({ file }: { file: ImportFileInfo }) {
+function FileRow({ file, restored }: { file: ImportFileInfo; restored: boolean }) {
   const status = IMPORT_FILE_STATUS[file.status] ?? IMPORT_FILE_STATUS.parsed;
   const failed = file.status === "error";
   const Icon = failed ? FileWarning : FileSpreadsheet;
@@ -56,7 +56,18 @@ function FileRow({ file }: { file: ImportFileInfo }) {
         ) : (
           <p className="mt-0.5 text-[13px] text-fg-muted">
             {importFormatLabel(file.format)} <span aria-hidden>·</span> {plural(file.rows, "rad", "rader")}
-            {file.status === "duplicate_file" ? <> <span aria-hidden>·</span> samma fil har importerats tidigare</> : null}
+            {file.status === "duplicate_file" ? (
+              <>
+                {" "}
+                <span aria-hidden>·</span> samma fil har importerats tidigare
+                {restored ? (
+                  <>
+                    {" "}
+                    <span aria-hidden>·</span> borttagna resor kommer tillbaka
+                  </>
+                ) : null}
+              </>
+            ) : null}
           </p>
         )}
         {file.warnings.map((w) => (
@@ -75,6 +86,33 @@ function FileRow({ file }: { file: ImportFileInfo }) {
       </Badge>
     </li>
   );
+}
+
+interface MergeSettings {
+  enabled?: boolean;
+  by_category?: boolean;
+  auto_max_minutes?: number;
+  ask_max_minutes?: number;
+  private_auto_max_minutes?: number;
+  private_ask_max_minutes?: number;
+}
+
+/** Hinttexten under kryssrutan – följer regelverket i backend/app/services/trips/merge.py. */
+function mergeHint(cfg: MergeSettings | undefined): string {
+  const auto = formatNumber(cfg?.auto_max_minutes ?? 15, 0);
+  const ask = formatNumber(cfg?.ask_max_minutes ?? 60, 0);
+  if (cfg?.by_category !== true) {
+    return `Resor med högst ${auto} minuters stopp emellan blir en resa. Vid längre stopp, upp till ${ask} minuter, får du en fråga i Granskning.`;
+  }
+  const pautoN = cfg.private_auto_max_minutes ?? 15;
+  const paskN = cfg.private_ask_max_minutes ?? 15;
+  const pauto = formatNumber(pautoN, 0);
+  const pask = formatNumber(paskN, 0);
+  const question =
+    paskN > pautoN
+      ? ` Upp till ${ask} min (tjänst) och ${pask} min (privat) får du en fråga i Granskning.`
+      : ` Upp till ${ask} min (tjänst) får du en fråga i Granskning.`;
+  return `Två tjänsteresor med högst ${auto} min stopp emellan blir en resa, likaså två privata med högst ${pauto} min.${question} Tjänst och privat slås aldrig ihop.`;
 }
 
 /**
@@ -106,23 +144,32 @@ export function PreviewStep({
   const differs = s.rows_duplicate_differs ?? 0;
   const errors = s.rows_error ?? 0;
   const failedFiles = files.filter((f) => f.status === "error").length;
+  // Resor som ägaren har tagit bort och som läggs in igen (räknas bland rows_new).
+  const restored = Math.min(s.rows_restored ?? 0, rowsNew);
 
   const settings = useSettings();
-  const mergeCfg = settings.data?.settings.merge as { enabled?: boolean; auto_max_minutes?: number; ask_max_minutes?: number } | undefined;
+  const mergeCfg = settings.data?.settings.merge as MergeSettings | undefined;
   const mergeAvailable = mergeCfg?.enabled !== false;
-  const autoMinutes = mergeCfg?.auto_max_minutes ?? 15;
-  const askMinutes = mergeCfg?.ask_max_minutes ?? 60;
   const [merge, setMerge] = React.useState(true);
 
+  const allRestored = restored > 0 && restored === rowsNew;
   const title =
-    rowsNew > 0
+    allRestored
+      ? restored === 1
+        ? "1 borttagen resa kommer tillbaka"
+        : `${formatNumber(restored, 0)} borttagna resor kommer tillbaka`
+      : rowsNew > 0
       ? `${plural(rowsNew, "ny resa", "nya resor")} att importera`
       : rowsTotal > 0
         ? "Inget nytt att importera"
         : "Filerna innehåller inga resor";
   const lead =
-    rowsNew > 0
-      ? "Inget har sparats ännu. Kontrollera att det ser rätt ut och bekräfta sedan."
+    allRestored
+      ? `Du har tagit bort ${restored === 1 ? "resan" : "de här resorna"} tidigare. När du bekräftar läggs ${restored === 1 ? "den" : "de"} in igen som ${restored === 1 ? "den står" : "de står"} i filen – ändringar du gjorde innan du tog bort ${restored === 1 ? "den" : "dem"} kommer inte tillbaka.`
+      : rowsNew > 0
+      ? `Inget har sparats ännu. Kontrollera att det ser rätt ut och bekräfta sedan.${
+          restored > 0 ? ` Varav ${formatNumber(restored, 0)} som du har tagit bort tidigare – de kommer tillbaka som de står i filen.` : ""
+        }`
       : rowsTotal > 0 && duplicates === rowsTotal
         ? `${rowsTotal === 1 ? "Resan" : `Alla ${formatNumber(rowsTotal, 0)} resor`} i ${files.length === 1 ? "filen" : "filerna"} finns redan i körjournalen, så det finns inget att lägga till.`
         : failedFiles === files.length && files.length > 0
@@ -141,6 +188,7 @@ export function PreviewStep({
           {rowsTotal > 0 ? (
             <dl className="mt-5 grid grid-cols-3 gap-x-4 gap-y-5 rounded-lg border border-border bg-surface-2/40 p-4 sm:grid-cols-4 lg:grid-cols-8">
               <Metric label="Nya resor" value={formatNumber(rowsNew, 0)} tone={rowsNew > 0 ? "accent" : undefined} />
+              {restored > 0 ? <Metric label="Kommer tillbaka" value={formatNumber(restored, 0)} hint="borttagna tidigare" /> : null}
               <Metric
                 label="Dubbletter"
                 value={formatNumber(duplicates, 0)}
@@ -165,7 +213,7 @@ export function PreviewStep({
           <h3 className="mt-6 mb-2 text-[13px] font-medium text-fg-muted">{files.length === 1 ? "Fil" : `Filer (${formatNumber(files.length, 0)})`}</h3>
           <ul className="divide-y divide-border rounded-lg border border-border">
             {files.map((f) => (
-              <FileRow key={f.id} file={f} />
+              <FileRow key={f.id} file={f} restored={restored > 0} />
             ))}
           </ul>
 
@@ -188,7 +236,7 @@ export function PreviewStep({
                   Slå samman resor med korta stopp automatiskt
                 </label>
                 <p id="import-merge-hint" className="mt-0.5 text-[13px] leading-relaxed text-fg-muted">
-                  Resor med högst {formatNumber(autoMinutes, 0)} minuters stopp emellan blir en resa. Vid längre stopp, upp till {formatNumber(askMinutes, 0)} minuter, får du en fråga i Granskning.
+                  {mergeHint(mergeCfg)}
                 </p>
               </div>
             </div>

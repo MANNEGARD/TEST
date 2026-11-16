@@ -307,8 +307,22 @@ def after_decisions(db: Session, *, user_id: uuid.UUID, vehicle_id: uuid.UUID, a
     from app.services.classify import autopilot
 
     autopilot.run_vehicle(db, user_id=user_id, vehicle=vehicle, actor=audit.SYSTEM)
+    # Kategoriregler för sammanslagning: när ägaren har avgjort en resa kan den slås ihop
+    # med grannen av samma kategori direkt (byggkontraktet 2.A.3).
+    from app.services.trips import merge
+
+    merge_cfg = settings_svc.get_section(db, user_id, "merge")
+    merge_questions: list[Any] = []
+    if merge.uses_category_rules(merge_cfg) and merge_cfg.get("enabled", True):
+        merge_questions = merge.evaluate_vehicle(
+            db, vehicle_id=vehicle_id, merge_settings=merge_cfg, actor=audit.SYSTEM, apply_auto=True
+        )["questions"]
     for trip in seg.active_trips(db, vehicle_id):
         pipeline.sync_trip_review_items(db, trip, by=actor.label)
+    if merge_questions:
+        from app.services.ha import notifier
+
+        notifier.enqueue_for_changes(db, user_id=user_id, vehicle=vehicle, merge_items=merge_questions, trip_items=[])
     db.flush()
 
 

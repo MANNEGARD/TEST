@@ -167,6 +167,9 @@ class RawTrip(Base):
     possible_missed_trips: Mapped[bool] = mapped_column(Boolean, default=False)
     quality_flags: Mapped[list[str]] = mapped_column(JSONType, default=list)
     observation_ids: Mapped[list[str]] = mapped_column(JSONType, default=list)
+    # Uppehåll i hämtningen före resan (flaggan collection_gap, 1.3.0):
+    # {"from": ISO, "to": ISO, "odometer_km": float | None}. Tom för äldre resor.
+    collection_gap: Mapped[dict[str, Any] | None] = mapped_column(JSONType, nullable=True)
 
     voided_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     void_reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
