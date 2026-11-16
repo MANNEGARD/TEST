@@ -96,7 +96,7 @@ Från 1.1.0 sköter körjournalen sig själv utan Excel-uppladdning när Volvo �
 - Tydliga resor godkänns av sig själva (egen regel, samma som de tre senaste gångerna,
   hemresa, resa till arbetet, privat plats, antaget kundbesök). Resten blir en fråga i taget
   i telefonen via Home Assistant. Välj *Jag godkänner allt själv* under *Inställningar →
-  Självgående läge* om du hellre godkänner allt.
+  Automatik* om du hellre godkänner allt.
 - När månaden är klar skapas underlaget, och notisen i telefonen har en länk som går att
   öppna utan inloggning.
 - **Kom igång:** överst på *Översikt* visar kortet *Kom igång* vad som återstår – anslut
