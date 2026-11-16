@@ -294,7 +294,10 @@ export function useRejectCalendarPurpose() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => api.post<Trip>(`/trips/${id}/purpose/reject-calendar`, undefined, { timeoutMs: DECISION_TIMEOUT_MS }),
-    onSettled: () => invalidateJournalData(qc),
+    // Väntar inte på omhämtningen: raden med knappen försvinner när den är klar, och kvittot ska hinna visas.
+    onSettled: () => {
+      void invalidateJournalData(qc);
+    },
   });
 }
 

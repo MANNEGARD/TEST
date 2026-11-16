@@ -269,29 +269,41 @@ def previous_purposes(db: Session, user_id: uuid.UUID, trip: LogicalTrip, limit:
 # ----------------------------------------------------------------------------- skapa frågor
 
 
-def _suggestions(db: Session, user_id: uuid.UUID, trip: LogicalTrip, limit: int = 2) -> list[str]:
-    """Ärendeknappar: autopilotens förslag, annars tidigare bekräftade ärenden."""
+def _suggestion_items(db: Session, user_id: uuid.UUID, trip: LogicalTrip, limit: int = 2) -> list[tuple[str, str]]:
+    """Ärendeknappar med ursprung (kalender, platsantagande, ägarens historik, AI), annars
+    tidigare bekräftade ärenden. Samma tvätt och längdtak för alla."""
     from app.services.classify import autopilot
     from app.services.text_safety import sanitize_text
 
     try:
-        cands = list(autopilot.purpose_candidates(db, trip, user_id=user_id, limit=limit))
+        cands = list(autopilot.purpose_candidate_items(db, trip, user_id=user_id, limit=limit))
     except Exception:  # knapparna är en bekvämlighet – får aldrig stoppa frågan
         logger.exception("Kunde inte ta fram ärendeförslag")
         cands = []
     if not cands:
-        cands = previous_purposes(db, user_id, trip, limit=limit)
-    out: list[str] = []
-    for c in cands:
-        text = sanitize_text(c)
-        if text and text not in out:
-            out.append(text)
+        cands = [(c, "history") for c in previous_purposes(db, user_id, trip, limit=limit)]
+    out: list[tuple[str, str]] = []
+    for c, origin in cands:
+        text = sanitize_text(c, limit=80)
+        if text and text not in [t for t, _o in out]:
+            out.append((text, origin))
     return out[:limit]
 
 
-def _can_remember(db: Session, trip: LogicalTrip, text: str | None) -> bool:
+def _suggestions(db: Session, user_id: uuid.UUID, trip: LogicalTrip, limit: int = 2) -> list[str]:
+    """Ärendeknappar: autopilotens förslag, annars tidigare bekräftade ärenden."""
+    return [t for t, _o in _suggestion_items(db, user_id, trip, limit=limit)]
+
+
+# Knappar ur kalendern eller AI blir aldrig "Alltid: …" (ingen regel på ett obekräftat förslag).
+_NEVER_REMEMBER = ("calendar", "ai")
+
+
+def _can_remember(db: Session, trip: LogicalTrip, text: str | None, origin: str | None = None) -> bool:
     from app.services.classify import autopilot
 
+    if origin in _NEVER_REMEMBER:
+        return False
     try:
         return bool(autopilot.can_remember(db, trip, text))
     except Exception:
@@ -310,11 +322,11 @@ def create_classify_question(
     pid = new_public_id()
     hide = bool(cfg["hide_locations_on_lock_screen"])
     if self_driving:
-        cands = _suggestions(db, user_id, trip, limit=1)
-        suggestion = cands[0] if cands else None
+        items = _suggestion_items(db, user_id, trip, limit=1)
+        suggestion, origin = items[0] if items else (None, None)
         built = messages.classify_v2(
             db, trip, tz=settings_svc.user_timezone(db, user_id), hide_locations=hide, suggestion=suggestion,
-            remember_work=bool(suggestion) and _can_remember(db, trip, suggestion),
+            remember_work=bool(suggestion) and _can_remember(db, trip, suggestion, origin),
             remember_private=_can_remember(db, trip, None),
         )
     else:
@@ -336,10 +348,11 @@ def create_purpose_question(
     pid = new_public_id()
     hide = bool(cfg["hide_locations_on_lock_screen"])
     if self_driving:
-        cands = _suggestions(db, user_id, trip, limit=2)
+        items = _suggestion_items(db, user_id, trip, limit=2)
+        cands = [t for t, _o in items]
         built = messages.purpose_v2(
             db, trip, tz=settings_svc.user_timezone(db, user_id), hide_locations=hide, candidates=cands,
-            remember=bool(cands) and _can_remember(db, trip, cands[0]),
+            remember=bool(items) and _can_remember(db, trip, items[0][0], items[0][1]),
         )
     else:
         built = messages.purpose(db, trip, pid, hide_locations=hide, previous=previous_purposes(db, user_id, trip))
@@ -1172,6 +1185,16 @@ def _waiting_for_address(db: Session, trip: LogicalTrip, now: datetime) -> bool:
     return dest.created_at is not None and now - dest.created_at < WAIT_FOR_ADDRESS
 
 
+def _waiting_for_lunch(db: Session, trip: LogicalTrip, user_id: uuid.UUID, now: datetime) -> bool:
+    from app.services.classify import lunch
+
+    try:
+        return lunch.awaiting_return(db, trip, user_id=user_id, now=now)
+    except Exception:  # lunchregeln får aldrig stoppa frågorna
+        logger.exception("Kunde inte pröva lunchregeln")
+        return False
+
+
 def _wants_company(db: Session, trip: LogicalTrip) -> bool:
     """A.3: målet är en arbetsplats enligt kartan men kartan har inget namn för den."""
     if messages.is_multi(trip):
@@ -1255,6 +1278,10 @@ def ensure_open_questions(
                 continue
             if _waiting_for_address(db, trip, now):
                 stats["waiting"] += 1
+                continue
+            if _waiting_for_lunch(db, trip, user_id, now):
+                # Lunchregeln väntar på återresan: ingen fråga om utresan medan ägaren äter.
+                stats["waiting_lunch"] += 1
                 continue
             if item_kinds & {ReviewKind.CATEGORY, ReviewKind.TAX_UNCERTAIN}:
                 if not kinds.get("classify", True):

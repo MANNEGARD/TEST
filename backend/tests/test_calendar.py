@@ -177,7 +177,7 @@ def test_abbreviations_are_expanded_when_matching(db, user, trips, places):
     t = trips.trip(HOME, "Okända vägen 3, Sjöstad", km=200, minutes=130)
     event(db, user, "APT i SJST", t.ended_at + timedelta(minutes=10))
     (m,) = match(db, user, t)
-    assert m.geo_basis == "city" and m.is_selected
+    assert m.geo_basis == "subject_city" and m.is_selected  # 1.3.0: orten står i rubriken
 
 
 def test_classification_works_without_any_calendar(db, user, trips, places):

@@ -94,7 +94,14 @@ export interface RuleInput {
   /** "undecided" = "Fråga mig alltid": resorna föreslås aldrig automatiskt. */
   category?: "work" | "private" | "undecided" | null;
   purpose?: string | null;
+  /**
+   * När den fasta texten gäller (1.3.0, location_patterns.manual_purpose_mode):
+   * "unless_calendar" = när kalendern inte säger något annat (standard), "always" = alltid.
+   */
+  purpose_mode?: PurposeMode | null;
 }
+
+export type PurposeMode = "unless_calendar" | "always";
 
 /** Status på ett inlärt mönster (PatternUpdate i backend/app/api/routes/learning.py). */
 export type PatternStatus = "suggested" | "approved" | "rejected";

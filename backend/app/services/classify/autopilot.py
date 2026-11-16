@@ -8,9 +8,15 @@ byggkontraktets ordning och skriver ingenting; ``apply`` genomför beslutet.
   blandar privat och tjänst, kalendern säger emot fordonsdata eller ägarens regel
   "fråga alltid".
 * Spärr 2 (aldrig automatisk Arbete): någon signal pekar på Privat, motstridiga signaler,
-  rutten bostad ↔ ordinarie tjänsteställe, eller målet är hemmet (utom T), en privat
-  plats, tjänstestället eller ett hotell (utom egen regel R).
-* Reglerna P, R, H, T och A; allt annat blir EN fråga.
+  rutten bostad ↔ ordinarie tjänsteställe (utom när ägaren valt att resor hem ↔ kontor är
+  tjänst, regel K), eller målet är hemmet (utom T), en privat plats, tjänstestället eller ett
+  hotell (utom egen regel R).
+* Reglerna i ordning (1.3.0): väntan på adressen → spärr 1 → lunchväntan → P → P → R → K
+  (hem ↔ kontor) → L (lunch) → kvällsärende under tjänsteresa (fråga) → H → T → A; allt annat
+  blir EN fråga.
+* Ärendet ur kalendern (ägarens beslut A): godkänns resan automatiskt som Arbete av R, K, H
+  eller T och kalendern ger starkt stöd, blir ärendet kalenderns (AI-formulerat när det klarat
+  namnkontrollen) och märks ``from_calendar`` i månadens genomgång.
 
 Automatiskt godkända resor bär ``approval_source`` och räknas aldrig som ägarbekräftad
 historik. Importerade och manuellt inlagda resor rörs aldrig. Platsantagandet (A) och
@@ -85,7 +91,13 @@ _NEVER_ASSUMED_TYPES = frozenset({
 
 # Kategorikälla på resan: ägarens egna regler räknas som "rule", det inlärda som "pattern".
 # Aldrig "user" eller "ha", så att avstämningen mot importen beter sig som förut.
-_RULE_SOURCES = frozenset({ApprovalSource.RULE, ApprovalSource.COMMUTE, ApprovalSource.PRIVATE_PLACE})
+_RULE_SOURCES = frozenset({
+    ApprovalSource.RULE, ApprovalSource.COMMUTE, ApprovalSource.PRIVATE_PLACE, ApprovalSource.HOME_OFFICE,
+    ApprovalSource.LUNCH,
+})
+LUNCH_WAIT_TEXT = "Lunch? Väntar på återresan"
+EVENING_TEXT = "Kvällsärende under tjänsteresa"
+EVENING_MAX_KM = 15.0
 
 
 @dataclass(frozen=True)
@@ -100,6 +112,7 @@ class AutoDecision:
     candidates: tuple[str, ...] = ()  # ärendeknappar
     note: str | None = None  # anteckning på resan (P: "Resa mellan bostad och arbetsplats")
     veto_until: str | None = None  # ISO-tid; antagna resor räknas först när vetotiden gått
+    calendar_event_ids: tuple[str, ...] = ()  # ärendet kommer ur kalendern (beslut A)
 
 
 SKIP = AutoDecision("skip")
@@ -207,7 +220,14 @@ def config(db: Session, user_id: uuid.UUID, now: datetime | None = None) -> dict
         "tz": settings_svc.user_timezone(db, user_id),
         "abbreviations": settings_svc.get_section(db, user_id, "abbreviations")["map"],
         "employer": settings_svc.get_section(db, user_id, "general").get("employer_name") or "",
+        "opts": _context_options(db, user_id, now),
     }
+
+
+def _context_options(db: Session, user_id: uuid.UUID, now: datetime | None) -> dict[str, Any]:
+    from app.services.classify import signals as sig
+
+    return sig.context_options(db, user_id, now=now)
 
 
 def _evaluate(db: Session, trip: LogicalTrip, user_id: uuid.UUID, cfg: dict[str, Any]) -> tuple[Any, Any]:
@@ -215,7 +235,8 @@ def _evaluate(db: Session, trip: LogicalTrip, user_id: uuid.UUID, cfg: dict[str,
     from app.services.classify import signals as sig
 
     ctx = sig.build_context(
-        db, trip, user_id=user_id, tz=cfg["tz"], tax=cfg["tax"], ai=cfg["ai"], abbreviations=cfg["abbreviations"]
+        db, trip, user_id=user_id, tz=cfg["tz"], tax=cfg["tax"], ai=cfg["ai"], abbreviations=cfg["abbreviations"],
+        opts=cfg.get("opts"),
     )
     return ctx, sig.evaluate(ctx)
 
@@ -259,11 +280,16 @@ def _commute_direct(ctx: Any) -> bool:
 
 
 def _private_block(ctx: Any, rules: Any) -> bool:
-    """Spärr 2, signaldelen: något pekar på Privat, eller resan är en arbetsresa."""
+    """Spärr 2, signaldelen: något pekar på Privat, eller resan är en arbetsresa.
+
+    Har ägaren valt att resor hem ↔ kontor är tjänsteresor räknas arbetsresan inte som privat.
+    """
     if any(s.direction == Category.PRIVATE for s in rules.signals):
         return True
     if "Motstridiga signaler" in (rules.caps or []):
         return True
+    if getattr(ctx, "home_office_is_work", False):
+        return False
     return _commute_direct(ctx) or bool(ctx.commute_via_stop)
 
 
@@ -290,6 +316,8 @@ def _commute_rule(trip: LogicalTrip, ctx: Any, cfg: dict[str, Any]) -> AutoDecis
         return None
     if not bool(cfg["tax"].get("commute_rule_enabled", True)) or ctx.home_is_workplace:
         return None
+    if getattr(ctx, "home_office_is_work", False):
+        return None  # ägarens val: hem ↔ kontor är tjänst (regel K)
     if cfg["scope"] != settings_svc.SCOPE_BUSINESS_ONLY:
         return None
     return AutoDecision(
@@ -308,7 +336,7 @@ def _private_place_rule(ctx: Any) -> AutoDecision | None:
 
 
 def _own_rule(
-    db: Session, trip: LogicalTrip, ctx: Any, *, user_id: uuid.UUID, work_allowed: bool
+    db: Session, trip: LogicalTrip, ctx: Any, *, user_id: uuid.UUID, work_allowed: bool, rules: Any = None
 ) -> AutoDecision | None:
     """R · "Din regel för X": ägarens regel för rutten, annars för målet."""
     rule: LocationPattern | None = None
@@ -326,7 +354,15 @@ def _own_rule(
         # Regeln säger Arbete men spärr 2 gäller: resan ger en fråga.
         return AutoDecision("ask", reason=reason,
                             candidates=tuple(purpose_candidates(db, trip, user_id=user_id)))
+    from app.services.classify.purpose import PURPOSE_MODE_ALWAYS
+
     purpose = sanitize_text(rule.manual_purpose)
+    if not (purpose and rule.manual_purpose_mode == PURPOSE_MODE_ALWAYS):
+        cal = _calendar_purpose(db, trip, ctx, rules)
+        if cal is not None:
+            # Regeln avgör kategorin, kalendern ärendet ("när kalendern inte säger något annat").
+            return AutoDecision("approve", category=Category.WORK, purpose=cal[0], source=ApprovalSource.RULE,
+                                pattern_id=rule.id, reason=reason, calendar_event_ids=cal[1])
     if purpose:
         return AutoDecision("approve", category=Category.WORK, purpose=purpose, source=ApprovalSource.RULE,
                             pattern_id=rule.id, reason=reason)
@@ -355,7 +391,8 @@ def _destination_corrected(db: Session, user_id: uuid.UUID, dest_id: uuid.UUID) 
 
 
 def _history_rule(
-    db: Session, trip: LogicalTrip, ctx: Any, *, user_id: uuid.UUID, cfg: dict[str, Any], work_allowed: bool
+    db: Session, trip: LogicalTrip, ctx: Any, *, user_id: uuid.UUID, cfg: dict[str, Any], work_allowed: bool,
+    rules: Any = None,
 ) -> AutoDecision | None:
     """H · "Som de 3 senaste gångerna": bara ruttens egen, ägarbekräftade historik."""
     from app.services.classify.textnorm import normalize_purpose
@@ -426,14 +463,18 @@ def _history_rule(
         purpose = sanitize_text(latest[0].purpose)
         if not purpose or NEEDS_CONFIRMATION_SUFFIX in fold(purpose):
             return None
+    cal = _calendar_purpose(db, trip, ctx, rules) if category == Category.WORK else None
     return AutoDecision(
-        "approve", category=category, purpose=purpose, source=ApprovalSource.HISTORY,
+        "approve", category=category, purpose=cal[0] if cal else purpose, source=ApprovalSource.HISTORY,
         pattern_id=ctx.route_pattern.id if ctx.route_pattern is not None else None,
-        reason=f"Som de {HISTORY_MIN} senaste gångerna",
+        reason=f"Som de {HISTORY_MIN} senaste gångerna", calendar_event_ids=cal[1] if cal else (),
     )
 
 
-def _return_rule(trip: LogicalTrip, ctx: Any, *, cfg: dict[str, Any], private_block: bool) -> AutoDecision | None:
+def _return_rule(
+    trip: LogicalTrip, ctx: Any, *, cfg: dict[str, Any], private_block: bool, db: Session | None = None,
+    rules: Any = None,
+) -> AutoDecision | None:
     """T · "Hemresa efter …": samma dag hem efter en godkänd tjänsteresa dit."""
     from app.services.classify.purpose import return_purpose
 
@@ -455,12 +496,90 @@ def _return_rule(trip: LogicalTrip, ctx: Any, *, cfg: dict[str, Any], private_bl
         return None
     assumed = prev.approval_source == ApprovalSource.ASSUMED
     veto = (prev.approval_basis or {}).get("veto_until") if assumed else None
+    cal = _calendar_purpose(db, trip, ctx, rules) if (db is not None and not assumed) else None
     return AutoDecision(
-        "approve", category=Category.WORK, purpose=sanitize_text(purpose),
+        "approve", category=Category.WORK, purpose=cal[0] if cal else sanitize_text(purpose),
         source=ApprovalSource.ASSUMED if assumed else ApprovalSource.RETURN_TRIP,
         related_trip_id=prev.id, reason=purpose.rstrip(". "),
-        veto_until=veto,
+        veto_until=veto, calendar_event_ids=cal[1] if cal else (),
     )
+
+
+def _home_office_rule(
+    db: Session, trip: LogicalTrip, ctx: Any, rules: Any, *, user_id: uuid.UUID, cfg: dict[str, Any]
+) -> AutoDecision | None:
+    """K · "Hem ↔ kontor i {ort}" (ägarens beslut B): resor mellan hemmet och vilket som helst
+    av arbetsgivarens kontor är tjänsteresor och godkänns automatiskt – oavsett tid på dygnet
+    (beslut I). Övriga spärrar gäller: spärr 1 prövas före, och en signal som pekar på Privat
+    (t.ex. en privat plats) ger en fråga i stället."""
+    from app.services.classify import signals as sig
+    from app.services.classify.purpose import is_fixed, propose
+
+    if not sig.home_office(ctx):
+        return None
+    if any(s.direction == Category.PRIVATE for s in rules.signals):
+        return None
+    outbound = _is_home(ctx.origin)
+    office = ctx.destination if outbound else ctx.origin
+    city = sanitize_text((office.city if office is not None else None) or None) or ""
+    where = city or sanitize_text(office.name if office is not None else None) or "kontoret"
+    reason = f"Hem ↔ kontor i {where}"
+    cal = _calendar_purpose(db, trip, ctx, rules)
+    if cal is not None:
+        return AutoDecision("approve", category=Category.WORK, purpose=cal[0], source=ApprovalSource.HOME_OFFICE,
+                            reason=reason, calendar_event_ids=cal[1])
+    purpose: str | None = None
+    proposal = propose(db, ctx, rules)
+    if proposal is not None and is_fixed(proposal):
+        purpose = sanitize_text(proposal.text)  # ägarens regel eller historik för rutten
+    if purpose is None:
+        current = _current_purpose(db, trip)
+        based = (current.based_on or {}) if current is not None else {}
+        if current is not None and current.source == DecisionSource.AI and based.get("supported") is True:
+            purpose = sanitize_text(current.text)
+    if purpose is None:
+        purpose = f"Resa till kontoret i {where}" if outbound else f"Hemresa från kontoret i {where}"
+    return AutoDecision("approve", category=Category.WORK, purpose=purpose, source=ApprovalSource.HOME_OFFICE,
+                        reason=reason)
+
+
+def _lunch_rule(ctx: Any) -> AutoDecision | None:
+    """L · "Lunch": hela lunchmönstret är klart (utresa, kort stopp, återresa till samma kontor)."""
+    from app.services.classify import lunch
+
+    m = getattr(ctx, "lunch", None)
+    if m is None or m.status != "complete":
+        return None
+    return AutoDecision("approve", category=Category.PRIVATE, source=ApprovalSource.LUNCH, reason=lunch.reason(m),
+                        related_trip_id=m.related_to(ctx.trip.id))
+
+
+def _evening_rule(trip: LogicalTrip, ctx: Any, cfg: dict[str, Any]) -> AutoDecision | None:
+    """Kvällsärende under tjänsteresa (beslut H): en kort tur från eller till hotellet utanför
+    kontorstid ger alltid en fråga – ingen automatisk privat och ingen automatisk tjänst."""
+    o, d = ctx.origin, ctx.destination
+    at_hotel = _typed(o, LocationType.HOTEL) or _typed(d, LocationType.HOTEL)
+    if not at_hotel or (trip.distance_km or 0) > EVENING_MAX_KM:
+        return None
+    other = d if _typed(o, LocationType.HOTEL) else o
+    if other is not None and (_typed(other, LocationType.CUSTOMER) or (
+        other is d and ctx.dest_is_employer_office) or (other is o and ctx.origin_is_employer_office)):
+        return None
+    if _in_working_hours(trip.ended_at or trip.sort_time, cfg):
+        return None
+    return AutoDecision("ask", reason=EVENING_TEXT, candidates=())
+
+
+def _in_working_hours(when: datetime | None, cfg: dict[str, Any]) -> bool:
+    """Inom ``automation.office_hours`` (dag och klockslag), utan hänsyn till röda dagar."""
+    if when is None:
+        return True
+    hours = (cfg.get("automation") or {}).get("office_hours") or settings_svc.DEFAULT_OFFICE_HOURS
+    local = when.astimezone(cfg["tz"])
+    if local.weekday() not in set(hours.get("days") or []):
+        return False
+    hhmm = local.strftime("%H:%M")
+    return str(hours.get("start", "07:00")) <= hhmm < str(hours.get("end", "18:00"))
 
 
 def _poi_name(loc: KnownLocation | None) -> str | None:
@@ -563,16 +682,68 @@ def _ai_says_work(db: Session, trip: LogicalTrip) -> bool:
 
 
 def _ai_purpose(trip: LogicalTrip, ctx: Any, rules: Any) -> str | None:
-    """AI:ns ärende, men bara om det fortfarande klarar ``validate_generated``."""
+    """AI:ns ärende, men bara när det har stöd (``based_on.supported``) och fortfarande klarar
+    ``validate_generated``."""
     from app.services.classify import purpose as purpose_mod
 
     if trip.purpose_source != DecisionSource.AI or not trip.purpose:
         return None
+    current = _current_purpose(db_of(trip), trip)
+    if current is None or (current.based_on or {}).get("supported") is not True:
+        return None  # en AI-text utan stöd blir aldrig grund för ett automatiskt godkännande
     text = sanitize_text(trip.purpose)
     if not text:
         return None
     ok, _missing = purpose_mod.validate_generated(text, ctx, rules=rules)
     return text if ok else None
+
+
+def db_of(obj: Any) -> Session:
+    from sqlalchemy.orm import object_session
+
+    session = object_session(obj)
+    assert session is not None
+    return session
+
+
+def _current_purpose(db: Session, trip: LogicalTrip) -> TripPurpose | None:
+    return db.execute(
+        select(TripPurpose)
+        .where(TripPurpose.logical_trip_id == trip.id, TripPurpose.is_current.is_(True))
+        .order_by(TripPurpose.created_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+
+
+def _calendar_purpose(db: Session, trip: LogicalTrip, ctx: Any, rules: Any) -> tuple[str, tuple[str, ...]] | None:
+    """Ärendet ur kalendern när kalendern ger starkt stöd (beslut A).
+
+    I första hand AI:ns text för resan (som redan klarat namnkontrollen när den sparades),
+    annars regelmotorns kalenderförslag (bokningens rubrik). Privata bokningar och onlinemöten
+    används aldrig. Returnerar (ärende, bokningarnas id) eller None.
+    """
+    from app.services.classify import purpose as purpose_mod
+    from app.services.classify import signals as sig
+
+    if ctx is None or sig.calendar_support(ctx) != "strong":
+        return None
+    current = _current_purpose(db, trip)
+    based = (current.based_on or {}) if current is not None else {}
+    if (
+        current is not None and current.source == DecisionSource.AI and based.get("calendar") == "strong"
+        and current.text and not based.get("fallback")
+    ):
+        text = sanitize_text(current.text)
+        if text:
+            return text, tuple(str(i) for i in based.get("calendar_event_ids") or [])
+    if rules is None:
+        return None
+    proposal = purpose_mod.calendar_proposal(ctx, rules)
+    if proposal is not None and proposal.based_on.get("calendar") == "strong":
+        text = sanitize_text(proposal.text)
+        if text:
+            return text, (str(proposal.based_on["calendar_event_id"]),)
+    return None
 
 
 def _easter(year: int) -> date:
@@ -681,6 +852,10 @@ def decide(db: Session, trip: LogicalTrip, *, user_id: uuid.UUID, ctx: Any, rule
         multi = blocked == MULTI_TRIP_TEXT
         cands = () if multi else tuple(purpose_candidates(db, trip, user_id=user_id))
         return AutoDecision("ask", reason=blocked, candidates=cands)
+    lunch_match = getattr(ctx, "lunch", None)
+    if lunch_match is not None and lunch_match.status == "awaiting_return":
+        # Ingen fråga om utresan medan ägaren äter: beslutet tas när återresan är klar.
+        return AutoDecision("wait", reason=LUNCH_WAIT_TEXT)
 
     private_block = _private_block(ctx, rules)
     dest_kind = _destination_kind(ctx)
@@ -691,12 +866,16 @@ def decide(db: Session, trip: LogicalTrip, *, user_id: uuid.UUID, ctx: Any, rule
         or _own_rule(
             db, trip, ctx, user_id=user_id,
             # Hotell stoppar inte ägarens egen regel.
-            work_allowed=not private_block and dest_kind in (None, "hotel"),
+            work_allowed=not private_block and dest_kind in (None, "hotel"), rules=rules,
         )
+        or _home_office_rule(db, trip, ctx, rules, user_id=user_id, cfg=cfg)
+        or _lunch_rule(ctx)
+        or _evening_rule(trip, ctx, cfg)
         or _history_rule(
-            db, trip, ctx, user_id=user_id, cfg=cfg, work_allowed=not private_block and dest_kind is None
+            db, trip, ctx, user_id=user_id, cfg=cfg, work_allowed=not private_block and dest_kind is None,
+            rules=rules,
         )
-        or _return_rule(trip, ctx, cfg=cfg, private_block=private_block)
+        or _return_rule(trip, ctx, cfg=cfg, private_block=private_block, db=db, rules=rules)
     )
     if decision is None and not private_block and dest_kind is None:
         decision = _assumption_rule(db, trip, ctx, rules, user_id=user_id, cfg=cfg)
@@ -725,17 +904,22 @@ def _approve(db: Session, trip: LogicalTrip, d: AutoDecision, *, actor: audit.Ac
     trip.review_status = ReviewStatus.APPROVED
     trip.tax_note = None
     if purpose:
-        if trip.purpose != purpose or not trip.purpose_confirmed:
+        if trip.purpose != purpose or not trip.purpose_confirmed or d.calendar_event_ids:
             db.execute(
                 update(TripPurpose)
                 .where(TripPurpose.logical_trip_id == trip.id, TripPurpose.is_current.is_(True))
                 .values(is_current=False)
             )
+            based_on: dict[str, Any] = {"autopilot": d.source}
+            if d.calendar_event_ids:
+                # Ärendet kommer ur kalendern (beslut A): syns i månadens genomgång och kan rättas.
+                based_on.update({"from_calendar": True, "calendar_event_ids": list(d.calendar_event_ids)})
             db.add(
                 TripPurpose(
                     logical_trip_id=trip.id, text=purpose, source=DecisionSource.PATTERN,
-                    rationale=d.reason or "Godkänd automatiskt.", needs_confirmation=False,
-                    based_on={"autopilot": d.source}, created_by=actor.label,
+                    rationale=("Ärende ur kalendern. " if d.calendar_event_ids else "")
+                    + (d.reason or "Godkänd automatiskt."),
+                    needs_confirmation=False, based_on=based_on, created_by=actor.label,
                 )
             )
         trip.purpose = purpose
@@ -751,6 +935,7 @@ def _approve(db: Session, trip: LogicalTrip, d: AutoDecision, *, actor: audit.Ac
         "related_trip_id": str(d.related_trip_id) if d.related_trip_id else None,
         "reason": d.reason,
         "veto_until": d.veto_until,
+        "from_calendar": bool(d.calendar_event_ids) or None,
     }
     trip.auto_approved_at = now
     trip.updated_by = actor.label
@@ -833,10 +1018,23 @@ def run_vehicle(db: Session, *, user_id: uuid.UUID, vehicle: Vehicle, actor: aud
         d = decide(db, trip, user_id=user_id, ctx=None, rules=None, cfg=cfg)
         if apply(db, trip, d, actor=actor) and d.outcome == "approve":
             out["approved"] = out.get("approved", 0) + 1
+            if d.source == ApprovalSource.LUNCH:
+                _cancel_questions(db, trip.id)  # t.ex. frågan om utresan när återresan kom sent
         elif d.outcome != "approve":
             out[d.outcome] = out.get(d.outcome, 0) + 1
     db.flush()
     return out
+
+
+def _cancel_questions(db: Session, trip_id: uuid.UUID) -> None:
+    try:
+        from app.services.ha import notifier
+
+        notifier.cancel_for_trip(db, trip_id)
+    except Exception:  # notiser får aldrig stoppa ett beslut
+        import logging
+
+        logging.getLogger(__name__).exception("Kunde inte avbryta frågan om resan")
 
 
 def reconsider(db: Session, *, user_id: uuid.UUID, trip_ids: list[uuid.UUID], actor: audit.Actor) -> None:
@@ -872,36 +1070,65 @@ def reconsider(db: Session, *, user_id: uuid.UUID, trip_ids: list[uuid.UUID], ac
 # ----------------------------------------------------------------------------- frågor och regler
 
 
-def purpose_candidates(db: Session, trip: LogicalTrip, *, user_id: uuid.UUID, limit: int = 2) -> list[str]:
-    """Ärendeknappar: ägarens tidigare bekräftade ärenden för rutten, sedan för målet."""
+def purpose_candidate_items(
+    db: Session, trip: LogicalTrip, *, user_id: uuid.UUID, limit: int = 2
+) -> list[tuple[str, str]]:
+    """Ärendeknappar med ursprung, i ordningen i byggkontraktet 3.E.
+
+    1. resans aktuella ärende ur kalendern ("calendar"),
+    2. platsantagandet "Kundbesök <namn>" ("assumed"),
+    3. ägarens tidigare bekräftade ärenden för rutten, sedan målet ("history"),
+    4. AI:ns fria förslag ("ai") – bara när punkt 3 inte gav något.
+    Alla tvättas och kapas till 80 tecken.
+    """
     from app.services.classify.purpose import NEEDS_CONFIRMATION_SUFFIX
     from app.services.learning import patterns as patterns_svc
     from app.services.places.normalize import fold
 
-    route, dest = patterns_svc.get_patterns(db, user_id, trip.start_location_id, trip.end_location_id)
-    out: list[str] = []
+    out: list[tuple[str, str]] = []
     seen: set[str] = set()
-    # Platsantagandet som snabbknapp (A.3): "Tjänst: Kundbesök <namn>" först, t.ex. utanför
+
+    def add(text: str | None, origin: str, key: str | None = None) -> None:
+        clean = sanitize_text(text, limit=80)
+        if not clean or NEEDS_CONFIRMATION_SUFFIX in fold(clean):
+            return
+        k = key or fold(clean)
+        if k in seen or fold(clean) in seen:
+            return
+        seen.add(k)
+        seen.add(fold(clean))
+        out.append((clean, origin))
+
+    current = _current_purpose(db, trip) if trip.purpose else None
+    based = (current.based_on or {}) if current is not None else {}
+    if current is not None and not trip.purpose_confirmed and (
+        based.get("calendar_event_id") or based.get("calendar_event_ids")
+    ):
+        add(current.text, "calendar")
+    # Platsantagandet som snabbknapp (A.3): "Tjänst: Kundbesök <namn>", t.ex. utanför
     # kontorstid eller med vetotiden 0.
     place = db.get(KnownLocation, trip.end_location_id) if trip.end_location_id else None
     name = _poi_name(place) if _assumable_place(place) else None
     if name and (place.place_kind == PlaceKind.WORK or _ai_says_work(db, trip)):  # type: ignore[union-attr]
-        text = assumed_purpose_text(name)
-        seen.add(fold(text))
-        out.append(text)
+        add(assumed_purpose_text(name), "assumed")
+    route, dest = patterns_svc.get_patterns(db, user_id, trip.start_location_id, trip.end_location_id)
+    history = 0
     for pat in (route, dest):
         items = [p for p in patterns_svc.top_purposes(pat, limit=12) if p.get("category") == Category.WORK]
         items.sort(key=lambda p: (-p.get("user_count", 0), -p.get("count", 0)))
         for p in items:
-            text = sanitize_text(p.get("text"))
-            if not text or NEEDS_CONFIRMATION_SUFFIX in fold(text):
-                continue
-            key = p.get("key") or fold(text)
-            if key in seen or fold(text) in seen:
-                continue
-            seen.add(key)
-            out.append(text)
+            before = len(out)
+            add(p.get("text"), "history", p.get("key"))
+            history += len(out) - before
+    if history == 0 and current is not None and current.source == DecisionSource.AI and not trip.purpose_confirmed \
+            and not (based.get("calendar_event_id") or based.get("calendar_event_ids")):
+        add(current.text, "ai")
     return out[:limit]
+
+
+def purpose_candidates(db: Session, trip: LogicalTrip, *, user_id: uuid.UUID, limit: int = 2) -> list[str]:
+    """Ärendeknappar (texterna ur ``purpose_candidate_items``)."""
+    return [text for text, _origin in purpose_candidate_items(db, trip, user_id=user_id, limit=limit)]
 
 
 def _remember_blocked(loc: KnownLocation | None, db: Session, user_id: uuid.UUID) -> bool:
@@ -1311,3 +1538,60 @@ def classify_place(osm_category: str | None, osm_type: str | None) -> str:
     from app.services.places import geocode
 
     return geocode.classify_place(osm_category, osm_type)
+
+
+# ----------------------------------------------------------------------------- ärendet ur kalendern
+
+
+def reject_calendar_purpose(db: Session, trip: LogicalTrip, *, user_id: uuid.UUID, actor: audit.Actor) -> None:
+    """"Ärendet stämmer inte" (beslut A): kalenderträffen avvisas och ärendet blir regelns.
+
+    Bokningarna som ärendet byggde på väljs inte igen för resan (``matching.set_user_choice``),
+    ärendet sätts till regelns eller historikens förslag utan kalendern (3.E steg 2–3) eller
+    töms, och blir obekräftat så att ett ärende om syftet öppnas. Kategorin och godkännandet
+    står kvar. Ett ärende som ägaren själv har skrivit rörs aldrig.
+    """
+    from app.models import CalendarMatch
+    from app.services.calendar import matching
+    from app.services.classify import purpose as purpose_mod
+
+    if trip.state != LogicalState.ACTIVE:
+        raise TripError("Resan är inte aktiv.", "not_active")
+    current = _current_purpose(db, trip)
+    based = (current.based_on or {}) if current is not None else {}
+    ids = [str(i) for i in (based.get("calendar_event_ids") or [])]
+    if based.get("calendar_event_id"):
+        ids.append(str(based["calendar_event_id"]))
+    if current is None or not ids or trip.purpose_source == DecisionSource.USER:
+        raise TripError("Resans ärende kommer inte ur kalendern.", "not_from_calendar")
+    before = {"purpose": trip.purpose, "purpose_confirmed": trip.purpose_confirmed, "calendar_event_ids": ids}
+    for m in db.execute(select(CalendarMatch).where(CalendarMatch.logical_trip_id == trip.id)).scalars():
+        if str(m.calendar_event_id) in ids:
+            matching.set_user_choice(db, trip, m, selected=False)
+    db.flush()
+    cfg = config(db, user_id)
+    ctx, rules = _evaluate(db, trip, user_id, cfg)
+    proposal = purpose_mod.propose(db, ctx, rules)
+    if proposal is not None and purpose_mod.is_calendar_based(proposal):
+        proposal = None  # (en annan bokning) – ägaren har just sagt att kalendern inte stämmer
+    db.execute(
+        update(TripPurpose)
+        .where(TripPurpose.logical_trip_id == trip.id, TripPurpose.is_current.is_(True))
+        .values(is_current=False)
+    )
+    if proposal is not None and trip.work_km > 0:
+        db.add(TripPurpose(
+            logical_trip_id=trip.id, text=proposal.text, source=proposal.source,
+            rationale="Ärendet ur kalendern stämde inte. " + proposal.rationale, needs_confirmation=True,
+            based_on={**proposal.based_on, "calendar_rejected": True}, created_by=actor.label,
+        ))
+        trip.purpose, trip.purpose_source = proposal.text, proposal.source
+    else:
+        trip.purpose, trip.purpose_source = None, None
+    trip.purpose_confirmed = False
+    trip.updated_by = actor.label
+    if isinstance(trip.approval_basis, dict) and trip.approval_basis.get("from_calendar"):
+        trip.approval_basis = {**trip.approval_basis, "from_calendar": None}
+    audit.record(db, actor, "trip.calendar_purpose_rejected", "logical_trip", trip.id, before=before,
+                 after={"purpose": trip.purpose, "purpose_confirmed": False}, user_id=user_id)
+    db.flush()

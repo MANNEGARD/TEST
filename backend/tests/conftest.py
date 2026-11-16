@@ -65,6 +65,11 @@ LEGACY_DEFAULTS: dict[tuple[str, str], Any] = {
     ("notifications", "expire_after_hours"): 72,
     # 1.3.0: befintliga installationer behåller det tidigare regelverket för sammanslagning.
     ("merge", "by_category"): False,
+    # 1.3.0 (omgång AI): de tidigare standardvärdena – de nya prövas med @pytest.mark.new_defaults.
+    ("ai", "context_level"): "minimal",
+    ("lunch", "enabled"): False,
+    ("automation", "home_office_is_work"): False,
+    ("calendar", "store_body_preview"): False,
 }
 
 

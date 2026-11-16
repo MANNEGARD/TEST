@@ -2,7 +2,10 @@
 
 Varje signal har riktning (arbete/privat/neutral), vikt och en svensk förklaring.
 Tidpunkt och veckodag används aldrig som privatindikator – kvällar och helger är
-vanliga tjänsteresetider i det historiska underlaget.
+vanliga tjänsteresetider i det historiska underlaget. Enda undantaget är lunchregeln
+(``classify/lunch.py``), som kräver hela mönstret: en kort tur från kontoret en arbetsdag,
+ett kort stopp och tillbaka till samma kontor inom lunchfönstret. Klockslaget ensamt räcker
+aldrig.
 """
 
 from __future__ import annotations
@@ -83,6 +86,14 @@ class TripContext:
     origin_is_regular_workplace: bool = False
     home_is_workplace: bool = False
     commute_via_stop: bool = False  # bostad → kort neutralt stopp → ordinarie tjänsteställe
+    # 1.3.0: arbetsgivarens kontor (alla, se employer_office) och ägarens val hem ↔ kontor.
+    dest_is_employer_office: bool = False
+    origin_is_employer_office: bool = False
+    home_office_is_work: bool = False
+    lunch: Any = None  # lunch.LunchMatch | None
+    calendar_stay: Any = None  # calendar_context.StayContext | None
+    calendar_ahead: Any = None  # calendar_context.AheadContext | None
+    min_match_score: float = 0.45
 
     @property
     def local_start(self) -> datetime | None:
@@ -129,6 +140,72 @@ def _is_regular_workplace(loc: KnownLocation | None, ids: set[uuid.UUID], with_p
     if loc.id in with_periods:
         return loc.id in ids  # användarens giltighetsperioder går före platstypen
     return loc.type == LocationType.REGULAR_WORKPLACE and loc.confirmed
+
+
+def employer_office(loc: KnownLocation | None, ids: set[uuid.UUID], with_periods: set[uuid.UUID]) -> bool:
+    """Ett av arbetsgivarens kontor (regel K, lunchregeln och kvällsärenden).
+
+    Bekräftad plats av typen kontor eller ordinarie arbetsplats, eller en plats med en giltig
+    tjänsteställeperiod den dagen. Aldrig hemmet, en kund, ett hotell eller en privat plats.
+    """
+    if loc is None or not loc.confirmed:
+        return False
+    if loc.type in (LocationType.HOME, LocationType.CUSTOMER, LocationType.HOTEL, LocationType.PRIVATE):
+        return False
+    if loc.type == LocationType.OFFICE:
+        return True
+    if loc.id in with_periods:
+        return loc.id in ids
+    return loc.type == LocationType.REGULAR_WORKPLACE
+
+
+def calendar_strength(ctx: TripContext) -> str | None:
+    """Bästa kalenderträffen för just den här resan: "strong", "weak" eller None.
+
+    Stark = vald, ingen konflikt, inte privat, inte online, en platsgrund (inte bara tiden) och
+    poäng ≥ ``calendar.min_match_score``. Svag = vald men bara tiden stämmer.
+    """
+    sel = ctx.selected_match
+    if sel is None:
+        return None
+    m, ev = sel
+    if (ev.sensitivity or "").lower() in ("personal", "private", "confidential"):
+        return None
+    if m.geo_basis == "online":
+        return None
+    if m.geo_basis in WEAK_GEO_BASES:
+        return "weak"
+    return "strong" if (m.score or 0) >= ctx.min_match_score else "weak"
+
+
+def calendar_support(ctx: TripContext) -> str | None:
+    """Kalenderstödet för ärendet (3.E steg 1): "strong" vid stark träff, en vistelse med
+    bokningar på orten eller bokningar de närmaste dagarna (resa dagen före); annars styrkan."""
+    strength = calendar_strength(ctx)
+    if strength == "strong":
+        return "strong"
+    stay = ctx.calendar_stay
+    if stay is not None and stay.near:
+        return "strong"
+    ahead = ctx.calendar_ahead
+    if ahead is not None and ahead.usable:
+        return "strong"
+    return strength
+
+
+def context_options(db: Session, user_id: uuid.UUID, now: datetime | None = None) -> dict[str, Any]:
+    """Inställningar som ``build_context`` behöver utöver skatt/AI (hämtas en gång per körning)."""
+    from app.services import settings as settings_svc
+    from app.services.classify import lunch
+
+    cal = settings_svc.get_section(db, user_id, "calendar")
+    return {
+        "home_office_is_work": bool(settings_svc.get_section(db, user_id, "automation").get("home_office_is_work")),
+        "lunch": lunch.config(db, user_id),
+        "min_match_score": float(cal["min_match_score"]),
+        "work_domain": (cal.get("work_domain") or "").strip().lower() or None,
+        "now": now,
+    }
 
 
 _NEUTRAL_STOP_TYPES = (LocationType.FUEL_STATION, LocationType.CHARGING_STATION, LocationType.UNKNOWN)
@@ -183,7 +260,9 @@ def build_context(
     tax: dict[str, Any],
     ai: dict[str, Any],
     abbreviations: dict[str, str],
+    opts: dict[str, Any] | None = None,
 ) -> TripContext:
+    opts = opts if opts is not None else context_options(db, user_id)
     origin = db.get(KnownLocation, trip.start_location_id) if trip.start_location_id else None
     destination = db.get(KnownLocation, trip.end_location_id) if trip.end_location_id else None
     route, dest = patterns_svc.get_patterns(db, user_id, trip.start_location_id, trip.end_location_id)
@@ -254,7 +333,34 @@ def build_context(
     ctx.origin_is_regular_workplace = _is_regular_workplace(origin, wp_ids, wp_any)
     if ctx.dest_is_regular_workplace and not _is_home(origin):
         ctx.commute_via_stop = _commute_chain_from_home(db, trip, origin)
+    ctx.dest_is_employer_office = employer_office(destination, wp_ids, wp_any)
+    ctx.origin_is_employer_office = employer_office(origin, wp_ids, wp_any)
+    ctx.home_office_is_work = bool(opts.get("home_office_is_work"))
+    ctx.min_match_score = float(opts.get("min_match_score", 0.45))
+    _attach_extras(db, ctx, opts)
     return ctx
+
+
+def _attach_extras(db: Session, ctx: TripContext, opts: dict[str, Any]) -> None:
+    """Lunchmönstret och kalendern runt en resa till en annan ort (1.3.0)."""
+    from app.models import Vehicle
+    from app.services.classify import calendar_context, lunch
+
+    trip = ctx.trip
+    if trip.state != LogicalState.ACTIVE:
+        return
+    lunch_cfg = opts.get("lunch")
+    if lunch_cfg is not None and lunch_cfg.get("enabled"):
+        ctx.lunch = lunch.match(db, trip, user_id=ctx.user_id, cfg=lunch_cfg, now=opts.get("now"))
+    if calendar_context.direction(trip, ctx.origin, ctx.destination) is None:
+        return
+    vehicle = db.get(Vehicle, trip.vehicle_id)
+    is_demo = bool(vehicle.is_demo) if vehicle is not None else False
+    ctx.calendar_stay = calendar_context.stay_events(db, trip, ctx, is_demo=is_demo, work_domain=opts.get("work_domain"))
+    if calendar_strength(ctx) != "strong":
+        ctx.calendar_ahead = calendar_context.ahead_events(
+            db, trip, ctx, is_demo=is_demo, work_domain=opts.get("work_domain")
+        )
 
 
 def _is_home(loc: KnownLocation | None) -> bool:
@@ -426,7 +532,18 @@ def _location_signals(ctx: TripContext) -> tuple[list[Signal], str | None, str |
     # Bostad ↔ ordinarie tjänsteställe: skattemässig bedömning enligt konfigurationen.
     commute_out = (_is_home(o) or ctx.commute_via_stop) and ctx.dest_is_regular_workplace
     commute_back = ctx.origin_is_regular_workplace and _is_home(d)
-    if commute_out or commute_back:
+    if home_office(ctx):
+        # Ägarens val (regel K): resor mellan hemmet och arbetsgivarens kontor är tjänsteresor.
+        out.append(
+            Signal(
+                "home_office_work",
+                "Resa mellan hemmet och ett av era kontor – tjänsteresa enligt ditt val",
+                Category.WORK,
+                0.5,
+            )
+        )
+        sub = Subcategory.OFFICE_WORK
+    elif commute_out or commute_back:
         if ctx.home_is_workplace:
             out.append(
                 Signal(
@@ -477,6 +594,34 @@ def _location_signals(ctx: TripContext) -> tuple[list[Signal], str | None, str |
                    "neutral", ref_type="known_location", ref_id=str(d.id))  # type: ignore[union-attr]
         )
     return out, tax_note, sub
+
+
+def home_office(ctx: TripContext) -> bool:
+    """Hem ↔ ett av arbetsgivarens kontor (åt endera hållet) när ägaren valt att det är tjänst."""
+    if not ctx.home_office_is_work:
+        return False
+    return (_is_home(ctx.origin) and ctx.dest_is_employer_office) or (
+        ctx.origin_is_employer_office and _is_home(ctx.destination)
+    )
+
+
+def _extra_signals(ctx: TripContext) -> list[Signal]:
+    """Lunchmönstret och bokningar de närmaste dagarna på resmålets ort (1.3.0)."""
+    out: list[Signal] = []
+    lm = ctx.lunch
+    if lm is not None and lm.status == "complete":
+        hint = f" ({lm.map_hint})" if lm.map_hint else ""
+        out.append(
+            Signal("lunch_pattern", "Lunchmönster: kort tur från kontoret mitt på dagen" + hint, Category.PRIVATE,
+                   0.8 if lm.map_hint else 0.6, data={"related_trip_id": str(lm.related_to(ctx.trip.id))})
+        )
+    ahead = ctx.calendar_ahead
+    if ahead is not None and ahead.usable:
+        out.append(
+            Signal("calendar_ahead", f"Bokningar på {ahead.place} de närmaste dagarna", Category.WORK, 0.5,
+                   data={"place": ahead.place, "events": [str(ev.id) for ev in ahead.usable[:10]]})
+        )
+    return out
 
 
 def _journey_signals(ctx: TripContext, already_commute: bool) -> tuple[list[Signal], str | None]:
@@ -611,7 +756,7 @@ def evaluate(ctx: TripContext) -> RuleResult:
     pat_signals = _pattern_signals(ctx)
     jour_signals, jour_sub = _journey_signals(ctx, is_commute)
     cal_signals, conflict = _calendar_signals(ctx)
-    signals = loc_signals + pat_signals + jour_signals + cal_signals
+    signals = loc_signals + pat_signals + jour_signals + cal_signals + _extra_signals(ctx)
     sub = sub or jour_sub
 
     manual = next((s for s in signals if s.kind == "manual_rule"), None)
@@ -639,7 +784,7 @@ def evaluate(ctx: TripContext) -> RuleResult:
 
     strong_kinds = {"manual_rule", "confirmed_history", "known_customer", "known_office", "regular_workplace",
                     "calendar_match", "private_place", "home_is_workplace", "return_trip", "hotel", "commute",
-                    "calendar_private", "user_corrections"}
+                    "calendar_private", "user_corrections", "home_office_work", "lunch_pattern"}
     if category != Category.UNDECIDED and not any(
         s.kind in strong_kinds and s.direction == category for s in signals
     ):

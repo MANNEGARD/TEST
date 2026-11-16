@@ -58,6 +58,7 @@ function boot(): Promise<void> {
     state.workplaces ??= rec("/settings/workplaces/list");
     state.odometer ??= rec(`/vehicles/${state.vehicleId}/odometer`);
     if (!state.v130) applyV130(state);
+    if (!state.v130ai) applyV130Ai(state);
     // Körtiden saknas på de rekonstruerade resorna i inspelningen; räkna den ur start- och sluttid.
     // Med en uträknad starttid lämnas den tom som i den riktiga servern, så resans sida visar "≈".
     for (const d of Object.values(state.trips)) {
@@ -807,6 +808,228 @@ function applyV130(s: DemoState): void {
   recountLocations();
 }
 
+/** Demoresan vars ärende kom ur kalendern när den godkändes av ägarens regel (beslut A). */
+const CALENDAR_TRIP = "2e40532a-d7f6-45e3-9e7d-ed7f9a66e8e1";
+
+/** Lunchregelns gränser (settings.py, sektionen lunch). */
+const LUNCH_DEFAULTS = {
+  enabled: true,
+  window_start: "11:00",
+  window_end: "13:00",
+  max_drive_minutes: 10,
+  max_distance_km: 8,
+  min_stop_minutes: 20,
+  max_stop_minutes: 45,
+};
+
+/**
+ * Det som omgång AI i 1.3.0 tillför: underlagsnivån (fullständigt), "Om mitt arbete", lunchregeln,
+ * "Läs hela bokningen" med arbetsgivarens e-postdomän, hem ↔ kontor och en resa vars ärende kom ur
+ * en kalenderbokning utan fråga. Körs en gång per tillstånd.
+ */
+function applyV130Ai(s: DemoState): void {
+  const set = s.settings.settings;
+  const def = s.settings.defaults;
+  set.ai = { ...set.ai, context_level: set.ai?.context_level ?? "full", about_work: set.ai?.about_work ?? "" };
+  def.ai = { ...def.ai, context_level: "full", about_work: "" };
+  set.lunch = { ...LUNCH_DEFAULTS, ...set.lunch };
+  def.lunch = { ...LUNCH_DEFAULTS };
+  set.calendar = { ...set.calendar, store_body_preview: true, work_domain: "exempelakeri.se", work_domain_source: "auto" };
+  def.calendar = { ...def.calendar, store_body_preview: true, work_domain: "", work_domain_source: "" };
+  set.automation = { ...set.automation, home_office_is_work: true };
+  def.automation = { ...def.automation, home_office_is_work: false };
+
+  const d = s.trips[CALENDAR_TRIP];
+  if (d) {
+    const t = d.trip;
+    const text = "Service av truckar med Lennart";
+    const event = {
+      id: "00000000-0000-4000-8000-0000000e0001",
+      event_id: "00000000-0000-4000-8000-0000000e0002",
+      subject: "Service truckar – Lennart",
+      start_at: new Date(Date.parse(t.ended_at) + 10 * 60_000).toISOString(),
+      end_at: new Date(Date.parse(t.ended_at) + 70 * 60_000).toISOString(),
+      location: t.end_location?.name ?? t.end_address,
+      is_online: false,
+      relation: "arrival",
+      score: 0.86,
+      time_score: 0.9,
+      geo_score: 0.9,
+      geo_basis: "place_name",
+      is_selected: true,
+      is_conflict: false,
+      decided_by: "system",
+    };
+    t.purpose = text;
+    t.purpose_source = "rule";
+    t.purpose_confirmed = true;
+    t.has_calendar_match = true;
+    d.calendar_matches = [event, ...(d.calendar_matches ?? [])];
+    d.purpose_history = [
+      {
+        text,
+        source: "rule",
+        rationale: "Ur kalenderbokningen ”Service truckar – Lennart”, som stämde med resan i tid och plats.",
+        needs_confirmation: false,
+        is_current: true,
+        created_at: t.updated_at,
+        supported: null,
+        from_calendar: true,
+        calendar: "strong",
+      },
+      ...(d.purpose_history ?? []).map((p: Json) => ({ ...p, is_current: false })),
+    ];
+    const month = s.monthClose.months.find((m: Json) => m.month === localMonth(t.sort_time));
+    if (month) {
+      month.notes = [
+        ...(month.notes ?? []).filter((n: Json) => n.code !== "purpose_from_calendar"),
+        { code: "purpose_from_calendar", text: "Ärende ur kalendern: 1 resa", count: 1, trip_ids: [CALENDAR_TRIP], web_only: false },
+      ];
+    }
+  }
+  s.v130ai = true;
+}
+
+/** Ärendet kom ur kalendern och står kvar som det sattes (ägaren har inte rättat det). */
+function fromCalendar(d: Json | undefined): boolean {
+  return !!d && !!d.trip.purpose_confirmed && !!(d.purpose_history ?? []).find((p: Json) => p.is_current)?.from_calendar;
+}
+
+/** routes/settings.py → status: minst ett av arbetsgivarens kontor finns som bekräftad plats. */
+function settingsOut(): Json {
+  const s = S();
+  const office = (l: Json) => l.confirmed && !l.merged_into_id && (l.type === "regular_workplace" || l.type === "office");
+  const ready = s.locations.some(office) || (s.workplaces ?? []).some((w: Json) => w.kind === "location" && w.location_id);
+  return { ...clone(s.settings), status: { lunch_office_ready: ready } };
+}
+
+/** Resor som AI-genomgången får bedöma (byggkontraktet 6.D, tilläggets 3.I). */
+const AI_REVIEW_MAX = 25;
+const PENDING_STATUSES = new Set(["needs_review", "proposed", "auto"]);
+
+function aiReviewPlan(body: Json): Json {
+  const s = S();
+  const ids: string[] | null = Array.isArray(body.trip_ids) ? body.trip_ids : null;
+  const pending = body.pending === true;
+  if ((ids && pending) || (!ids && !pending) || (ids && (!ids.length || ids.length > 500))) {
+    throw new HttpError(400, "Välj resor eller alla som väntar i Granskning.", "invalid_selection");
+  }
+  let candidates: Json[];
+  let skippedDecided = 0;
+  let skippedOther = 0;
+  if (ids) {
+    if (ids.some((id) => !s.trips[id])) throw notFound("Resan");
+    candidates = [];
+    for (const id of ids) {
+      const t = s.trips[id].trip;
+      if (t.state !== "active" || t.source === "gap_fill") skippedOther += 1;
+      else if (t.review_status === "approved" || t.review_status === "imported") skippedDecided += 1;
+      else candidates.push(t);
+    }
+  } else {
+    const purposeOpen = (t: Json) => s.review.some((r) => r.trip_id === t.id && r.status === "open" && r.kind === "purpose");
+    candidates = allTrips().filter(
+      (t) =>
+        t.source !== "gap_fill" &&
+        (PENDING_STATUSES.has(t.review_status) ||
+          (purposeOpen(t) && !t.purpose_confirmed && t.review_status !== "approved" && t.review_status !== "imported")),
+    );
+  }
+  candidates.sort((a, b) => (a.sort_time < b.sort_time ? -1 : 1));
+  return {
+    trip_ids: candidates.slice(0, AI_REVIEW_MAX).map((t) => t.id),
+    total_eligible: candidates.length,
+    skipped_decided: skippedDecided,
+    skipped_other: skippedOther,
+    cap: AI_REVIEW_MAX,
+    // Demot har ingen AI-leverantör: bara reglerna körs.
+    provider: null,
+    provider_label: null,
+    context_level: s.settings.settings.ai?.context_level === "minimal" ? "minimal" : "full",
+  };
+}
+
+/** "Bedöm igen" i demot: reglerna ger samma förslag som förut (ingen AI-leverantör). */
+function classifyTrip(id: string): Json {
+  const t = trip(id);
+  if (t.review_status === "approved" || t.review_status === "imported") {
+    return {
+      changed: false,
+      outcome: "skipped_decided",
+      ai_used: false,
+      note: "Resan är redan avgjord av dig eller av importerad källa och bedöms inte om.",
+      trip: clone(t),
+      assessment: clone(S().trips[id].assessment ?? null),
+    };
+  }
+  return {
+    changed: false,
+    outcome: "unchanged",
+    ai_used: false,
+    note: "Reglerna gav samma förslag som förut.",
+    trip: clone(t),
+    assessment: clone(S().trips[id].assessment ?? null),
+  };
+}
+
+/** "Ärendet stämmer inte": kalenderns ärende tas bort, träffen väljs inte igen och resan får ett ärende att bekräfta. */
+function rejectCalendarPurpose(id: string): Json {
+  const s = S();
+  const d = s.trips[id];
+  if (!d) throw notFound("Resan");
+  if (!fromCalendar(d)) throw new HttpError(400, "Resans ärende kommer inte ur kalendern.", "not_from_calendar");
+  const before = snapshot(id);
+  const t = d.trip;
+  const now = nowIso();
+  const fallback = (d.purpose_history ?? []).find((p: Json) => !p.from_calendar && !p.is_current) ?? null;
+  for (const p of d.purpose_history ?? []) p.is_current = false;
+  if (fallback) d.purpose_history = [{ ...fallback, is_current: true, needs_confirmation: true, created_at: now }, ...d.purpose_history];
+  t.purpose = fallback?.text ?? null;
+  t.purpose_source = fallback ? fallback.source : null;
+  t.purpose_confirmed = false;
+  t.updated_at = now;
+  t.updated_by = `user:${s.me.user.id}`;
+  for (const m of d.calendar_matches ?? []) {
+    if (m.is_selected) {
+      m.is_selected = false;
+      m.decided_by = "user";
+    }
+  }
+  t.has_calendar_match = (d.calendar_matches ?? []).some((m: Json) => m.is_selected);
+  s.review.unshift({
+    id: crypto.randomUUID(),
+    vehicle_id: s.vehicleId,
+    kind: "purpose",
+    title: `Syfte saknas: ${t.start_location?.name ?? t.start_address} → ${t.end_location?.name ?? t.end_address}`,
+    detail: "Kalenderns ärende stämde inte. Skriv ärendet eller välj ett förslag.",
+    data: { trip_id: id },
+    status: "open",
+    logical_trip_id: id,
+    snoozed_until: null,
+    created_at: now,
+    resolved_at: null,
+    resolution: {},
+    kind_label: s.reviewMeta.kind_labels?.purpose ?? "Syfte saknas",
+    trip_id: id,
+  });
+  d.history = [
+    {
+      id: crypto.randomUUID(),
+      at: now,
+      actor_type: "user",
+      actor_id: s.me.user.id,
+      action: "trip.calendar_purpose_rejected",
+      entity_type: "logical_trip",
+      entity_id: id,
+      before: { purpose: before.detail.trip.purpose },
+      after: { purpose: t.purpose },
+    },
+    ...(d.history ?? []),
+  ];
+  persist();
+  return clone(t);
+}
+
 /** Spärrarna för borttagning (services/trips/removal.py → delete_trip, kontraktets 4.A.1). */
 function deleteBlocker(d: Json): HttpError | null {
   const t = d.trip;
@@ -1427,6 +1650,11 @@ function monthStatus(m: Json): Json {
     });
   }
   out.blockers = blockers;
+  out.notes = (out.notes ?? []).flatMap((n: Json) => {
+    if (n.code !== "purpose_from_calendar") return [n];
+    const still = (n.trip_ids ?? []).filter((id: string) => fromCalendar(S().trips[id]));
+    return still.length ? [{ ...n, trip_ids: still, count: still.length, text: `Ärende ur kalendern: ${plural(still.length, "resa", "resor")}` }] : [];
+  });
   out.review_rows = (out.review_rows ?? []).filter((r: Json) => AUTO_SOURCES.has(S().trips[r.trip_id]?.trip.approval_source));
   for (const r of out.review_rows) {
     const t = S().trips[r.trip_id].trip;
@@ -1722,6 +1950,8 @@ function patchSettings(section: string, body: Json): Json {
   const before = current.mode;
   Object.assign(current, clone(body));
   if (section === "automation" && body.mode === "self_driving" && before !== "self_driving") current.active_since = nowIso();
+  // Ägaren som sparar domänen tar över den från DriveLogs gissning (work_domain_source är skrivskyddad).
+  if (section === "calendar" && "work_domain" in body) current.work_domain_source = "user";
   persist();
   return clone(current);
 }
@@ -1919,6 +2149,9 @@ on("POST", "/trips/bulk", ({ body }) => {
 });
 
 on("POST", "/trips/manual", ({ body }) => createManualTrip(body));
+on("POST", "/trips/ai-review/plan", ({ body }) => aiReviewPlan(body));
+on("POST", "/trips/:id/classify", ({ m }) => classifyTrip(m[1]));
+on("POST", "/trips/:id/purpose/reject-calendar", ({ m }) => rejectCalendarPurpose(m[1]));
 on("DELETE", "/trips/:id", ({ m }) => {
   deleteTrip(m[1]);
   persist();
@@ -1986,12 +2219,33 @@ on("POST", "/locations/:id/reject-suggestion", ({ m }) => {
 });
 
 // Inställningar
-on("GET", "/settings", () => clone(S().settings));
+on("GET", "/settings", () => settingsOut());
 on("PATCH", "/settings/:id", ({ m, body }) => patchSettings(m[1], body));
 
 // Integrationer
 on("GET", "/integrations/home-assistant", () => clone(S().ha));
 on("GET", "/integrations/volvo/status", () => clone(S().volvo));
+// AI: inspelat svar med underlagsnivån och valen ur demots inställningar.
+on("GET", "/integrations/ai", ({ path, query }) => {
+  const out = clone(fromRecording(path, query)?.json ?? {});
+  const ai = S().settings.settings.ai ?? {};
+  out.privacy = {
+    ...(out.privacy ?? {}),
+    context_level: ai.context_level === "minimal" ? "minimal" : "full",
+    send_calendar_subjects: ai.send_calendar_subjects !== false,
+    send_calendar_body: ai.send_calendar_body === true,
+    send_street_addresses: ai.send_street_addresses === true,
+  };
+  return out;
+});
+on("GET", "/integrations/microsoft/status", ({ path, query }) => {
+  const out = clone(fromRecording(path, query)?.json ?? {});
+  out.stores_body_preview = S().settings.settings.calendar?.store_body_preview === true;
+  out.events_with_description = out.stored_events ? 0 : null;
+  out.events_with_attendees = out.stored_events ? 0 : null;
+  out.tip = null;
+  return out;
+});
 // Kalenderlänken (ICS) hämtar en riktig kalender, så demot visar alltid läget "ingen länk".
 const ICS_NONE = {
   provider: "calendar_ics",
@@ -2004,13 +2258,18 @@ const ICS_NONE = {
   last_error_at: null,
   stored_events: 0,
   events_with_location: null,
+  events_with_description: null,
+  events_with_attendees: null,
   tip: null,
   stores_body_preview: false,
   sync_days_back: 60,
   sync_days_forward: 14,
 };
 const icsNotInDemo = () => new HttpError(501, "Kalenderlänken går inte att prova i demot – den hämtar en riktig kalender.", "demo_unavailable");
-on("GET", "/integrations/microsoft/ics", () => clone(ICS_NONE));
+on("GET", "/integrations/microsoft/ics", () => ({
+  ...clone(ICS_NONE),
+  stores_body_preview: S().settings.settings.calendar?.store_body_preview === true,
+}));
 on("PUT", "/integrations/microsoft/ics", () => {
   throw icsNotInDemo();
 });

@@ -20,6 +20,7 @@ import { Advanced, BoolRow, FormCard, Note, SectionIntro, SettingsSaveBar } from
 import { useSectionSave, useSettingsForm, type FieldSpecs } from "./use-settings-form";
 
 const FIELDS: FieldSpecs = {
+  "automation.home_office_is_work": { type: "bool" },
   "tax.home_is_workplace": { type: "bool" },
   "tax.commute_rule_enabled": { type: "bool" },
   "tax.car_benefit": { type: "bool" },
@@ -172,9 +173,10 @@ function WorkplaceRow({ wp }: { wp: Workplace }) {
 /** 7. Tjänsteställe – skatteregler som bara spelar roll i vissa fall. */
 export function WorkplaceSection({ data }: { data: SettingsPayload }) {
   const form = useSettingsForm(data, FIELDS);
-  const save = useSectionSave(form, "Skattereglerna är sparade. Förslagen för oavgjorda resor räknas om.");
+  const save = useSectionSave(form, "Inställningarna för tjänsteställe är sparade. Förslagen för oavgjorda resor räknas om.");
   useReportDirty("tjanstestalle", form.dirty);
   const workplaces = useWorkplaces();
+  const homeOffice = form.has("automation.home_office_is_work") && form.bool("automation.home_office_is_work");
 
   return (
     <section aria-labelledby="settings-tjanstestalle">
@@ -218,6 +220,13 @@ export function WorkplaceSection({ data }: { data: SettingsPayload }) {
         <FormCard onSubmit={save.save} aria-label="Skatteregler">
           <BoolRow
             form={form}
+            path="automation.home_office_is_work"
+            id="auto-home-office"
+            label="Resor mellan hemmet och våra kontor är tjänsteresor och godkänns automatiskt"
+            hint="Gäller alla platser som är markerade som kontor eller ordinarie arbetsplats. Skatteverkets huvudregel är att resor mellan bostaden och det ordinarie tjänstestället är privata – att räkna dem som tjänsteresor är ditt val och ditt ansvar gentemot arbetsgivaren."
+          />
+          <BoolRow
+            form={form}
             path="tax.home_is_workplace"
             id="tax-home"
             label="Bostaden är tjänsteställe"
@@ -228,7 +237,11 @@ export function WorkplaceSection({ data }: { data: SettingsPayload }) {
             path="tax.commute_rule_enabled"
             id="tax-commute"
             label="Föreslå resor till och från tjänstestället som privata"
-            hint="Skatteverkets regel för resor mellan bostad och arbete. Du kan alltid ändra en enskild resa."
+            hint={
+              homeOffice
+                ? "Skatteverkets regel för resor mellan bostad och arbete. Gäller inte resor mellan hemmet och era kontor så länge valet ovan är på."
+                : "Skatteverkets regel för resor mellan bostad och arbete. Du kan alltid ändra en enskild resa."
+            }
           />
           {form.has("tax.car_benefit") || form.has("tax.require_approval_when_uncertain") ? (
             <Advanced summary="skatteregler">

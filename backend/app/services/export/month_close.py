@@ -41,6 +41,7 @@ from app.models import (
     LogicalTrip,
     MonthClose,
     ReviewItem,
+    TripPurpose,
     User,
     Vehicle,
     VehicleObservation,
@@ -86,6 +87,8 @@ SOURCE_LABELS = {
     ApprovalSource.COMMUTE: "Resa till arbetet",
     ApprovalSource.PRIVATE_PLACE: "Privat plats",
     ApprovalSource.ASSUMED: "Antaget kundbesök",
+    ApprovalSource.HOME_OFFICE: "Hem ↔ kontor",
+    ApprovalSource.LUNCH: "Lunch",
 }
 
 
@@ -392,6 +395,13 @@ def _notes(
         out.append(Blocker("auto_approved", f"{SOURCE_LABELS.get(source, source)}: {_n(len(group), 'resa', 'resor')}",
                            count=len(group), trip_ids=_ids(group)))
 
+    from_calendar = _from_calendar(db, reported)
+    if from_calendar:
+        # Ägarens beslut A: ärendet sattes ur kalendern utan fråga – ägaren kan rätta med ett tryck.
+        out.append(Blocker("purpose_from_calendar",
+                           f"Ärende ur kalendern: {_n(len(from_calendar), 'resa', 'resor')}",
+                           count=len(from_calendar), trip_ids=_ids(from_calendar)))
+
     assumed = [t for t in reported if t.approval_source == ApprovalSource.ASSUMED]
     if assumed:
         out.append(Blocker("assumed", f"{_n(len(assumed), 'antagen rad', 'antagna rader')} – se dem innan du skickar",
@@ -424,6 +434,22 @@ def _notes(
         out.append(Blocker("new_rules", f"{_n(rules, 'egen regel', 'egna regler')} skapade eller ändrade i månaden",
                            count=rules))
     return out
+
+
+def _from_calendar(db: Session, trips: list[LogicalTrip]) -> list[LogicalTrip]:
+    """Redovisade resor vars aktuella ärende sattes ur kalendern av automatiken (beslut A)."""
+    ids = [t.id for t in trips if t.approval_source in AUTO_APPROVAL_SOURCES]
+    if not ids:
+        return []
+    flagged = {
+        tid for tid, based in db.execute(
+            select(TripPurpose.logical_trip_id, TripPurpose.based_on).where(
+                TripPurpose.logical_trip_id.in_(ids), TripPurpose.is_current.is_(True)
+            )
+        ).all()
+        if isinstance(based, dict) and based.get("from_calendar")
+    }
+    return [t for t in trips if t.id in flagged]
 
 
 # ----------------------------------------------------------------------------- evaluate

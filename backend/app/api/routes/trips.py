@@ -371,7 +371,12 @@ def trip_detail(trip_id: uuid.UUID, principal: PrincipalDep, db: DbDep) -> dict[
         ],
         "purpose_history": [
             {"text": p.text, "source": p.source, "rationale": p.rationale, "needs_confirmation": p.needs_confirmation,
-             "is_current": p.is_current, "created_at": p.created_at}
+             "is_current": p.is_current, "created_at": p.created_at,
+             # 1.3.0: AI-förslagets stöd i underlaget och om ärendet kommer ur kalendern.
+             "supported": _supported(p.based_on),
+             "from_calendar": bool((p.based_on or {}).get("from_calendar")),
+             "calendar": (p.based_on or {}).get("calendar") if isinstance(p.based_on, dict) else None,
+             "based_on": _based_on_out(p.based_on)}
             for p in purposes
         ],
         "purpose_suggestions": [
@@ -393,6 +398,22 @@ def trip_detail(trip_id: uuid.UUID, principal: PrincipalDep, db: DbDep) -> dict[
         "history": [AuditOut.model_validate(h).model_dump(mode="json") for h in history],
         "feedback": [FeedbackOut.model_validate(f).model_dump(mode="json") for f in feedback.history(db, trip.id)],
     }
+
+
+def _supported(based_on: Any) -> bool | None:
+    value = based_on.get("supported") if isinstance(based_on, dict) else None
+    return value if isinstance(value, bool) else None
+
+
+_BASED_ON_KEYS = ("ai", "supported", "unsupported", "calendar", "calendar_event_id", "calendar_event_ids",
+                  "from_calendar", "manual_rule", "purpose_mode", "autopilot", "fallback", "insufficient")
+
+
+def _based_on_out(based_on: Any) -> dict[str, Any] | None:
+    """Underlaget för ärendet som webbappen visar (märket "Ur kalendern", "Förslag att bekräfta")."""
+    if not isinstance(based_on, dict):
+        return None
+    return {k: based_on[k] for k in _BASED_ON_KEYS if k in based_on}
 
 
 def _cancel_notifications(db, trip_id: uuid.UUID) -> None:
@@ -479,21 +500,161 @@ def approve_trip(trip_id: uuid.UUID, principal: PrincipalDep, db: DbDep, body: A
     return trip_out(db, get_owned_trip(db, principal, trip_id))
 
 
+AI_REVIEW_MAX = 25
+AI_REVIEW_PLAN_MAX = 500
+SKIPPED_DECIDED_NOTE = "Resan är redan avgjord av dig eller av importerad källa och bedöms inte om."
+_PROVIDER_LABELS = {"anthropic": "Anthropic", "openai": "OpenAI"}
+
+
+class AiReviewPlanIn(BaseModel):
+    trip_ids: list[uuid.UUID] | None = Field(default=None, max_length=AI_REVIEW_PLAN_MAX)
+    pending: bool = False
+
+
+def _reviewable(trip: LogicalTrip) -> bool:
+    """Kan bedömas: aktiv, inte en lucka och inte redan godkänd eller importerad."""
+    return (
+        trip.state == LogicalState.ACTIVE
+        and trip.source != TripSource.GAP_FILL
+        and trip.review_status not in (ReviewStatus.APPROVED, ReviewStatus.IMPORTED)
+    )
+
+
+@router.post("/trips/ai-review/plan", summary="Plan för AI-genomgång: vilka resor som skickas", tags=["Classification"])
+def ai_review_plan(
+    body: AiReviewPlanIn, principal: WebPrincipalDep, db: DbDep, vehicle_id: uuid.UUID | None = None
+) -> dict[str, Any]:
+    """Webben kör planens resor en i taget med ``POST /trips/{id}/classify`` och visar förloppet.
+
+    Resor som redan är godkända (av ägaren eller automatiskt) eller importerade tas aldrig med.
+    Högst 25 resor per körning (de äldsta först)."""
+    if (body.trip_ids is None) == (not body.pending) or (body.trip_ids is not None and body.pending):
+        raise bad_request("Välj resor eller alla som väntar i Granskning.", "invalid_selection")
+    vehicle = get_vehicle(db, principal, vehicle_id)
+    skipped_decided = skipped_other = 0
+    if body.pending:
+        candidates = [
+            t for t in seg.active_trips(db, vehicle.id)
+            if t.source != TripSource.GAP_FILL and t.review_status in (
+                ReviewStatus.NEEDS_REVIEW, ReviewStatus.PROPOSED, ReviewStatus.AUTO
+            )
+        ]
+        # Även resor med avgjord kategori men obekräftat ärende som har ett öppet ärende i Granskning.
+        from app.models import ReviewItem
+        from app.models.enums import ReviewKind, ReviewState
+
+        open_purpose = set(db.execute(
+            select(ReviewItem.logical_trip_id).where(
+                ReviewItem.vehicle_id == vehicle.id, ReviewItem.kind == ReviewKind.PURPOSE,
+                ReviewItem.status == ReviewState.OPEN,
+            )
+        ).scalars())
+        seen = {t.id for t in candidates}
+        for t in seg.active_trips(db, vehicle.id):
+            if t.id in open_purpose and t.id not in seen and _reviewable(t) and not t.purpose_confirmed:
+                candidates.append(t)
+        eligible = candidates
+    else:
+        ids = list(dict.fromkeys(body.trip_ids or []))
+        owned = set(owned_vehicle_ids(db, principal.user.id))
+        trips = list(db.execute(
+            select(LogicalTrip).where(LogicalTrip.id.in_(ids), LogicalTrip.vehicle_id.in_(owned))
+        ).scalars())
+        if len(trips) != len(ids):
+            raise not_found("En eller flera resor")
+        eligible = []
+        for t in trips:
+            if t.state == LogicalState.ACTIVE and t.review_status in (ReviewStatus.APPROVED, ReviewStatus.IMPORTED):
+                skipped_decided += 1
+            elif _reviewable(t):
+                eligible.append(t)
+            else:
+                skipped_other += 1
+    eligible.sort(key=lambda t: (t.sort_time is None, t.sort_time or datetime.min.replace(tzinfo=None)))
+    provider = classify_engine.get_provider(db, principal.user.id)
+    ai = settings_svc.get_section(db, principal.user.id, "ai")
+    return {
+        "trip_ids": [str(t.id) for t in eligible[:AI_REVIEW_MAX]],
+        "total_eligible": len(eligible),
+        "skipped_decided": skipped_decided,
+        "skipped_other": skipped_other,
+        "cap": AI_REVIEW_MAX,
+        "provider": provider.name if provider is not None else None,
+        "provider_label": _PROVIDER_LABELS.get(provider.name) if provider is not None else None,
+        "context_level": ai.get("context_level", settings_svc.CONTEXT_FULL),
+    }
+
+
 @router.post("/trips/{trip_id}/classify", summary="Kör klassificeringen på nytt för resan", tags=["Classification"])
 def reclassify(trip_id: uuid.UUID, principal: WebPrincipalDep, db: DbDep) -> dict[str, Any]:
+    """Bedömer resan på nytt (med AI-leverantören när en är vald). Resor som är godkända eller
+    importerade rörs aldrig. I självgående läge prövar autopiloten resan direkt efteråt; övriga
+    resors förslag räknas om i bakgrunden."""
+    from app.services.classify import autopilot
+
     trip = get_owned_trip(db, principal, trip_id)
+    if trip.review_status in (ReviewStatus.APPROVED, ReviewStatus.IMPORTED):
+        return {
+            "changed": False, "assessment": None, "outcome": "skipped_decided", "ai_used": False,
+            "trip": trip_out(db, trip).model_dump(mode="json"), "note": SKIPPED_DECIDED_NOTE,
+        }
+    recompute.defer(db)
+    recompute.request(db, trip.vehicle_id)
     provider = classify_engine.get_provider(db, principal.user.id)
+    before = (trip.category, trip.purpose, trip.review_status)
     result = classify_engine.classify_trip(
         db, trip, user_id=principal.user.id, actor=principal.actor, provider=provider, force=True
     )
-    pipeline.sync_trip_review_items(db, trip)
+    if autopilot.is_active(db, principal.user.id):
+        autopilot.reconsider(db, user_id=principal.user.id, trip_ids=[trip.id], actor=principal.actor)
+    trip = get_owned_trip(db, principal, trip_id)
+    pipeline.sync_trip_review_items(db, trip, by=principal.actor.label)
+    if trip.review_status in (ReviewStatus.APPROVED, ReviewStatus.IMPORTED):
+        _cancel_notifications(db, trip.id)
     db.commit()
+    signals = {s.kind for s in (result.signals if result else [])}
+    ai_used = bool(result and result.source == DecisionSource.AI)
+    trip = get_owned_trip(db, principal, trip_id)
+    if result is None:
+        outcome = "skipped_decided"
+    elif trip.review_status == ReviewStatus.APPROVED and before[2] != ReviewStatus.APPROVED:
+        outcome = "auto_approved"
+    elif "ai_unavailable" in signals:
+        outcome = "ai_unavailable"
+    elif (trip.category, trip.purpose, trip.review_status) != before:
+        outcome = "updated"
+    else:
+        outcome = "unchanged"
     return {
         "changed": bool(result and result.changed),
         "assessment": result.as_dict() if result else None,
-        "trip": trip_out(db, get_owned_trip(db, principal, trip_id)).model_dump(mode="json"),
-        "note": None if result else "Resan är redan avgjord av dig eller av importerad källa och bedöms inte om.",
+        "outcome": outcome,
+        "ai_used": ai_used,
+        "trip": trip_out(db, trip).model_dump(mode="json"),
+        "note": None if result else SKIPPED_DECIDED_NOTE,
     }
+
+
+@router.post("/trips/{trip_id}/purpose/reject-calendar", response_model=TripOut,
+             summary="Ärendet ur kalendern stämmer inte", tags=["Classification"])
+def reject_calendar_purpose(trip_id: uuid.UUID, principal: WebPrincipalDep, db: DbDep) -> TripOut:
+    """Ägarens "Ärendet stämmer inte" på ett ärende som sattes ur kalendern: kalenderträffen
+    avvisas (väljs inte igen), ärendet sätts tillbaka till regelns eller historikens förslag och
+    blir obekräftat, och ett ärende om syftet öppnas i Granskning."""
+    from app.services.classify import autopilot
+
+    trip = get_owned_trip(db, principal, trip_id)
+    recompute.defer(db)
+    recompute.request(db, trip.vehicle_id)
+    try:
+        autopilot.reject_calendar_purpose(db, trip, user_id=principal.user.id, actor=principal.actor)
+    except TripError as exc:
+        db.rollback()
+        raise bad_request(exc.message, exc.code) from exc
+    trip = get_owned_trip(db, principal, trip_id)
+    pipeline.sync_trip_review_items(db, trip, by=principal.actor.label)
+    db.commit()
+    return trip_out(db, get_owned_trip(db, principal, trip_id))
 
 
 @router.post("/trips/bulk", summary="Massredigering av valda resor")

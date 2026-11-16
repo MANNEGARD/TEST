@@ -23,12 +23,19 @@ from app.models.enums import (
     Subcategory,
 )
 from app.services.classify import textnorm
-from app.services.classify.signals import WEAK_GEO_BASES, RuleResult, TripContext
+from app.services.classify.signals import RuleResult, TripContext
 from app.services.learning import patterns as patterns_svc
 from app.services.places import registry as places
 from app.services.places.normalize import fold, parse_address
 
 NEEDS_CONFIRMATION_SUFFIX = "syfte behöver bekräftas"
+# Egen regel med fast text: gäller "när kalendern inte säger något annat" (standard, även NULL)
+# eller "alltid" (location_patterns.manual_purpose_mode).
+PURPOSE_MODE_UNLESS_CALENDAR = "unless_calendar"
+PURPOSE_MODE_ALWAYS = "always"
+PURPOSE_MODES = (PURPOSE_MODE_UNLESS_CALENDAR, PURPOSE_MODE_ALWAYS)
+# Ett AI-ärende får vara högst så här långt (längre avvisas, kapas aldrig).
+AI_PURPOSE_MAX = 80
 
 
 @dataclass
@@ -90,45 +97,110 @@ def return_purpose(prior_purpose: str | None, abbreviations: dict[str, str] | No
     return textnorm.sentence(f"Hemresa efter {base}")
 
 
-def propose(db: Session, ctx: TripContext, rules: RuleResult) -> PurposeProposal | None:
-    """Regelbaserat syftesförslag. Returnerar None när inget kan sägas."""
-    if rules.category == Category.PRIVATE:
-        return None  # privata resor behöver inget syfte
-
-    # 1. Manuell regel
+def _manual_rule(ctx: TripContext) -> tuple[Any, PurposeProposal] | None:
     for pat in (ctx.route_pattern, ctx.dest_pattern):
         if pat is not None and pat.is_manual_rule and pat.manual_purpose:
-            return PurposeProposal(
+            return pat, PurposeProposal(
                 text=pat.manual_purpose,
                 source="pattern",
                 rationale="Manuell regel för platsen.",
                 # "Fråga mig alltid" (kategori undecided): även syftet bekräftas av användaren.
                 needs_confirmation=pat.manual_category == Category.UNDECIDED,
-                based_on={"pattern_id": str(pat.id), "manual_rule": True},
+                based_on={"pattern_id": str(pat.id), "manual_rule": True,
+                          "purpose_mode": pat.manual_purpose_mode or PURPOSE_MODE_UNLESS_CALENDAR},
             )
+    return None
 
-    # 2. Matchande kalenderbokning – ger kontext, användaren bekräftar.
+
+def calendar_proposal(ctx: TripContext, rules: RuleResult) -> PurposeProposal | None:
+    """Regelmotorns kalenderförslag: rubriken från den valda bokningen (+ platsen).
+
+    Stark träff (platsgrund) ger ``calendar: "strong"``; en träff där bara tiden stämmer ger
+    ``calendar: "weak"`` och ``supported: False`` – och bara när resan av andra skäl är en
+    tjänsteresa. Privata bokningar och onlinemöten används aldrig.
+    """
+    from app.services.classify import signals as sig
+
     selected = ctx.selected_match
     event = selected[1] if selected else None
-    if event is not None and selected[0].geo_basis in WEAK_GEO_BASES and rules.category != Category.WORK:
-        event = None  # bokning utan platsuppgift ger syfte bara när resan av andra skäl är en tjänsteresa
-    if event is not None and (event.sensitivity or "").lower() not in ("personal", "private"):
-        subject = textnorm.strip_trailing_period(event.subject or "")
-        if subject:
-            phrase = _place_phrase(ctx)
-            text = subject
-            if phrase is not None and fold(phrase[1]) not in fold(subject):
-                city = (ctx.destination.city if ctx.destination else None) or ""
-                if not city or fold(city) not in fold(subject):
-                    text = f"{subject} {phrase[0]} {phrase[1]}"
-            return PurposeProposal(
-                text=textnorm.sentence(text),
-                source="rule",
-                rationale="Rubriken från den matchande Outlook-bokningen.",
-                needs_confirmation=True,
-                based_on={"calendar_event_id": str(event.id)},
-            )
+    strength = sig.calendar_strength(ctx)
+    if event is None or strength is None:
+        return None
+    if strength == "weak" and rules.category != Category.WORK:
+        return None  # bokning utan platsuppgift ger syfte bara när resan av andra skäl är en tjänsteresa
+    subject = textnorm.strip_trailing_period(event.subject or "")
+    if not subject:
+        return None
+    phrase = _place_phrase(ctx)
+    text = subject
+    if phrase is not None and fold(phrase[1]) not in fold(subject):
+        city = (ctx.destination.city if ctx.destination else None) or ""
+        if not city or fold(city) not in fold(subject):
+            text = f"{subject} {phrase[0]} {phrase[1]}"
+    based_on: dict[str, Any] = {"calendar_event_id": str(event.id), "calendar": strength}
+    if strength == "weak":
+        based_on["supported"] = False
+    return PurposeProposal(
+        text=textnorm.sentence(text),
+        source="rule",
+        rationale="Rubriken från den matchande kalenderbokningen."
+        if strength == "strong" else "Förslag att bekräfta – rubriken från en bokning vid samma tid, utan platsuppgift.",
+        needs_confirmation=True,
+        based_on=based_on,
+    )
 
+
+def is_calendar_based(proposal: PurposeProposal | None) -> bool:
+    return proposal is not None and bool(
+        proposal.based_on.get("calendar_event_id") or proposal.based_on.get("calendar_event_ids")
+    )
+
+
+def is_fixed(proposal: PurposeProposal | None) -> bool:
+    """Ett fast regelförslag: inte "behöver bekräftas", inte ur kalendern och inte från AI."""
+    return (
+        proposal is not None
+        and proposal.source != DecisionSource.AI
+        and not proposal.based_on.get("insufficient")
+        and not is_calendar_based(proposal)
+    )
+
+
+def propose(db: Session, ctx: TripContext, rules: RuleResult) -> PurposeProposal | None:
+    """Regelbaserat syftesförslag i ärendeordningen (byggkontraktet 3.E). None när inget kan sägas.
+
+    0. Ägarens egen regel med fast text i läget "alltid" (eller "fråga mig alltid").
+    1. En stark kalenderträff (regelmotorns kalenderförslag; AI formulerar om i engine).
+    2. Ägarens egen regel med fast text ("när kalendern inte säger något annat", standard).
+    3. Återresa, hotell, dominerande bekräftat ärende.
+    4. En svag kalenderträff (bara tiden stämmer): förslag utan stöd.
+    5. Känd plats men otillräckligt underlag ("syfte behöver bekräftas").
+    """
+    if rules.category == Category.PRIVATE:
+        return None  # privata resor behöver inget syfte
+
+    manual = _manual_rule(ctx)
+    if manual is not None and (
+        manual[0].manual_purpose_mode == PURPOSE_MODE_ALWAYS or manual[0].manual_category == Category.UNDECIDED
+    ):
+        return manual[1]
+
+    cal = calendar_proposal(ctx, rules)
+    if cal is not None and cal.based_on.get("calendar") == "strong":
+        return cal
+    if manual is not None:
+        return manual[1]
+
+    fixed = _fixed_proposal(ctx, rules)
+    if fixed is not None:
+        return fixed
+    if cal is not None:
+        return cal
+    return _insufficient(ctx, rules)
+
+
+def _fixed_proposal(ctx: TripContext, rules: RuleResult) -> PurposeProposal | None:
+    """Steg 3: återresa, hotell och dominerande bekräftat ärende."""
     # 3. Återresa efter identifierat tjänsteärende
     ret = next((s for s in rules.signals if s.kind == "return_trip" and s.direction == Category.WORK), None)
     if ret is not None and ctx.arrival_at_origin is not None:
@@ -181,7 +253,12 @@ def propose(db: Session, ctx: TripContext, rules: RuleResult) -> PurposeProposal
                 based_on={"purpose_key": top["key"], "count": top["count"]},
             )
 
-    # 6. Känd arbetsplats utan tillräckliga uppgifter om syftet
+    return None
+
+
+def _insufficient(ctx: TripContext, rules: RuleResult) -> PurposeProposal | None:
+    """Känd arbetsplats utan tillräckliga uppgifter om syftet."""
+    cands = candidate_purposes(ctx)
     if rules.category == Category.WORK or cands:
         phrase = _place_phrase(ctx)
         if phrase is not None:
@@ -212,21 +289,54 @@ def grounding_corpus(ctx: TripContext, extra_texts: list[str] | None = None) -> 
         if city:
             texts.append(city)
     for m, ev in ctx.calendar_matches:
-        if not m.is_conflict:
-            texts.append(ev.subject or "")
-            texts.append(ev.location_name or "")
+        if not m.is_conflict and not _private_event(ev):
+            texts += _event_texts(ev)
+    for ev in _context_events(ctx):
+        texts += _event_texts(ev)
     for p in candidate_purposes(ctx, limit=12):
         texts.append(p["text"])
     if ctx.arrival_at_origin is not None and ctx.arrival_at_origin.purpose:
         texts.append(ctx.arrival_at_origin.purpose)
     for k, v in ctx.abbreviations.items():
         texts += [k, v]
+    texts.append(str(ctx.ai.get("about_work") or ""))
     texts += extra_texts or []
     corpus: set[str] = set()
     for t in texts:
         for tok in textnorm.tokens(t):
             corpus.add(fold(tok))
     return corpus
+
+
+def _private_event(ev: Any) -> bool:
+    return (ev.sensitivity or "").lower() in ("personal", "private", "confidential")
+
+
+def _event_texts(ev: Any) -> list[str]:
+    """Bokningens belagda ord: rubrik, plats, ort, tvättad beskrivning och deltagarnas namn.
+
+    Domäner räknas aldrig: ett företagsnamn får inte hittas på ur en e-postdomän.
+    """
+    from app.services.calendar import calendar_text
+
+    out = [ev.subject or "", ev.location_name or "", ev.location_city or "",
+           calendar_text.clean_body(ev.body_preview) or ""]
+    for a in ev.attendees or []:
+        if isinstance(a, dict) and a.get("name"):
+            out.append(str(a["name"]))
+    return out
+
+
+def _context_events(ctx: TripContext) -> list[Any]:
+    """Bokningar under vistelsen (på orten) och de närmaste dagarna – aldrig privata eller online."""
+    out: list[Any] = []
+    stay = getattr(ctx, "calendar_stay", None)
+    if stay is not None:
+        out += stay.near
+    ahead = getattr(ctx, "calendar_ahead", None)
+    if ahead is not None:
+        out += ahead.usable
+    return out
 
 
 def unsupported_tokens(text: str, corpus: set[str]) -> list[str]:
@@ -357,8 +467,11 @@ def _support_texts(ctx: TripContext, rule_proposal: PurposeProposal | None) -> l
     """Texter i underlaget som kan belägga en ärendetyp."""
     texts: list[str] = []
     for m, ev in ctx.calendar_matches:
-        if not m.is_conflict and (ev.sensitivity or "").lower() not in ("personal", "private"):
+        if not m.is_conflict and not _private_event(ev):
             texts.append(ev.subject or "")
+            texts.append(ev.body_preview or "")
+    for ev in _context_events(ctx):
+        texts += [ev.subject or "", ev.body_preview or ""]
     for p in candidate_purposes(ctx, limit=12):
         texts.append(p["text"])
     prior = ctx.arrival_at_origin
@@ -411,6 +524,7 @@ def validate_generated(
     ctx: TripContext,
     rules: RuleResult | None = None,
     rule_proposal: PurposeProposal | None = None,
+    extra_texts: list[str] | None = None,
 ) -> tuple[bool, list[str]]:
     """Godkänner ett AI-genererat syfte endast om
 
@@ -428,11 +542,53 @@ def validate_generated(
     lowered = fold(cleaned)
     if any(marker in lowered for marker in ("http://", "https://", "<", ">", "{", "}")):
         return False, ["otillåtet innehåll"]
-    corpus = grounding_corpus(ctx)
+    corpus = grounding_corpus(ctx, extra_texts)
     corpus |= {fold(w) for w in textnorm.GENERIC_WORDS}
     missing = unsupported_words(cleaned, corpus)
     missing += unsupported_types(cleaned, ctx, rules, rule_proposal)
     return (not missing), missing
+
+
+@dataclass
+class GeneratedCheck:
+    """Utfallet av kontrollen av ett AI-ärende (byggkontraktet 3.F)."""
+
+    ok: bool  # formen och namnen godkända – annars avvisas förslaget
+    supported: bool  # ärendetypen har stöd och texten är mer än ett allmänt ord
+    reasons: list[str] = field(default_factory=list)  # varför det avvisades
+    unsupported: list[str] = field(default_factory=list)  # ärendetyper utan stöd
+
+
+_BARE_WORDS = {"tjänsteresa", "arbete", "möte", "resa", "kundbesök", "besök", "tjänsteärende", "jobb"}
+
+
+def check_generated(
+    text: str | None,
+    ctx: TripContext,
+    *,
+    rules: RuleResult | None = None,
+    rule_proposal: PurposeProposal | None = None,
+    extra_texts: list[str] | None = None,
+) -> GeneratedCheck:
+    """Formen (en rad, ≤ 80 tecken, inga länkar eller ``<>{}``) och namnen avvisar; en ärendetyp
+    utan stöd eller en text som bara är ett allmänt ord behålls men får ``supported=False``."""
+    if not text or not text.strip():
+        return GeneratedCheck(False, False, ["tomt"])
+    cleaned = text.strip()
+    if len(cleaned) > AI_PURPOSE_MAX or "\n" in cleaned or "\r" in cleaned:
+        return GeneratedCheck(False, False, ["för långt eller flera rader"])
+    lowered = fold(cleaned)
+    if any(marker in lowered for marker in ("http://", "https://", "www.", "<", ">", "{", "}")):
+        return GeneratedCheck(False, False, ["otillåtet innehåll"])
+    corpus = grounding_corpus(ctx, extra_texts)
+    corpus |= {fold(w) for w in textnorm.GENERIC_WORDS}
+    missing = unsupported_words(cleaned, corpus)
+    if missing:
+        return GeneratedCheck(False, False, [f"namn utan stöd: {m}" for m in missing])
+    types = unsupported_types(cleaned, ctx, rules, rule_proposal)
+    words = [fold(t) for t in textnorm.tokens(textnorm.strip_trailing_period(cleaned))]
+    bare = bool(words) and all(w in _BARE_WORDS or w in _FUNCTION_WORDS for w in words)
+    return GeneratedCheck(True, not types and not bare, [], types + (["bara ett allmänt ord"] if bare else []))
 
 
 def similar_trips(db: Session, trip: LogicalTrip, limit: int = 5) -> list[LogicalTrip]:

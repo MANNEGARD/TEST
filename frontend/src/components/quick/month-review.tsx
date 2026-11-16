@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { Check, CircleCheckBig, FileDown, X } from "lucide-react";
+import { CalendarDays, CalendarX2, Check, CircleCheckBig, FileDown, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -12,7 +12,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { errorMessage } from "@/lib/api";
 import { formatDate, milNumber } from "@/lib/format";
 import type { ReviewRow, ReviewVerdict } from "@/lib/notifications-types";
+import { PURPOSE_FROM_CALENDAR } from "@/lib/labels";
 import { useMonthReview, useReviewVerdict } from "@/lib/queries/notifications";
+import { useRejectCalendarPurpose } from "@/lib/queries/trips";
 
 const MONTHS = ["januari", "februari", "mars", "april", "maj", "juni", "juli", "augusti", "september", "oktober", "november", "december"];
 
@@ -24,6 +26,8 @@ const SOURCE_LABELS: Record<string, string> = {
   commute: "Resa till arbetet",
   private_place: "Privat plats",
   assumed: "Antaget kundbesök",
+  home_office: "Hem ↔ kontor",
+  lunch: "Lunch",
 };
 
 function monthTitle(month: string): string {
@@ -33,11 +37,15 @@ function monthTitle(month: string): string {
   return name ? `${name[0].toUpperCase()}${name.slice(1)} ${m[1]}` : month;
 }
 
-function Row({ row, done, onVerdict, pending }: {
+function Row({ row, done, onVerdict, pending, fromCalendar, onRejectCalendar, rejecting }: {
   row: ReviewRow;
   done: string | undefined;
   onVerdict: (verdict: ReviewVerdict) => void;
   pending: ReviewVerdict | null;
+  /** Ärendet sattes ur en kalenderbokning utan fråga (beslut A). */
+  fromCalendar: boolean;
+  onRejectCalendar: () => void;
+  rejecting: boolean;
 }) {
   const assumed = row.approval_source === "assumed";
   const reason = row.reason || SOURCE_LABELS[row.approval_source] || "Godkänd automatiskt";
@@ -59,6 +67,11 @@ function Row({ row, done, onVerdict, pending }: {
         {row.category === "work" ? (row.purpose ?? "Tjänst") : "Privat"}
         {assumed && row.reason ? ` · ${row.reason}` : null}
       </p>
+      {fromCalendar ? (
+        <p className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-accent-ink" data-testid="month-review-calendar">
+          <CalendarDays className="size-3.5" aria-hidden /> Ärende ur kalendern
+        </p>
+      ) : null}
       {done ? (
         <p className="mt-3 flex items-center gap-2 text-sm text-ok-ink" role="status">
           <CircleCheckBig className="size-4" aria-hidden /> {done}
@@ -71,6 +84,19 @@ function Row({ row, done, onVerdict, pending }: {
           <Button variant="secondary" size="lg" className="rounded-xl" onClick={() => onVerdict("wrong")} loading={pending === "wrong"} disabled={pending !== null}>
             {pending === "wrong" ? null : <X aria-hidden />} Fel
           </Button>
+          {fromCalendar ? (
+            <Button
+              variant="ghost"
+              size="lg"
+              className="col-span-2 rounded-xl"
+              onClick={onRejectCalendar}
+              loading={rejecting}
+              disabled={pending !== null}
+              data-testid="reject-calendar-purpose"
+            >
+              {rejecting ? null : <CalendarX2 aria-hidden />} Ärendet stämmer inte
+            </Button>
+          ) : null}
         </div>
       )}
     </li>
@@ -84,6 +110,7 @@ function Row({ row, done, onVerdict, pending }: {
 export function MonthReviewView({ month }: { month: string }) {
   const query = useMonthReview();
   const verdict = useReviewVerdict();
+  const reject = useRejectCalendarPurpose();
   const [done, setDone] = React.useState<Record<string, string>>({});
   const title = monthTitle(month);
 
@@ -108,6 +135,17 @@ export function MonthReviewView({ month }: { month: string }) {
 
   const status = query.data.months.find((m) => m.month === month);
   const rows = status?.review_rows ?? [];
+  const fromCalendar = new Set(status?.notes.find((n) => n.code === PURPOSE_FROM_CALENDAR)?.trip_ids ?? []);
+  const rejectCalendar = (row: ReviewRow) =>
+    reject.mutate(row.trip_id, {
+      onSuccess: () => setDone((d) => ({ ...d, [row.trip_id]: "Kalenderns ärende är borttaget. Resan väntar på ditt ärende i Granskning." })),
+      onError: (e) => toast.error(errorMessage(e)),
+    });
+  const rowProps = (r: ReviewRow) => ({
+    fromCalendar: fromCalendar.has(r.trip_id),
+    onRejectCalendar: () => rejectCalendar(r),
+    rejecting: reject.isPending && reject.variables === r.trip_id,
+  });
   const assumed = rows.filter((r) => r.approval_source === "assumed");
   const others = rows.filter((r) => r.approval_source !== "assumed");
   const pendingFor = (tripId: string): ReviewVerdict | null =>
@@ -145,7 +183,7 @@ export function MonthReviewView({ month }: { month: string }) {
               <h2 className="mb-2 text-base font-semibold text-fg">Antagna ({assumed.length})</h2>
               <ul className="space-y-2">
                 {assumed.map((r) => (
-                  <Row key={r.trip_id} row={r} done={done[r.trip_id]} onVerdict={(v) => send(r, v)} pending={pendingFor(r.trip_id)} />
+                  <Row key={r.trip_id} row={r} done={done[r.trip_id]} onVerdict={(v) => send(r, v)} pending={pendingFor(r.trip_id)} {...rowProps(r)} />
                 ))}
               </ul>
             </section>
@@ -155,7 +193,7 @@ export function MonthReviewView({ month }: { month: string }) {
               <h2 className="mb-2 text-base font-semibold text-fg">Godkända automatiskt ({others.length})</h2>
               <ul className="space-y-2">
                 {others.map((r) => (
-                  <Row key={r.trip_id} row={r} done={done[r.trip_id]} onVerdict={(v) => send(r, v)} pending={pendingFor(r.trip_id)} />
+                  <Row key={r.trip_id} row={r} done={done[r.trip_id]} onVerdict={(v) => send(r, v)} pending={pendingFor(r.trip_id)} {...rowProps(r)} />
                 ))}
               </ul>
             </section>

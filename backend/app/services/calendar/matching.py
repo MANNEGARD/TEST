@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from app.models import CalendarEvent, CalendarMatch, KnownLocation, LogicalTrip, Vehicle
 from app.models.enums import LocationType, LogicalState, ReviewKind, TripSource
 from app.services import settings as settings_svc
+from app.services.calendar import calendar_text
 from app.services.classify import textnorm
 from app.services.places.normalize import fold, haversine_m, parse_address, valid_coordinates
 from app.services.trips import review, start_time
@@ -95,8 +96,16 @@ def geo_match(
     lat: float | None,
     lon: float | None,
     abbreviations: dict[str, str],
+    *,
+    work_domain: str | None = None,
 ) -> tuple[float, str, bool]:
-    """Returnerar (poäng 0–1, grund, konflikt)."""
+    """Returnerar (poäng 0–1, grund, konflikt).
+
+    Bokningen behöver ingen plats (ägarens beslut F): rubrikens och beskrivningens ort eller
+    företag och de externa deltagarnas domäner vägs ihop med resmålets ort och namn. Tid ensam
+    ger bara en svag träff (``no_location``), och ett onlinemöte utan fysisk plats förklarar
+    aldrig en resa (ingen kandidat).
+    """
     plat = place.latitude if place is not None and place.latitude is not None else lat
     plon = place.longitude if place is not None and place.longitude is not None else lon
     if valid_coordinates(ev.latitude, ev.longitude) and valid_coordinates(plat, plon):
@@ -109,8 +118,13 @@ def geo_match(
             return 0.3, "coordinates_same_area", False
         return 0.0, "coordinates_far", d >= CONFLICT_DISTANCE_M and not _is_online(ev)
 
+    has_physical = bool(ev.location_name or ev.location_address) and not _looks_online(ev)
+    if not has_physical and (_is_online(ev) or calendar_text.looks_online(ev.body_preview)):
+        return 0.0, "online", False  # onlinemöte utan fysisk plats: ingen träff och ingen konflikt
+
     ev_text_tokens = _tokens(f"{ev.location_name or ''} {ev.location_address or ''}", abbreviations)
     subject_tokens = _tokens(ev.subject, abbreviations)
+    body_tokens = _tokens(calendar_text.clean_body(ev.body_preview), abbreviations) if ev.body_preview else set()
     parsed = parse_address(address or (place.address if place else None))
     place_city = fold((place.city if place else None) or parsed.city or "")
     ev_city = fold(ev.location_city or "")
@@ -122,14 +136,20 @@ def geo_match(
         if distinctive and (distinctive <= ev_text_tokens or distinctive <= subject_tokens or
                             len(distinctive & (ev_text_tokens | subject_tokens)) >= max(1, len(distinctive) - 1)):
             return 0.9, "place_name", False
+    if place is not None and place.type not in (LocationType.HOME, LocationType.PRIVATE) and (place.company or place.name):
+        # En extern deltagares domän som stämmer med resmålets företag (exempelakeri.se ↔ Exempel Åkeri AB).
+        for domain in calendar_text.external_domains(ev.attendees, work_domain):
+            if calendar_text.domain_matches(domain, place.company, place.name):
+                return 0.8, "participant_domain", False
     if parsed.street and ev.location_address:
         street = fold(parsed.street)
         if street and street in fold(ev.location_address) and (not place_city or place_city in fold(ev.location_address) or not ev_city or ev_city == place_city):
             return 0.9, "address", False
-    if place_city and (place_city == ev_city or place_city in ev_text_tokens or place_city in subject_tokens):
+    if place_city and (place_city == ev_city or place_city in ev_text_tokens):
         return 0.6, "city", False
+    if place_city and (place_city in subject_tokens or place_city in body_tokens):
+        return 0.6, "subject_city", False  # orten (eller ägarens förkortning) står i rubriken/beskrivningen
 
-    has_physical = bool(ev.location_name or ev.location_address) and not _looks_online(ev)
     if has_physical:
         # Bokningen har en fysisk plats som inte liknar resans mål. Ett onlinemöte (t.ex. Teams
         # med bokat rum) kan följas var som helst ifrån och är därför ingen konflikt.
@@ -137,8 +157,6 @@ def geo_match(
         return 0.0, "different_place", conflict
     if place is not None and place.confirmed and place.type in (LocationType.HOME, LocationType.PRIVATE):
         return 0.0, "no_location", False  # bokning utan platsstöd matchas aldrig mot bostaden eller privat plats
-    if _is_online(ev):
-        return 0.15, "online", False
     return 0.2, "no_location", False
 
 
@@ -149,6 +167,11 @@ def _is_online(ev: CalendarEvent) -> bool:
 def _looks_online(ev: CalendarEvent) -> bool:
     text = fold(f"{ev.location_name or ''}")
     return any(k in text for k in ("teams", "zoom", "meet.google", "http://", "https://", "skype", "webex", "online"))
+
+
+def calendar_settings_domain(cal: dict[str, Any]) -> str | None:
+    value = (cal or {}).get("work_domain")
+    return value.strip().lower() if isinstance(value, str) and value.strip() else None
 
 
 def candidates_for_trip(
@@ -181,6 +204,7 @@ def candidates_for_trip(
     dest = db.get(KnownLocation, trip.end_location_id) if trip.end_location_id else None
     raws = seg.ordered_raws(trip)
     first, last = (raws[0], raws[-1]) if raws else (None, None)
+    work_domain = calendar_settings_domain(cal)
     out: list[Candidate] = []
     for ev in events:
         if ev.is_all_day or (ev.show_as or "").lower() == "free":
@@ -192,12 +216,13 @@ def candidates_for_trip(
         if relation == "departure":
             geo, basis, conflict = geo_match(
                 ev, origin, trip.start_address, first.start_lat if first else None, first.start_lon if first else None,
-                abbreviations,
+                abbreviations, work_domain=work_domain,
             )
             conflict = False  # avfärd från annan plats än mötet är ingen konflikt, bara ingen träff
         else:
             geo, basis, conflict = geo_match(
-                ev, dest, trip.end_address, last.end_lat if last else None, last.end_lon if last else None, abbreviations
+                ev, dest, trip.end_address, last.end_lat if last else None, last.end_lon if last else None, abbreviations,
+                work_domain=work_domain,
             )
         if geo == 0.0 and not conflict:
             continue

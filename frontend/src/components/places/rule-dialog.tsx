@@ -9,7 +9,8 @@ import { FieldError, FieldHint, Input, Label } from "@/components/ui/input";
 import { SegmentedControl } from "@/components/ui/segmented-control";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ApiError, errorMessage } from "@/lib/api";
-import type { Place } from "@/lib/places-types";
+import type { Place, PurposeMode } from "@/lib/places-types";
+import { cn } from "@/lib/utils";
 import { useCreateRule } from "@/lib/queries/places";
 
 export interface RulePreset {
@@ -17,7 +18,13 @@ export interface RulePreset {
   destinationId?: string;
   category?: "work" | "private" | "undecided" | null;
   purpose?: string | null;
+  purposeMode?: PurposeMode | null;
 }
+
+const PURPOSE_MODES: { value: PurposeMode; label: string }[] = [
+  { value: "unless_calendar", label: "Använd texten när kalendern inte säger något annat (rekommenderas)" },
+  { value: "always", label: "Använd alltid texten" },
+];
 
 type CategoryChoice = "work" | "private" | "undecided" | "none";
 const ANY = "any";
@@ -60,6 +67,7 @@ function RuleForm({ places, preset, onDone }: { places: Place[]; preset?: RulePr
   const [origin, setOrigin] = React.useState(preset?.originId ?? ANY);
   const [category, setCategory] = React.useState<CategoryChoice>(preset?.category ?? "work");
   const [purpose, setPurpose] = React.useState(preset?.purpose ?? "");
+  const [purposeMode, setPurposeMode] = React.useState<PurposeMode>(preset?.purposeMode ?? "unless_calendar");
   const [error, setError] = React.useState<string | null>(null);
 
   const submit = (e: React.FormEvent) => {
@@ -73,6 +81,7 @@ function RuleForm({ places, preset, onDone }: { places: Place[]; preset?: RulePr
         origin_location_id: origin === ANY ? null : origin,
         category: category === "none" ? null : category,
         purpose: purpose.trim() || null,
+        purpose_mode: purpose.trim() ? purposeMode : null,
       })
       .then(
         () => {
@@ -176,6 +185,35 @@ function RuleForm({ places, preset, onDone }: { places: Place[]; preset?: RulePr
         />
         <FieldHint>Fylls i som syfte på resorna. Du kan alltid ändra en enskild resa.</FieldHint>
       </div>
+      {purpose.trim() ? (
+        <fieldset className="space-y-1.5" data-testid="rule-purpose-mode">
+          <legend className="text-[13px] font-medium">När texten gäller</legend>
+          {PURPOSE_MODES.map((m) => (
+            <label
+              key={m.value}
+              className={cn(
+                "flex cursor-pointer items-start gap-2.5 rounded-md border px-3 py-2 text-[13px] leading-snug transition-colors has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-ring",
+                purposeMode === m.value ? "border-accent bg-accent-soft/50 text-fg" : "border-border text-fg-muted hover:bg-surface-2/50",
+              )}
+            >
+              <input
+                type="radio"
+                name="rule-purpose-mode"
+                value={m.value}
+                checked={purposeMode === m.value}
+                onChange={() => setPurposeMode(m.value)}
+                className="mt-0.5 accent-accent"
+              />
+              {m.label}
+            </label>
+          ))}
+          <FieldHint>
+            {purposeMode === "always"
+              ? "Texten används även när en kalenderbokning stämmer med resan."
+              : "Stämmer en kalenderbokning med resan föreslås ärendet ur bokningen i stället."}
+          </FieldHint>
+        </fieldset>
+      ) : null}
       <FieldError>{error}</FieldError>
       <DialogFooter>
         <Button variant="ghost" onClick={onDone}>

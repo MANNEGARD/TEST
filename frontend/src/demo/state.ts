@@ -68,6 +68,8 @@ export interface DemoState {
   odometer?: Json[];
   /** Tillägget för 1.3.0 (importerade resor, uppehåll i hämtningen, nya inställningar) är inlagt. */
   v130?: boolean;
+  /** 1.3.0, omgång AI: underlagsnivå, lunchregeln, hela bokningen, hem ↔ kontor och ett ärende ur kalendern. */
+  v130ai?: boolean;
 }
 
 type Runtime = "seedNow" | "homeMarked" | "imports" | "linksRevokedAt" | "nextTrip" | "nextQuestion";

@@ -2,21 +2,35 @@
 
 import Link from "next/link";
 import { ArrowRight, Sparkles } from "lucide-react";
-import { formatPercent } from "@/lib/format";
+import { Textarea } from "@/components/ui/textarea";
+import { formatNumber, formatPercent } from "@/lib/format";
 import type { SettingsPayload } from "@/lib/settings-page-types";
 import { cn } from "@/lib/utils";
 import { useReportDirty } from "./dirty-context";
-import { BoolRow, FormCard, GroupHeading, Note, SectionIntro, SettingRow, SettingsSaveBar, Slider } from "./form-parts";
+import { BoolRow, ChoiceCards, FormCard, GroupHeading, Note, SectionIntro, SettingRow, SettingsSaveBar, Slider } from "./form-parts";
+import { sectionHref } from "./sections";
 import { useSectionSave, useSettingsForm, type FieldSpecs } from "./use-settings-form";
 
 /** Gränsvärden enligt backend/app/services/settings.py (_BOUNDS). */
 const AUTO_MIN = 0.5;
 const STEP = 0.05;
+/** ai.about_work: högst 1000 tecken (settings.py). */
+const ABOUT_MAX = 1000;
+
+type ContextLevel = "full" | "minimal";
+
+/** Radiotexterna (byggkontraktet 6.E och tilläggets 3.J) – säger exakt vad som lämnar servern. */
+const FULL_TEXT =
+  "Allt som hjälper bedömningen skickas: namn och gatuadress för start och mål – även hemmet och privata platser –, kartans namn och typ för okända ställen, dagens alla resor med tider, platser, kategorier och ärenden, resan före och efter, historiken för samma mål och rutt, dina regler och platsanteckningar, arbetsgivarens namn och det du skriver under Om mitt arbete, samt kalenderbokningarna för dagen och, vid resor till en annan ort, hela vistelsen och de närmaste dagarna – med rubrik, plats, beskrivning och deltagarnas namn (kollega eller extern, och den externa e-postdomänen). Privata bokningar skickas bara som tid, utan text. E-postadresser, koordinater, chassinummer, nycklar, lösenord och kalenderlänken skickas aldrig, och koder och lösenord i bokningar och anteckningar tas bort före sändningen.";
+const MINIMAL_TEXT =
+  "Bara platsens namn och ort, veckodag, klockslag, sträcka, regelmotorns signaler och dina tidigare ärenden. Hemmet och privata platser skickas som ”Hemmet” och ”Privat plats”. Kalenderrubrik, brödtext och gatuadresser styrs av valen nedan.";
 
 const FIELDS: FieldSpecs = {
   "ai.auto_threshold": { type: "number", name: "Gränsen för automatisk klassning", min: AUTO_MIN, max: 1 },
   "ai.review_threshold": { type: "number", name: "Gränsen för förslag", min: 0, max: 1 },
   "ai.strict_mode": { type: "bool" },
+  "ai.context_level": { type: "choice", options: ["full", "minimal"] },
+  "ai.about_work": { type: "text", name: "Om mitt arbete", maxLength: ABOUT_MAX },
   "ai.use_llm_for_purpose": { type: "bool" },
   "ai.send_calendar_subjects": { type: "bool" },
   "ai.send_calendar_body": { type: "bool" },
@@ -54,6 +68,11 @@ export function AiSection({ data }: { data: SettingsPayload }) {
   const strict = form.bool("ai.strict_mode");
   const provider = String(data.settings.ai?.provider ?? "none");
   const hasThresholds = form.has("ai.auto_threshold") && form.has("ai.review_threshold");
+  // Utan nyckeln (äldre server) gäller det tidigare, minimala underlaget.
+  const level: ContextLevel = form.text("ai.context_level") === "full" ? "full" : "minimal";
+  const full = form.has("ai.context_level") && level === "full";
+  const aboutLength = form.text("ai.about_work").length;
+  const employer = String(data.settings.general?.employer_name ?? "").trim();
 
   // Reglagen håller ordningen själva: gränsen för förslag kan aldrig ligga över den automatiska.
   const setAuto = (v: number) => {
@@ -132,14 +151,31 @@ export function AiSection({ data }: { data: SettingsPayload }) {
         />
 
         <GroupHeading description="Gäller bara när en AI-leverantör är vald. Utan AI bygger förslagen på regler och dina tidigare val – allt fungerar ändå.">
-          Vad får skickas till AI-leverantören?
+          Hur mycket underlag får AI?
         </GroupHeading>
+        {form.has("ai.context_level") ? (
+          <ChoiceCards<ContextLevel>
+            legend="Underlag till AI-leverantören"
+            name="ai-context-level"
+            value={level}
+            onChange={(v) => form.set("ai.context_level", v)}
+            options={[
+              { value: "full", title: "Fullständigt underlag (rekommenderas)", description: FULL_TEXT, isDefault: form.defaultOf("ai.context_level") === "full" },
+              { value: "minimal", title: "Minimalt", description: MINIMAL_TEXT, isDefault: form.defaultOf("ai.context_level") === "minimal" },
+            ]}
+          />
+        ) : null}
         <div className="px-5 py-4">
           <Note tone={provider === "none" ? "info" : "accent"} icon={<Sparkles />}>
-            <p>
+            <p data-testid="ai-provider-note">
               {provider === "none" ? (
                 <>
                   <span className="font-medium text-fg">Ingen AI-leverantör är vald.</span> Ingenting skickas utanför din server.
+                </>
+              ) : full ? (
+                <>
+                  <span className="font-medium">Vald leverantör: {PROVIDER_LABELS[provider] ?? provider}.</span> Med fullständigt underlag skickas allt som står
+                  ovan. Koordinater, chassinummer, nycklar och kalenderlänken skickas aldrig.
                 </>
               ) : (
                 <>
@@ -158,34 +194,77 @@ export function AiSection({ data }: { data: SettingsPayload }) {
             </Link>
           </Note>
         </div>
+        {form.has("ai.about_work") ? (
+          <SettingRow
+            stacked
+            htmlFor="ai-about-work"
+            label={
+              <span className="flex items-baseline justify-between gap-3">
+                Om mitt arbete
+                <span className={aboutLength > ABOUT_MAX ? "num text-xs font-normal text-err-ink" : "num text-xs font-normal text-fg-subtle"}>
+                  {formatNumber(aboutLength, 0)} / {formatNumber(ABOUT_MAX, 0)}
+                </span>
+              </span>
+            }
+            hint="Beskriv kort vad du gör i jobbet, till exempel vilka kunder du besöker och vilka ärenden som är vanliga. Skickas till AI-leverantören med fullständigt underlag."
+            error={form.error("ai.about_work")}
+          >
+            <Textarea
+              id="ai-about-work"
+              rows={4}
+              value={form.text("ai.about_work")}
+              onChange={(e) => form.set("ai.about_work", e.target.value)}
+              placeholder="Jag är servicetekniker på Exempel Åkeri AB och besöker kunder i hela länet …"
+              aria-describedby="ai-about-work-hint ai-about-work-employer"
+              aria-invalid={form.error("ai.about_work") ? true : undefined}
+            />
+            <p id="ai-about-work-employer" className="text-xs text-fg-muted">
+              {employer ? (
+                <>
+                  Arbetsgivare: <span className="font-medium text-fg">{employer}</span> – ändras under{" "}
+                </>
+              ) : (
+                <>Ingen arbetsgivare angiven. Den anges under </>
+              )}
+              <Link href={sectionHref("fordon")} className="font-medium text-accent-ink underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-ring">
+                Fordon och förare
+              </Link>
+              .
+            </p>
+          </SettingRow>
+        ) : null}
         <BoolRow
           form={form}
           path="ai.use_llm_for_purpose"
           id="ai-purpose"
           label="Låt AI föreslå syfte"
-          hint="För tjänsteresor formulerar AI ett förslag på syfte när reglerna inte räcker. Avstängt används bara dina tidigare syften."
+          hint="För tjänsteresor formulerar AI ett färdigt ärende i samma stil som dina tidigare. Du godkänner det med ett tryck – AI godkänner aldrig något själv."
         />
-        <BoolRow
-          form={form}
-          path="ai.send_calendar_subjects"
-          id="ai-cal-subject"
-          label="Kalenderhändelsers rubrik"
-          hint="Rubrik, tid och plats för möten som ligger nära resan – det som oftast avgör syftet."
-        />
-        <BoolRow
-          form={form}
-          path="ai.send_calendar_body"
-          id="ai-cal-body"
-          label="Kalenderhändelsers brödtext"
-          hint="Början av mötets beskrivning. Kräver också att brödtexten sparas, se sektionen Kalender."
-        />
-        <BoolRow
-          form={form}
-          path="ai.send_street_addresses"
-          id="ai-street"
-          label="Gatuadresser"
-          hint="Avstängt skickas bara platsens namn och ort, aldrig gata och nummer."
-        />
+        {!full ? (
+          <>
+            <BoolRow
+              form={form}
+              path="ai.send_calendar_subjects"
+              id="ai-cal-subject"
+              label="Kalenderhändelsers rubrik"
+              hint="Rubrik, tid och plats för möten som ligger nära resan – det som oftast avgör syftet."
+            />
+            <BoolRow
+              form={form}
+              path="ai.send_calendar_body"
+              id="ai-cal-body"
+              label="Kalenderhändelsers brödtext"
+              hint="Början av mötets beskrivning. Kräver också att hela bokningen läses, se sektionen Kalender."
+            />
+            <BoolRow
+              form={form}
+              path="ai.send_street_addresses"
+              id="ai-street"
+              label="Gatuadresser"
+              hint="Avstängt skickas bara platsens namn och ort, aldrig gata och nummer."
+            />
+          </>
+        ) : null}
         <SettingsSaveBar form={form} save={save} defaults />
       </FormCard>
     </section>

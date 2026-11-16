@@ -6,13 +6,23 @@ import { formatNumber, formatPercent } from "@/lib/format";
 import type { SettingsPayload } from "@/lib/settings-page-types";
 import { cn } from "@/lib/utils";
 import { useReportDirty } from "./dirty-context";
+import { Input } from "@/components/ui/input";
 import { Advanced, BoolRow, FormCard, NumberRow, SectionIntro, SettingRow, SettingsSaveBar, Slider } from "./form-parts";
 import { useSectionSave, useSettingsForm, type FieldSpecs } from "./use-settings-form";
+
+/** calendar.work_domain (settings.py): gemener, bara domänen. Tom = ingen kollega/extern-märkning. */
+const DOMAIN_RE = /^[a-z0-9.-]+\.[a-z]{2,}$/;
 
 /** Gränsvärden enligt backend/app/services/settings.py (_BOUNDS). Tidsfönstren saknar gräns i backend – rimliga gränser här. */
 const FIELDS: FieldSpecs = {
   "calendar.enabled": { type: "bool" },
   "calendar.store_body_preview": { type: "bool" },
+  "calendar.work_domain": {
+    type: "text",
+    name: "Min arbetsgivares e-postdomän",
+    maxLength: 120,
+    validate: (v) => (v === "" || DOMAIN_RE.test(v) ? null : "Ange bara domänen, till exempel exempelakeri.se."),
+  },
   "calendar.arrival_window_before_minutes": { type: "number", name: "Tidsfönstret före mötet", min: 0, max: 24 * 60, integer: true },
   "calendar.arrival_window_after_minutes": { type: "number", name: "Tidsfönstret efter mötets start", min: 0, max: 24 * 60, integer: true },
   "calendar.min_match_score": { type: "number", name: "Minsta träffpoäng", min: 0, max: 1 },
@@ -28,6 +38,9 @@ export function CalendarSection({ data }: { data: SettingsPayload }) {
 
   const enabled = !form.has("calendar.enabled") || form.bool("calendar.enabled");
   const score = form.number("calendar.min_match_score") ?? 0.45;
+  // Ifylld av DriveLog efter en synk – så länge ägaren inte har ändrat fältet.
+  const autoDomain =
+    data.settings.calendar?.work_domain_source === "auto" && form.text("calendar.work_domain") === String(data.settings.calendar?.work_domain ?? "");
   const std = (path: string, unit: string) => {
     const v = form.defaultOf(path);
     return typeof v === "number" ? ` Standard: ${formatNumber(v, 2, 0)} ${unit}.` : "";
@@ -66,9 +79,33 @@ export function CalendarSection({ data }: { data: SettingsPayload }) {
             form={form}
             path="calendar.store_body_preview"
             id="cal-body"
-            label="Spara början av mötets beskrivning"
-            hint="Ger lite bättre syftesförslag men sparar mer av din kalender på servern. Av som standard – rubrik, tid och plats räcker oftast."
+            label="Läs hela bokningen – beskrivning och deltagare"
+            hint="Behövs för att AI ska kunna skriva ärenden som ”Kundbesök hos … med Lennart”. Möteslänkar, inringningsnummer och lösenord tas bort innan något skickas till AI."
           />
+          {form.has("calendar.work_domain") ? (
+            <SettingRow
+              htmlFor="cal-domain"
+              label="Min arbetsgivares e-postdomän"
+              hint={`Deltagare med samma domän räknas som kollegor, övriga som externa (kunder, kandidater, leverantörer).${
+                autoDomain ? " Ifylld av DriveLog ur kalendern – ändra om den är fel." : ""
+              }`}
+              error={form.error("calendar.work_domain")}
+            >
+              <Input
+                id="cal-domain"
+                value={form.text("calendar.work_domain")}
+                onChange={(e) => form.set("calendar.work_domain", e.target.value.trim().toLowerCase())}
+                placeholder="exempelakeri.se"
+                autoComplete="off"
+                autoCapitalize="none"
+                spellCheck={false}
+                inputMode="url"
+                className="w-full sm:w-56"
+                aria-describedby="cal-domain-hint"
+                aria-invalid={form.error("calendar.work_domain") ? true : undefined}
+              />
+            </SettingRow>
+          ) : null}
           <Advanced
             summary="tidsfönster och träffsäkerhet"
             hasError={advancedPaths.some((p) => !!form.error(p))}

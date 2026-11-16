@@ -44,7 +44,7 @@ const INTEGRATIONS_KEY = ["integrations"] as const;
 const INTEGRATIONS_TOKENS_KEY = ["integrations", "tokens"] as const;
 
 /** Sektioner där backend räknar om förslagen för oavgjorda resor när något ändras. */
-const REEVALUATING_SECTIONS = new Set(["tax", "ai", "calendar", "abbreviations"]);
+const REEVALUATING_SECTIONS = new Set(["tax", "ai", "calendar", "abbreviations", "lunch", "automation"]);
 /** Sektioner som speglas i integrationsvyn (AI-sekretess, notiser, kalender). */
 const MIRRORED_IN_INTEGRATIONS = new Set(["ai", "notifications", "calendar"]);
 

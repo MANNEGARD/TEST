@@ -15,7 +15,7 @@ import { ErrorState } from "@/components/ui/error-state";
 import { FieldError } from "@/components/ui/input";
 import { SkeletonBlock } from "@/components/ui/skeleton";
 import { errorMessage } from "@/lib/api";
-import { formatDateTime, plural } from "@/lib/format";
+import { formatDateTime, formatNumber, plural } from "@/lib/format";
 import { useIcsStatus, useIcsSync, useRemoveIcsLink, useSaveIcsLink } from "@/lib/queries/integrations";
 import { ConfirmButton, LastErrorNote, Note, notifyError, Section, SecretField } from "./shared";
 
@@ -96,6 +96,7 @@ export function IcsLinkSection() {
                 Senast synkad {formatDateTime(s.last_success_at)} · {plural(s.stored_events, "händelse", "händelser")} sparade.
               </p>
             ) : null}
+            {s.last_success_at ? <CalendarDetails stored={s.stored_events} withDescription={s.events_with_description} withAttendees={s.events_with_attendees} /> : null}
           </div>
         ) : null}
 
@@ -160,5 +161,31 @@ export function IcsLinkSection() {
         ) : null}
       </div>
     </Section>
+  );
+}
+
+/**
+ * "{n} av {m} bokningar har beskrivning, {k} har deltagare" efter en synk (1.3.0), och raden om
+ * saknade deltagare när beskrivningar finns men inga deltagare. Visas bara när servern räknar.
+ */
+export function CalendarDetails({
+  stored,
+  withDescription,
+  withAttendees,
+}: {
+  stored: number;
+  withDescription: number | null | undefined;
+  withAttendees: number | null | undefined;
+}) {
+  if (withDescription == null || withAttendees == null || stored <= 0) return null;
+  return (
+    <>
+      <p data-testid="calendar-details">
+        {formatNumber(withDescription, 0)} av {plural(stored, "bokning", "bokningar")} har beskrivning, {formatNumber(withAttendees, 0)} har deltagare.
+      </p>
+      {withDescription > 0 && withAttendees === 0 ? (
+        <p data-testid="calendar-no-attendees">Länken innehåller inga deltagare – Outlook tar inte alltid med dem i en delad kalender.</p>
+      ) : null}
+    </>
   );
 }

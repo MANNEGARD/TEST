@@ -9,6 +9,7 @@ import {
   Merge,
   ShieldCheck,
   Sparkles,
+  UtensilsCrossed,
   Wand2,
   WholeWord,
   type LucideIcon,
@@ -23,6 +24,7 @@ export type SectionKey =
   | "ersattning"
   | "sammanslagning"
   | "automatik"
+  | "lunch"
   | "forslag"
   | "notiser"
   | "kalender"
@@ -46,6 +48,7 @@ export const SECTIONS: SectionDef[] = [
   { key: "ersattning", label: "Milersättning och export", short: "Milersättning", icon: HandCoins, group: "journal" },
   { key: "sammanslagning", label: "Sammanslagning av resor", short: "Sammanslagning", icon: Merge, group: "journal" },
   { key: "automatik", label: "Självgående läge", short: "Automatik", icon: Wand2, group: "automation" },
+  { key: "lunch", label: "Lunchregeln", short: "Lunch", icon: UtensilsCrossed, group: "automation" },
   { key: "forslag", label: "Förslag och AI", short: "Förslag och AI", icon: Sparkles, group: "automation" },
   { key: "notiser", label: "Notiser", short: "Notiser", icon: Bell, group: "automation" },
   { key: "kalender", label: "Kalender", short: "Kalender", icon: CalendarDays, group: "automation" },

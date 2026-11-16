@@ -16,6 +16,7 @@ import { AutomationSection } from "./automation-section";
 import { BackupSection } from "./backup-section";
 import { CalendarSection } from "./calendar-section";
 import { DirtyContext } from "./dirty-context";
+import { LunchSection } from "./lunch-section";
 import { MergeSection } from "./merge-section";
 import { NotificationsSection } from "./notifications-section";
 import { PrivacySection } from "./privacy-section";
@@ -30,6 +31,7 @@ const PANELS: Record<SectionKey, React.ComponentType<{ data: SettingsPayload }>>
   ersattning: ReimbursementSection,
   sammanslagning: MergeSection,
   automatik: AutomationSection,
+  lunch: LunchSection,
   forslag: AiSection,
   notiser: NotificationsSection,
   kalender: CalendarSection,

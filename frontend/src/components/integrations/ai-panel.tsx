@@ -43,6 +43,16 @@ function PrivacyFlag({ label, sent }: { label: string; sent: boolean }) {
   );
 }
 
+/** Det fullständiga underlaget i korthet (samma innehåll som radiotexten under Inställningar → Förslag och AI). */
+const FULL_CONTENTS = [
+  "Namn och gatuadress för start och mål – även hemmet och privata platser",
+  "Kartans namn och typ för okända ställen",
+  "Dagens alla resor, resan före och efter, historiken för samma mål och rutt",
+  "Dina regler och platsanteckningar, arbetsgivarens namn och Om mitt arbete",
+  "Kalenderbokningar för dagen och vid resor till en annan ort hela vistelsen: rubrik, plats, beskrivning och deltagarnas namn (kollega eller extern, och den externa e-postdomänen)",
+  "Privata bokningar bara som tid, utan text",
+];
+
 export function AiPanel({ status }: { status: AiStatus }) {
   const save = useConfigureAi();
   const remove = useRemoveAi();
@@ -57,6 +67,7 @@ export function AiPanel({ status }: { status: AiStatus }) {
   const hasSavedKey = provider !== "none" && status.has_key[provider];
   const dirty = provider !== status.provider_name || apiKey.trim() !== "" || (provider !== "none" && model.trim() !== status.model);
   const anyKey = status.has_key.anthropic || status.has_key.openai;
+  const full = status.privacy.context_level === "full";
 
   const chooseProvider = (next: AiProviderName) => {
     setProvider(next);
@@ -143,30 +154,48 @@ export function AiPanel({ status }: { status: AiStatus }) {
         </form>
       </Section>
 
-      <Section title="Vad som skickas" description="Gäller bara när en leverantör är vald. Varje förfrågan innehåller så lite som möjligt.">
+      <Section
+        title="Vad som skickas"
+        description={full ? "Gäller bara när en leverantör är vald. Allt som hjälper bedömningen skickas." : "Gäller bara när en leverantör är vald. Varje förfrågan innehåller så lite som möjligt."}
+      >
+        <p className="text-[13px] text-fg" data-testid="ai-context-level">
+          <span className="font-medium">Underlag: {full ? "Fullständigt" : "Minimalt"}</span>
+        </p>
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="rounded-lg border border-border p-3">
             <p className="flex items-center gap-1.5 text-xs font-semibold text-fg">
               <Upload className="size-3.5 text-fg-muted" aria-hidden /> Skickas
             </p>
-            <p className="mt-1.5 text-[13px] leading-relaxed text-fg-muted">{status.privacy.sends}</p>
+            {full ? (
+              <ul className="mt-1.5 list-disc space-y-0.5 pl-4 text-[13px] leading-relaxed text-fg-muted">
+                {FULL_CONTENTS.map((line) => (
+                  <li key={line}>{line}</li>
+                ))}
+              </ul>
+            ) : (
+              <p className="mt-1.5 text-[13px] leading-relaxed text-fg-muted">{status.privacy.sends}</p>
+            )}
           </div>
           <div className="rounded-lg border border-ok/30 bg-ok-soft/50 p-3">
             <p className="flex items-center gap-1.5 text-xs font-semibold text-ok-ink">
               <ShieldCheck className="size-3.5" aria-hidden /> Skickas aldrig
             </p>
-            <p className="mt-1.5 text-[13px] leading-relaxed text-fg">{status.privacy.never_sends}</p>
+            <p className="mt-1.5 text-[13px] leading-relaxed text-fg">
+              {full ? "Koordinater, chassinummer, nycklar, lösenord, kalenderlänken och e-postadresser. Koder och lösenord i bokningar och anteckningar tas bort före sändningen." : status.privacy.never_sends}
+            </p>
           </div>
         </div>
-        <ul className="divide-y divide-border rounded-lg border border-border text-[13px]">
-          <PrivacyFlag label="Kalenderhändelsers rubrik" sent={status.privacy.send_calendar_subjects} />
-          <PrivacyFlag label="Kalenderhändelsers brödtext" sent={status.privacy.send_calendar_body} />
-          <PrivacyFlag label="Gatuadresser" sent={status.privacy.send_street_addresses} />
-        </ul>
+        {full ? null : (
+          <ul className="divide-y divide-border rounded-lg border border-border text-[13px]">
+            <PrivacyFlag label="Kalenderhändelsers rubrik" sent={status.privacy.send_calendar_subjects} />
+            <PrivacyFlag label="Kalenderhändelsers brödtext" sent={status.privacy.send_calendar_body} />
+            <PrivacyFlag label="Gatuadresser" sent={status.privacy.send_street_addresses} />
+          </ul>
+        )}
         <p className="text-xs text-fg-muted">
-          De tre valen ändras under{" "}
-          <Link href="/settings" className="font-medium text-accent-ink underline-offset-2 hover:underline">
-            Inställningar
+          {full ? "Underlagsnivån ändras under " : "Underlagsnivån och de tre valen ändras under "}
+          <Link href="/settings?sektion=forslag" className="font-medium text-accent-ink underline-offset-2 hover:underline">
+            Inställningar → Förslag och AI
           </Link>
           .
         </p>

@@ -180,12 +180,14 @@ const ALL_PAGES = [
   ["/settings/", "installningar"], ["/integrations/", "integrationer"], ["/energy/", "energi"], ["/import/", "import"],
   ["/m/month/2026-10/", "manad-oktober"], ["/m/month/2026-11/", "manad-november"],
 ];
-const SETTINGS = ["fordon", "ersattning", "sammanslagning", "automatik", "forslag", "notiser", "kalender", "tjanstestalle", "forkortningar", "sekretess", "sakerhet", "sakerhetskopia"];
+const SETTINGS = ["fordon", "ersattning", "sammanslagning", "automatik", "lunch", "forslag", "notiser", "kalender", "tjanstestalle", "forkortningar", "sekretess", "sakerhet", "sakerhetskopia"];
 const trips = Object.values(seed.trips).map((d) => d.trip);
 const questions = Object.values(seed.notifications);
 // Demots importerade resor (1.3.0) har de sista id:na i den förbyggda uppsättningen (state.ts).
 const poolTripId = (n) => `00000000-0000-4000-8000-${String(n + 1).padStart(12, "0")}`;
 const importedTripId = (n) => poolTripId(40 - 1 - n);
+// Demoresan vars ärende kom ur kalendern när den godkändes av ägarens regel (server.ts CALENDAR_TRIP).
+const CALENDAR_TRIP = "2e40532a-d7f6-45e3-9e7d-ed7f9a66e8e1";
 /** Antal rader texten i elementet bryts på (1 = får plats på en rad). */
 const lineCount = (locator) =>
   locator.evaluate((el) => {
@@ -259,6 +261,51 @@ try {
   });
 
   const reviewTotal = async () => (await api(page, "GET", `/review?status=open&limit=200&vehicle_id=${seed.vehicleId}`)).open_total;
+
+  await section("AI-genomgång", async () => {
+    step("Granskning → Gå igenom väntande med AI (utan leverantör): bara reglerna, förlopp och Klart");
+    await visit(page, "/review/");
+    await page.getByTestId("review-ai-review").click();
+    const dialog = page.getByTestId("ai-review-dialog");
+    await dialog.waitFor({ timeout: 5000 });
+    await dialog.getByTestId("ai-review-intro").or(dialog.getByTestId("ai-review-empty")).waitFor({ timeout: 8000 });
+    if (await dialog.getByTestId("ai-review-empty").count()) {
+      fail("genomgången hittade inga väntande resor fast startdatat har sådana");
+      await page.keyboard.press("Escape");
+    } else {
+      const intro = await dialog.innerText();
+      if (!intro.includes("bara reglerna")) fail("genomgången utan leverantör säger inte att bara reglerna används");
+      await page.screenshot({ path: path.join(SHOTS, "ai-genomgang-start.png"), fullPage: true });
+      await dialog.getByTestId("ai-review-start").click();
+      const summary = dialog.getByTestId("ai-review-summary");
+      await summary.waitFor({ timeout: 20000 });
+      if (!(await summary.innerText()).startsWith("Klart:")) fail(`genomgången slutade med "${await summary.innerText()}"`);
+      await page.screenshot({ path: path.join(SHOTS, "ai-genomgang-klar.png"), fullPage: true });
+      await dialog.getByTestId("ai-review-close").click();
+    }
+
+    step("Resans klassningskort: Bedöm igen öppnar genomgången för resan");
+    const open = (await api(page, "GET", "/trips?page_size=500")).items.find((t) => t.review_status === "needs_review" || t.review_status === "proposed");
+    if (!open) throw new Error("ingen oavgjord demoresa");
+    await visit(page, `/journal/${open.id}/`);
+    const again = page.getByTestId("trip-ai-review");
+    if (!(await again.innerText()).includes("Bedöm igen")) fail("klassningskortet saknar Bedöm igen");
+    await again.click();
+    await dialog.getByTestId("ai-review-start").click();
+    await dialog.getByTestId("ai-review-summary").waitFor({ timeout: 10000 });
+    await dialog.getByTestId("ai-review-close").click();
+    const approved = (await api(page, "GET", "/trips?page_size=500")).items.find((t) => t.review_status === "approved");
+    await visit(page, `/journal/${approved.id}/`);
+    if (await page.getByTestId("trip-ai-review").count()) fail("Bedöm igen visas på en godkänd resa");
+
+    step("Körjournalen: Gå igenom med AI för en vald resa öppnar genomgången");
+    await visit(page, "/journal/");
+    await page.getByTestId("trip-row").first().getByRole("checkbox").click();
+    await page.getByTestId("bulk-ai-review").click();
+    await dialog.waitFor({ timeout: 5000 });
+    await dialog.getByText(/Det finns inga resor att gå igenom|skickas till|bara reglerna/).first().waitFor({ timeout: 8000 });
+    await page.keyboard.press("Escape");
+  });
 
   await section("granskning", async () => {
     step("Granskning: ett beslut minskar räknaren och översikten följer med");
@@ -694,6 +741,88 @@ try {
     await page.screenshot({ path: path.join(SHOTS, "manad-skapad-i-forvag.png"), fullPage: true });
   });
 
+  await section("förslag och AI", async () => {
+    step("Inställningar → Förslag och AI: två underlagsnivåer med Fullständigt valt, Om mitt arbete sparas");
+    await visit(page, "/settings/?sektion=forslag", "ai-underlag");
+    const panel = page.getByTestId("settings-panel-forslag");
+    const full = panel.getByRole("radio", { name: /Fullständigt underlag/ });
+    const minimal = panel.getByRole("radio", { name: /Minimalt/ });
+    if (!(await full.count()) || !(await minimal.count())) fail("underlagsnivåerna saknas");
+    else if (!(await full.isChecked())) fail("Fullständigt underlag är inte valt");
+    if (await panel.getByText("Gatuadresser", { exact: true }).count()) fail("minimal-valen visas vid Fullständigt");
+    if (!(await panel.getByText(/Privata bokningar skickas bara som tid/).count())) fail("radiotexten om privata bokningar saknas");
+    await panel.locator("label").filter({ has: minimal }).click();
+    if (!(await panel.getByText("Gatuadresser", { exact: true }).count())) fail("minimal-valen visas inte vid Minimalt");
+    await panel.locator("label").filter({ has: full }).click();
+    if (!(await full.isChecked())) fail("Fullständigt underlag gick inte att välja igen");
+    await page.locator("#ai-about-work").fill("Jag är servicetekniker på Exempel Åkeri AB och besöker kunder i länet.");
+    await panel.getByRole("button", { name: "Spara" }).click();
+    await expectText(page, "Inställningarna för förslag och AI är sparade.");
+    const ai = (await api(page, "GET", "/settings")).settings.ai;
+    if (ai.context_level !== "full" || !String(ai.about_work).startsWith("Jag är servicetekniker")) fail(`AI-inställningarna sparades fel: ${JSON.stringify(ai)}`);
+    await visit(page, "/integrations/");
+    const integ = await api(page, "GET", "/integrations/ai");
+    if (integ.privacy?.context_level !== "full") fail("integrationen säger inte Fullständigt underlag");
+  });
+
+  await section("lunchregeln", async () => {
+    step("Inställningar → Lunchregeln: mönstret, valideringen och sparat");
+    await visit(page, "/settings/?sektion=lunch", "lunchregeln");
+    const panel = page.getByTestId("settings-panel-lunch");
+    const pattern = page.getByTestId("lunch-pattern");
+    const text = await pattern.innerText();
+    for (const t of ["Resan börjar vid ett av era kontor en arbetsdag.", "högst 10 minuter och 8 km", "mellan 20 och 45", "mellan 11:00 och 13:00", "Klockslaget ensamt gör aldrig en resa privat"]) {
+      if (!text.replace(/\s+/g, " ").includes(t)) fail(`lunchmönstret saknar "${t}"`);
+    }
+    if (await page.getByTestId("lunch-office-missing").count()) fail("varningen om saknat kontor visas fast demot har ett kontor");
+    await page.locator("#lunch-start").fill("13:30");
+    await expectText(page, "Lunchfönstrets början måste ligga före slutet.");
+    await page.locator("#lunch-start").fill("11:15");
+    await page.locator("#lunch-max-stop").fill("40");
+    if (!(await pattern.innerText()).replace(/\s+/g, " ").includes("mellan 20 och 40")) fail("mönstret följer inte den ändrade gränsen");
+    await panel.getByRole("button", { name: "Spara" }).click();
+    await expectText(page, "Lunchregeln är sparad.");
+    const lunch = (await api(page, "GET", "/settings")).settings.lunch;
+    if (lunch.window_start !== "11:15" || lunch.max_stop_minutes !== 40 || lunch.enabled !== true) fail(`lunchregeln sparades fel: ${JSON.stringify(lunch)}`);
+  });
+
+  await section("kalender och tjänsteställe", async () => {
+    step("Kalender: Läs hela bokningen är påslagen och domänfältet är ifyllt; Tjänsteställe: hem ↔ kontor");
+    await visit(page, "/settings/?sektion=kalender", "kalender-hela-bokningen");
+    const body = page.locator("#cal-body");
+    if ((await body.getAttribute("aria-checked")) !== "true") fail("Läs hela bokningen är inte påslagen");
+    if (!(await page.getByText("Läs hela bokningen – beskrivning och deltagare").count())) fail("texten Läs hela bokningen saknas");
+    if ((await page.locator("#cal-domain").inputValue()) !== "exempelakeri.se") fail("domänfältet är inte ifyllt");
+    if (!(await page.getByText(/Ifylld av DriveLog ur kalendern/).count())) fail("domänfältet säger inte att DriveLog fyllde i det");
+    await page.locator("#cal-domain").fill("Exempel Åkeri");
+    await expectText(page, "Ange bara domänen, till exempel exempelakeri.se.");
+    await page.getByTestId("settings-panel-kalender").getByRole("button", { name: "Ångra" }).click();
+    await visit(page, "/settings/?sektion=tjanstestalle", "tjanstestalle-hem-kontor");
+    if (!(await page.getByText("Resor mellan hemmet och våra kontor är tjänsteresor och godkänns automatiskt").count())) fail("valet hem ↔ kontor saknas");
+    if ((await page.locator("#auto-home-office").getAttribute("aria-checked")) !== "true") fail("hem ↔ kontor är inte påslaget i demot");
+  });
+
+  await section("ärende ur kalendern", async () => {
+    step("Klassningskortet: Ur kalendern och Ärendet stämmer inte; månadens genomgång visar samma");
+    await visit(page, `/journal/${CALENDAR_TRIP}/`, "resa-ur-kalendern");
+    const badge = page.getByTestId("purpose-badge");
+    if (!(await badge.count()) || (await badge.first().innerText()).trim() !== "Ur kalendern") fail("märket Ur kalendern saknas på resan");
+    if (!(await page.getByTestId("reject-calendar-purpose").count())) fail("knappen Ärendet stämmer inte saknas på resan");
+    await visit(page, "/m/month/2026-11/", "manad-ur-kalendern");
+    if (!(await page.getByTestId("month-review-calendar").count())) fail("månadens genomgång märker inte ärendet ur kalendern");
+    await visit(page, "/export/");
+    const note = page.getByTestId("month-note-purpose_from_calendar");
+    await note.waitFor({ timeout: 8000 });
+    if (!(await note.innerText()).includes("Ärende ur kalendern: 1 resa")) fail("månadskortet saknar raden Ärende ur kalendern");
+    await note.getByRole("button", { name: "Se resorna" }).click();
+    await note.getByTestId("reject-calendar-purpose").click();
+    await expectText(page, "Kalenderns ärende är borttaget");
+    await note.waitFor({ state: "detached", timeout: 8000 }).catch(() => fail("raden Ärende ur kalendern finns kvar efter rättelsen"));
+    const d = await api(page, "GET", `/trips/${CALENDAR_TRIP}`);
+    if (d.trip.purpose_confirmed) fail("ärendet är fortfarande bekräftat efter Ärendet stämmer inte");
+    if (!d.purpose_history.length || d.purpose_history.find((p) => p.is_current)?.from_calendar) fail("ärendet står kvar som ur kalendern");
+  });
+
   await section("återställ", async () => {
     step("Återställ demot: tillbaka till startdatat");
     await visit(page, "/");
@@ -719,6 +848,14 @@ try {
     if (gap) await visit(p, `/journal/${gap.id}/`, "mork-resa-uppehall");
     await visit(p, "/export/?manad=2026-10", "mork-export-oktober");
     await visit(p, "/settings/?sektion=sammanslagning", "mork-sammanslagning");
+    await visit(p, "/settings/?sektion=forslag", "mork-forslag");
+    await visit(p, "/settings/?sektion=lunch", "mork-lunch");
+    await visit(p, `/journal/${CALENDAR_TRIP}/`, "mork-resa-ur-kalendern");
+    await visit(p, "/review/");
+    await p.getByTestId("review-ai-review").click();
+    await p.getByTestId("ai-review-intro").waitFor({ timeout: 8000 });
+    await p.screenshot({ path: path.join(SHOTS, "mork-ai-genomgang.png"), fullPage: true });
+    await p.keyboard.press("Escape");
     await visit(p, `/m/q/${questions[0].public_id}/`, "mork-snabbfraga");
     if ((await p.locator("html").getAttribute("data-theme")) !== "dark") fail("temat blev inte mörkt");
     await dark.close();
@@ -747,6 +884,10 @@ try {
     for (const [route, name] of [
       [`/journal/${importedTripId(1)}/`, "mobil-resa-importerad"],
       ["/settings/?sektion=sammanslagning", "mobil-sammanslagning"],
+      ["/settings/?sektion=forslag", "mobil-forslag"],
+      ["/settings/?sektion=lunch", "mobil-lunch"],
+      ["/settings/?sektion=kalender", "mobil-kalender"],
+      [`/journal/${CALENDAR_TRIP}/`, "mobil-resa-ur-kalendern"],
     ]) {
       await visit(p, route, name);
       const wide = await p.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);

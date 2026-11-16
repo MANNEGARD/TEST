@@ -21,7 +21,7 @@ import {
   useSaveMicrosoftCredentials,
   useSelectMicrosoftCalendars,
 } from "@/lib/queries/integrations";
-import { IcsLinkSection } from "./ics-link";
+import { CalendarDetails, IcsLinkSection } from "./ics-link";
 import { ConfirmButton, CopyField, DemoBlock, DemoVehicleSwitch, Field, Note, notifyError, Section, SecretField, StatusNote } from "./shared";
 
 /** "Synka nu" med kvitto – används både på kortet och i panelen. */
@@ -254,7 +254,15 @@ export function OutlookPanel({ status }: { status: MicrosoftStatus }) {
         {hasAccount ? (
           <>
             <CalendarPicker />
-            <p className="text-xs text-fg-muted">{plural(status.stored_events, "kalenderhändelse är sparad", "kalenderhändelser är sparade")} i DriveLog.</p>
+            <div className="space-y-0.5 text-xs text-fg-muted">
+              <p>{plural(status.stored_events, "kalenderhändelse är sparad", "kalenderhändelser är sparade")} i DriveLog.</p>
+              <CalendarDetails stored={status.stored_events} withDescription={status.events_with_description} withAttendees={status.events_with_attendees} />
+            </div>
+            {status.tip ? (
+              <Note icon={<Info aria-hidden />} role="status">
+                <p data-testid="outlook-tip">{status.tip}</p>
+              </Note>
+            ) : null}
           </>
         ) : null}
       </Section>
@@ -263,7 +271,7 @@ export function OutlookPanel({ status }: { status: MicrosoftStatus }) {
         <Note icon={<Info aria-hidden />}>
           <p>
             Ett möte nära resans ankomst, på en plats som stämmer med målet, tyder på tjänsteresa och ger ett förslag på syfte. DriveLog läser bara rubrik, tid och plats
-            {status.stores_body_preview ? " samt en kort förhandsvisning av brödtexten" : ""} – kalendern är en ledtråd, aldrig ett facit.
+            {status.stores_body_preview ? " samt hela beskrivningen och deltagarnas namn" : ""} – kalendern är en ledtråd, aldrig ett facit.
           </p>
         </Note>
         {!isDemo && (status.demo_events ?? 0) > 0 ? (

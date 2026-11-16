@@ -125,6 +125,7 @@ _PLACE_AI_KINDS = ("work", "unclear")
 _SAFE_SIGNAL_KINDS = {
     "manual_rule", "confirmed_history", "imported_history", "user_corrections", "private_place", "home_is_workplace",
     "commute", "regular_workplace", "refuel_stop", "return_trip", "hotel", "continuation", "unknown_destination",
+    "home_office_work", "lunch_pattern",
 }
 # Sanerade beskrivningar för signaler vars UI-text kan innehålla platsnamn, adresser eller kalenderrubriker.
 _LLM_SIGNAL_TEXT = {
@@ -135,6 +136,7 @@ _LLM_SIGNAL_TEXT = {
     "calendar_context": "Kalenderbokning vid resans tid utan platsuppgift",
     "calendar_private": "Matchande kalenderbokning märkt som privat",
     "calendar_conflict": "Kalenderbokning på annan plats vid samma tid",
+    "calendar_ahead": "Kalenderbokningar på resmålets ort de närmaste dagarna",
 }
 
 
@@ -365,6 +367,20 @@ def _place_needs_ai(ctx: TripContext) -> bool:
     )
 
 
+def _level(ai: dict[str, Any]) -> str:
+    value = ai.get("context_level", settings_svc.CONTEXT_FULL)
+    return value if value in settings_svc.CONTEXT_LEVELS else settings_svc.CONTEXT_FULL
+
+
+def _always_rule(proposal: PurposeProposal | None) -> bool:
+    """Steg 0: ägarens egen regel med fast text i läget "alltid"."""
+    return (
+        proposal is not None
+        and bool(proposal.based_on.get("manual_rule"))
+        and proposal.based_on.get("purpose_mode") == purpose_mod.PURPOSE_MODE_ALWAYS
+    )
+
+
 def _should_call_llm(
     rules: RuleResult, proposal: PurposeProposal | None, ctx: TripContext, *, place_ai: bool = False
 ) -> bool:
@@ -374,6 +390,17 @@ def _should_call_llm(
         return False  # manuell regel "fråga mig alltid": AI får inte heller föreslå kategori
     if place_ai and rules.category == Category.UNDECIDED:
         return True  # självgående läge: en okänd plats med namn bedöms av AI (A.3)
+    if _level(ctx.ai) == settings_svc.CONTEXT_FULL:
+        # Fullständigt underlag: AI har alltid något att väga (inget krav på signaler).
+        if rules.category == Category.UNDECIDED:
+            return True
+        if rules.category == Category.WORK and ctx.ai.get("use_llm_for_purpose", True):
+            if _always_rule(proposal):
+                return False
+            if sig.calendar_support(ctx) == "strong":
+                return True  # steg 1a: kalendern + AI först för ärendet
+            return not purpose_mod.is_fixed(proposal)
+        return False
     has_material = any(s.direction != "neutral" for s in rules.signals) or bool(ctx.calendar_matches)
     if not has_material:
         return False  # inget underlag – en LLM kan bara gissa
@@ -385,7 +412,27 @@ def _should_call_llm(
     return False
 
 
-def _inputs_hash(rules: RuleResult, proposal: PurposeProposal | None, ai: dict[str, Any], provider_id: str) -> str:
+def _calendar_ids(ctx: TripContext) -> list[str]:
+    """Bokningarna som ärendet kan bygga på: den valda träffen, vistelsen på orten och de närmaste dagarna."""
+    ids: list[str] = []
+    sel = ctx.selected_match
+    if sel is not None:
+        ids.append(str(sel[1].id))
+    if ctx.calendar_stay is not None:
+        ids += [str(ev.id) for ev in ctx.calendar_stay.near]
+    if ctx.calendar_ahead is not None:
+        ids += [str(ev.id) for ev in ctx.calendar_ahead.usable]
+    out: list[str] = []
+    for i in ids:
+        if i not in out:
+            out.append(i)
+    return out[:40]
+
+
+def _inputs_hash(
+    rules: RuleResult, proposal: PurposeProposal | None, ai: dict[str, Any], provider_id: str,
+    ctx: TripContext | None = None,
+) -> str:
     basis = {
         "v": ENGINE_VERSION,
         "category": rules.category,
@@ -398,6 +445,10 @@ def _inputs_hash(rules: RuleResult, proposal: PurposeProposal | None, ai: dict[s
         "purpose": [proposal.text, proposal.source, proposal.needs_confirmation] if proposal else None,
         "thresholds": [ai.get("auto_threshold"), ai.get("review_threshold"), ai.get("strict_mode")],
         "provider": provider_id,
+        # 1.3.0: underlagets nivå och kalendern – en ändrad bokning ger en ny bedömning.
+        "level": _level(ai),
+        "about_work": ai.get("about_work") or "",
+        "calendar": [sig.calendar_support(ctx), _calendar_ids(ctx)] if ctx is not None else None,
     }
     return hashlib.sha256(json.dumps(basis, sort_keys=True, default=str).encode()).hexdigest()
 
@@ -468,14 +519,17 @@ def _prepare(
         cache["tax"] = settings_svc.get_section(db, user_id, "tax")
         cache["tz"] = settings_svc.user_timezone(db, user_id)
         cache["abbr"] = settings_svc.get_section(db, user_id, "abbreviations")["map"]
+    if "opts" not in cache:
+        cache["opts"] = sig.context_options(db, user_id)
     ai = cache["ai"]
     ctx = sig.build_context(
-        db, trip, user_id=user_id, tz=cache["tz"], tax=cache["tax"], ai=ai, abbreviations=cache["abbr"]
+        db, trip, user_id=user_id, tz=cache["tz"], tax=cache["tax"], ai=ai, abbreviations=cache["abbr"],
+        opts=cache["opts"],
     )
     rules = sig.evaluate(ctx)
     proposal = purpose_mod.propose(db, ctx, rules)
     provider_id = f"{provider.name}:{provider.model}" if (provider is not None and use_llm) else "none"
-    return _Prepared(ai, ctx, rules, proposal, _inputs_hash(rules, proposal, ai, provider_id))
+    return _Prepared(ai, ctx, rules, proposal, _inputs_hash(rules, proposal, ai, provider_id, ctx))
 
 
 def assess_trip(
@@ -511,10 +565,18 @@ def _assess(
 
     place_ai = provider is not None and _place_needs_ai(ctx) and _autopilot_holds(db, trip, user_id, cache)
     if provider is not None and _should_call_llm(rules, proposal, ctx, place_ai=place_ai):
-        if "private_terms" not in cache:
-            cache["private_terms"] = private_location_terms(db, user_id)
+        extra_texts: list[str] | None = None
+        if _level(ai) == settings_svc.CONTEXT_FULL:
+            from app.services.classify import underlag
+
+            document = underlag.build_full_document(db, ctx, rules, proposal, user_id=user_id, cfg=ai)
+            extra_texts = underlag.document_texts(document)
+        else:
+            if "private_terms" not in cache:
+                cache["private_terms"] = private_location_terms(db, user_id)
+            document = build_llm_document(ctx, rules, proposal, private_terms=cache["private_terms"])
         try:
-            result = provider.assess(build_llm_document(ctx, rules, proposal, private_terms=cache["private_terms"]))
+            result = provider.assess(document)
             _report_llm_outcome(db, user_id, None)
         except llm_mod.LLMError as exc:
             logger.warning("AI-leverantören svarade med fel: %s", exc)
@@ -553,33 +615,10 @@ def _assess(
                 )
             requires_review = requires_review or (data["requires_review"] and rules.category == Category.UNDECIDED)
 
-            # Genererat syfte: endast om alla namn är belagda i underlaget och ärendetypen
-            # (kundbesök, möte, personalärende …) har stöd i underlaget.
-            if category == Category.WORK and data["purpose"]:
-                keep_rule = proposal is not None and not (
-                    proposal.based_on.get("insufficient") or proposal.based_on.get("calendar_event_id")
+            if category == Category.WORK:
+                proposal = _ai_purpose(
+                    ctx, rules, proposal, data, model=result.model, extra_texts=extra_texts, signals=signals
                 )
-                if not keep_rule:
-                    ok, missing = purpose_mod.validate_generated(
-                        data["purpose"], ctx, rules=rules, rule_proposal=proposal
-                    )
-                    if ok:
-                        proposal = PurposeProposal(
-                            text=textnorm.sentence(data["purpose"]),
-                            source=DecisionSource.AI,
-                            rationale="AI-förslag utifrån: " + "; ".join(data["evidence"][:4]) if data["evidence"] else "AI-förslag.",
-                            needs_confirmation=True,
-                            based_on={"ai": True, "model": result.model},
-                        )
-                    else:
-                        signals.append(
-                            Signal(
-                                "ai_purpose_rejected",
-                                "AI-förslag till syfte avvisades: innehöll uppgifter utan stöd i underlaget",
-                                "neutral",
-                                data={"unsupported": missing},
-                            )
-                        )
 
     trip_category, review_status = _automation_level(category, confidence, requires_review, ai)
     assessment = Assessment(
@@ -600,6 +639,94 @@ def _assess(
         llm=llm_info,
     )
     return assessment
+
+
+def _fallback_text(ctx: TripContext) -> str:
+    """Reservmallen "Tjänsteresa till {plats}": målets bekräftade namn, kartans namn eller orten."""
+    from app.services.places.normalize import parse_address
+
+    d = ctx.destination
+    place = None
+    if d is not None and d.type not in (LocationType.HOME, LocationType.PRIVATE):
+        if d.confirmed and d.name:
+            place = d.company or d.name
+        elif d.name and not _name_is_address(d):
+            place = d.name
+    place = place or (d.city if d is not None else None) or parse_address(ctx.trip.end_address).city
+    from app.services.text_safety import sanitize_text
+
+    place = sanitize_text(place, limit=60)
+    return f"Tjänsteresa till {place}" if place else "Tjänsteresa"
+
+
+def _ai_purpose(
+    ctx: TripContext,
+    rules: RuleResult,
+    proposal: PurposeProposal | None,
+    data: dict[str, Any],
+    *,
+    model: str,
+    extra_texts: list[str] | None,
+    signals: list[Signal],
+) -> PurposeProposal | None:
+    """Ärendets text efter AI-svaret, i ordningen i byggkontraktet 3.E/3.F.
+
+    Steg 0 (egen regel "alltid") rörs aldrig. Vid starkt kalenderstöd (steg 1a) går AI:ns text
+    före regelns och historikens. Annars gäller ett fast regelförslag; ett kalenderförslag eller
+    ett otillräckligt förslag kan ersättas av AI:ns text. Ett namn som inte finns i underlaget,
+    fel form eller för lång text avvisar förslaget (nästa steg tas); en ärendetyp utan stöd
+    behålls men märks ``supported=False``. Allt AI-ärende kräver ägarens bekräftelse.
+    """
+    if _always_rule(proposal) or not ctx.ai.get("use_llm_for_purpose", True):
+        return proposal
+    support = sig.calendar_support(ctx)
+    if purpose_mod.is_fixed(proposal) and support != "strong":
+        return proposal
+    text = data.get("purpose")
+    accepted: PurposeProposal | None = None
+    if text:
+        check = purpose_mod.check_generated(text, ctx, rules=rules, rule_proposal=proposal, extra_texts=extra_texts)
+        if not check.ok:
+            label = (
+                "AI-förslag till syfte avvisades: innehöll namn som inte finns i underlaget"
+                if any(r.startswith("namn") for r in check.reasons)
+                else "AI-förslag till syfte avvisades: " + "; ".join(check.reasons)
+            )
+            signals.append(Signal("ai_purpose_rejected", label, "neutral", data={"unsupported": check.reasons}))
+        else:
+            weak = support != "strong" and purpose_mod.is_calendar_based(proposal) and (
+                proposal is not None and proposal.based_on.get("calendar") == "weak"
+            )
+            supported = bool(data.get("purpose_supported")) and check.supported and not weak
+            based_on: dict[str, Any] = {"ai": True, "model": model, "supported": supported}
+            if check.unsupported:
+                based_on["unsupported"] = check.unsupported
+            ids = _calendar_ids(ctx) if support in ("strong", "weak") else []
+            if ids:
+                based_on["calendar_event_ids"] = ids
+                based_on["calendar"] = "strong" if support == "strong" else "weak"
+            evidence = "; ".join(data.get("evidence", [])[:4])
+            rationale = ("AI-förslag utifrån: " + evidence) if evidence else "AI-förslag."
+            if not supported:
+                rationale = "Förslag att bekräfta – " + rationale
+            accepted = PurposeProposal(
+                text=textnorm.sentence(text.strip()),
+                source=DecisionSource.AI,
+                rationale=rationale,
+                needs_confirmation=True,
+                based_on=based_on,
+            )
+    if accepted is not None:
+        return accepted
+    if proposal is not None and not proposal.based_on.get("insufficient"):
+        return proposal  # nästa steg: regelns kalenderförslag, egen regel, historik …
+    return PurposeProposal(
+        text=_fallback_text(ctx),
+        source=DecisionSource.AI,
+        rationale="Förslag att bekräfta – AI gav inget användbart ärende.",
+        needs_confirmation=True,
+        based_on={"ai": True, "model": model, "supported": False, "fallback": True},
+    )
 
 
 def _current_classification(db: Session, trip_id: uuid.UUID) -> TripClassification | None:

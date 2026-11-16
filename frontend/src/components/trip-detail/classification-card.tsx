@@ -112,7 +112,7 @@ export function ClassificationCard({ detail }: { detail: TripDetail }) {
 
   return (
     <Card>
-      <CardHeader className="pb-2">
+      <CardHeader className="flex-wrap gap-2 pb-2">
         <CardTitle>Klassning</CardTitle>
         <ReviewStatusBadge status={t.review_status} approvalSource={t.approval_source} approvalReason={t.approval_reason} />
       </CardHeader>

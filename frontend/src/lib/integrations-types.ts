@@ -144,6 +144,11 @@ export interface MicrosoftStatus extends IntegrationView {
   selected_calendar_ids: string[];
   stored_events: number;
   stores_body_preview: boolean;
+  /** Antal sparade bokningar med beskrivning respektive deltagare (1.3.0, efter synk). */
+  events_with_description?: number | null;
+  events_with_attendees?: number | null;
+  /** Tips om kalendern (t.ex. att bokningarna saknar beskrivning). */
+  tip?: string | null;
   /** Påhittade demomöten som finns kvar (nyare backend). */
   demo_events?: number;
 }
@@ -180,6 +185,9 @@ export interface IcsStatus {
   last_error_at: string | null;
   stored_events: number;
   events_with_location: number | null;
+  /** Antal sparade bokningar med beskrivning respektive deltagare (1.3.0, efter synk). */
+  events_with_description?: number | null;
+  events_with_attendees?: number | null;
   tip: string | null;
   stores_body_preview: boolean;
   sync_days_back: number;
@@ -320,6 +328,8 @@ export interface AiStatus extends IntegrationView {
     send_calendar_subjects: boolean;
     send_calendar_body: boolean;
     send_street_addresses: boolean;
+    /** Underlagsnivå (1.3.0, ai.context_level). Saknas mot en äldre server = minimalt. */
+    context_level?: "full" | "minimal";
   };
   rule_engine_only: boolean;
 }

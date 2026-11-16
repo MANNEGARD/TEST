@@ -13,9 +13,11 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { errorMessage } from "@/lib/api";
 import { formatDateTime, formatDayMonth, formatTime, monthName, plural } from "@/lib/format";
 import type { ExportJob, MonthBlocker, MonthStatus } from "@/lib/exports-types";
-import { label, MONTH_STATE_LABELS } from "@/lib/labels";
+import { RejectCalendarPurposeButton } from "@/components/trip-detail/classification-card";
+import { label, MONTH_STATE_LABELS, PURPOSE_FROM_CALENDAR } from "@/lib/labels";
 import { exportDownloadUrl, useExports, useMonthClose, useRunMonthClose } from "@/lib/queries/exports";
 import { useSettings } from "@/lib/queries/settings";
+import { useTripDetail } from "@/lib/queries/trips";
 import { cn } from "@/lib/utils";
 import { monthLabel } from "./export-period";
 
@@ -57,7 +59,66 @@ function BlockerLine({ b }: { b: MonthBlocker }) {
   );
 }
 
+/**
+ * "Ärende ur kalendern: {n} resor" (beslut A): resor som godkändes automatiskt och fick sitt ärende ur
+ * en kalenderbokning utan fråga. Varje resa kan rättas med "Ärendet stämmer inte".
+ */
+function CalendarPurposeNote({ n }: { n: MonthBlocker }) {
+  const [open, setOpen] = React.useState(false);
+  return (
+    <li className="text-fg-muted" data-testid={`month-note-${n.code}`}>
+      {n.text}
+      {n.trip_ids.length ? (
+        <>
+          {" "}
+          <button
+            type="button"
+            onClick={() => setOpen((o) => !o)}
+            aria-expanded={open}
+            className="text-accent-ink hover:underline focus-visible:outline-2 focus-visible:outline-ring"
+          >
+            {open ? "Dölj resorna" : "Se resorna"}
+          </button>
+        </>
+      ) : null}
+      {open ? (
+        <ul className="mt-1.5 space-y-1.5" aria-label="Resor med ärende ur kalendern">
+          {n.trip_ids.map((id) => (
+            <CalendarPurposeTrip key={id} tripId={id} />
+          ))}
+        </ul>
+      ) : null}
+    </li>
+  );
+}
+
+function CalendarPurposeTrip({ tripId }: { tripId: string }) {
+  const detail = useTripDetail(tripId);
+  const t = detail.data?.trip;
+  const stillFromCalendar = !!detail.data?.purpose_history.find((p) => p.is_current)?.from_calendar && !!t?.purpose_confirmed;
+  return (
+    <li className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 rounded-md border border-border bg-surface px-3 py-2 text-fg">
+      <span className="min-w-0">
+        {t ? (
+          <Link href={`/journal/${tripId}`} className="font-medium hover:underline focus-visible:outline-2 focus-visible:outline-ring">
+            <span className="num mr-1.5 font-normal text-fg-muted">{formatDayMonth(t.started_at ?? t.sort_time ?? t.ended_at ?? "", false)}</span>
+            {t.purpose ?? "Utan ärende"}
+          </Link>
+        ) : detail.isError ? (
+          <Link href={`/journal/${tripId}`} className="text-accent-ink hover:underline">
+            Öppna resan
+          </Link>
+        ) : (
+          <span className="text-fg-muted">Hämtar resan …</span>
+        )}
+      </span>
+      {t && stillFromCalendar ? <RejectCalendarPurposeButton tripId={tripId} size="xs" /> : t ? <span className="text-xs text-fg-muted">Rättad</span> : null}
+    </li>
+  );
+}
+
 function NoteLine({ n }: { n: MonthBlocker }) {
+  if (n.code === PURPOSE_FROM_CALENDAR) return <CalendarPurposeNote n={n} />;
   const missingStart = n.code === "missing_start_time";
   return (
     <li className={cn("text-fg-muted", missingStart && "text-fg")} data-testid={`month-note-${n.code}`}>

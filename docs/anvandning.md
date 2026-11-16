@@ -81,6 +81,9 @@ adressen är klar, eller efter högst 30 minuter, prövas reglerna i den här or
 | *Resa till arbetet* | Hemmet ↔ ordinarie tjänsteställe utan stopp, när du bara redovisar tjänsteresor | Privat |
 | *Privat plats* | Start och mål är hemmet eller platser du har märkt som privata | Privat |
 | *Din regel för …* | Du har en egen regel för rutten eller platsen | Det regeln säger. En regel för Arbete utan ärende ger en ärendefråga |
+| *Hem ↔ kontor i …* | Hemmet ↔ ett av arbetsgivarens kontor, när du har valt att de resorna är tjänsteresor (se *Hem ↔ kontor* nedan) – oavsett tid och veckodag | Tjänst, ärende ur kalendern eller "Resa till kontoret i <ort>" |
+| *Lunch* | Hela lunchmönstret stämmer (se *Lunchregeln* nedan) | Privat, båda resorna |
+| *Kvällsärende under tjänsteresa* | Kort tur till eller från hotellet utanför kontorstid | Alltid en fråga |
 | *Som de 3 senaste gångerna* | Samma rutt med samma kategori de tre senaste gångerna **du** godkände den; för Arbete även samma ärende, samma typ av dag och liknande sträcka (±15 %) | Samma kategori och ärende |
 | *Hemresa efter …* | Hem samma dag efter en godkänd tjänsteresa, från samma plats och ungefär lika lång (±15 %) | Tjänst, "Hemresa efter <ärende>" |
 | *Antaget kundbesök* | Se *Platsantagandet* nedan | Tjänst, "Kundbesök <namn>", med vetotid |
@@ -96,7 +99,7 @@ Och det här blir **aldrig** automatiskt Arbete (privata regler gäller ändå):
 
 - något pekar mot privat, till exempel en privat kalenderbokning, en privat plats eller en
   tidigare rättelse,
-- resan går mellan hemmet och det ordinarie tjänstestället,
+- resan går mellan hemmet och det ordinarie tjänstestället (utom när du har valt *Hem ↔ kontor*),
 - målet är hemmet (utom hemresa), en privat plats, tjänstestället eller ett hotell (utom med
   egen regel).
 
@@ -107,6 +110,40 @@ Resor som godkänts av sig själva märks **Godkänd automatiskt · <skäl>** oc
 **Antaget**, i listan och på resans sida, där knappen *Ändra* finns. Rättar du en resa gäller
 ditt beslut: en regel som slog fel frågar dig i stället nästa gång ("Regeln för X frågar dig
 nu i stället"), och en rättad *Som de 3 senaste gångerna* gör att den inte gäller rutten längre.
+
+### Hem ↔ kontor
+
+Under *Inställningar → Tjänsteställe* finns valet **Resor mellan hemmet och våra kontor är
+tjänsteresor och godkänns automatiskt**. Påslaget godkänns resor mellan hemmet och vilket som
+helst av arbetsgivarens kontor (platser markerade som kontor eller ordinarie arbetsplats) som
+tjänsteresor, även på kvällar och helger, med skälet *Hem ↔ kontor i <ort>*. Mätarställning som
+saknas, flera körningar, kalenderkonflikt och *Fråga mig alltid* stoppar som vanligt. Skatteverkets
+huvudregel är att resor mellan bostaden och det ordinarie tjänstestället är privata – att räkna dem
+som tjänsteresor är ditt val och ditt ansvar gentemot arbetsgivaren. **Efter uppdateringen till
+1.3.0 är valet påslaget i din installation**; stäng av det under Tjänsteställe om du inte vill ha
+det. Avstängt gäller det tidigare (*Resa till arbetet*, privat).
+
+### Lunchregeln
+
+Korta turer från kontoret mitt på dagen är oftast lunch. När **hela** mönstret stämmer blir
+båda resorna privata utan att du får någon fråga:
+
+1. Resan börjar vid ett av era kontor en arbetsdag.
+2. Den är kort: högst 10 minuter och 8 km.
+3. Du stannar mellan 20 och 45 minuter på samma ställe.
+4. Du kör lika kort tillbaka till samma kontor, och allt sker mellan 11:00 och 13:00.
+
+Regeln gäller inte om stället är en bekräftad kund eller arbetsplats, om du har en egen regel för
+det, om du tidigare har sagt att en resa dit var i tjänsten, om kartan säger kontor eller
+industri, eller om en kalenderbokning stämmer med resan. Säger kartan restaurang, kafé eller butik
+räknas det som ett starkare tecken. Klockslaget ensamt gör aldrig en resa privat.
+
+Du får ingen fråga om första resan medan du äter: DriveLog väntar på återresan. Kommer ingen
+återresa inom stoppets längsta tid + körtiden + 10 minuter (65 minuter med standardgränserna)
+hanteras resan som vanligt. Gränserna ändras och regeln stängs av under *Inställningar →
+Lunchregeln*. Regeln kräver att minst ett kontor finns som bekräftad plats – annars står en
+varning där. Den är påslagen från början och gäller även resor som väntar på svar när
+uppdateringen installeras. I läget *Jag godkänner allt själv* blir lunchresorna förslag på Privat.
 
 ### Platsantagandet
 
@@ -397,6 +434,75 @@ sätt – eller båda, utan att mötena dubbleras:
 
 Steg för steg och vad som läses finns i [Microsoft Outlook](microsoft-graph.md).
 
+**Läs hela bokningen** (*Inställningar → Kalender*, påslaget efter uppdateringen till 1.3.0):
+DriveLog läser bokningens beskrivning och deltagare, inte bara rubrik, tid och plats. Det behövs
+för att ärenden som *Kundbesök hos … med Lennart* ska kunna skrivas. Kalenderlänken innehåller
+bara det som delningen släpper igenom – dela kalendern med **Kan visa all information** och
+kopiera den nya länken. Under *Integrationer* står hur många bokningar som har beskrivning
+respektive deltagare; Outlook tar inte alltid med deltagarna i en delad kalender.
+
+**Min arbetsgivares e-postdomän** (samma sektion) avgör vilka deltagare som är kollegor (samma
+domän) och vilka som är externa (kunder, kandidater, leverantörer). DriveLog fyller i fältet ur
+kalendern efter första synken – ändra det om det är fel.
+
+En bokning kopplas till resan även utan plats i bokningen, om en ort eller ett företag i rubriken,
+beskrivningen eller bland deltagarnas domäner stämmer med resmålet. Att bara tiden stämmer räcker
+aldrig för mer än ett förslag. Onlinemöten och privata bokningar förklarar aldrig en resa.
+
+## Ärendet och AI
+
+**Ärendets text** väljs i den här ordningen när resan är en tjänsteresa:
+
+1. Din egen regel med fast text och läget *Använd alltid texten*.
+2. En kalenderbokning som stämmer med resan i tid och plats – för en resa till en annan ort även
+   bokningarna under hela vistelsen och de närmaste dagarna. AI formulerar ärendet ur bokningen
+   (utan AI används bokningens rubrik).
+3. Din egen regel med fast text (läget *när kalendern inte säger något annat*, standard).
+4. Hemresa, hotell eller ditt vanligaste bekräftade ärende för platsen.
+5. AI:s eget förslag ur hela underlaget.
+
+När resan godkänns automatiskt (av din regel, *Hem ↔ kontor*, hemresa eller *Som de 3 senaste
+gångerna*) och en bokning stämmer sätts kalenderns ärende utan fråga. Resan märks **Ur
+kalendern** på resans sida och i månadens genomgång, och **Ärendet stämmer inte** tar bort det:
+resan får då ett ärende att bekräfta i Granskning och bokningen kopplas inte till resan igen.
+Läget för en egen regel med fast text väljer du när du skapar regeln under *Platser → AI-minne*.
+
+Ett ärende från AI är alltid ett förslag – märkt **Förslag att bekräfta** – som du godkänner med
+ett tryck; AI godkänner aldrig något själv. Saknar förslaget direkt stöd i underlaget står det
+under förslaget. Namn som inte finns i underlaget kastas. I telefonen visas AI:s förslag som knapp
+bara när du inte har något tidigare bekräftat ärende för rutten eller platsen, och aldrig som
+*Alltid: …*.
+
+**Hur mycket underlag får AI?** (*Inställningar → Förslag och AI*, gäller bara med en vald
+AI-leverantör):
+
+- **Fullständigt underlag** (rekommenderas, gäller direkt efter uppdateringen): namn och
+  gatuadress för start och mål – även hemmet och privata platser –, kartans namn och typ för
+  okända ställen, dagens alla resor, resan före och efter, historiken för samma mål och rutt,
+  dina regler och platsanteckningar, arbetsgivarens namn, det du skriver under **Om mitt
+  arbete**, och kalenderbokningarna med rubrik, plats, beskrivning och deltagarnas namn (kollega
+  eller extern, och den externa e-postdomänen). Privata bokningar skickas bara som tid, utan
+  text.
+- **Minimalt**: bara platsens namn och ort, veckodag, klockslag, sträcka, regelmotorns signaler
+  och dina tidigare ärenden. Kalenderrubrik, brödtext och gatuadresser styrs av tre egna val.
+
+Koordinater, chassinummer, nycklar, lösenord, e-postadresser och kalenderlänken skickas aldrig,
+och möteslänkar, inringningsnummer, koder och lösenord i bokningar och anteckningar tas bort före
+sändningen. Allt i underlaget behandlas som uppgifter, aldrig som instruktioner.
+
+**Gå igenom med AI.** Resor kan bedömas på nytt med AI (eller bara med reglerna, om ingen
+leverantör är vald):
+
+- en resa: **Bedöm med AI** (eller *Bedöm igen*) i klassningskortet på resans sida,
+- flera: markera resor i körjournalen och tryck **Gå igenom med AI**,
+- alla som väntar: **Gå igenom väntande med AI** i Granskning.
+
+Innan något skickas står hur många resor som bedöms och vilken leverantör som används. Högst 25
+resor tas per gång (de äldsta först); kör igen för resten. Resorna bedöms en i taget med förlopp,
+och *Avbryt* stoppar efter pågående resa. Resor som redan är godkända eller importerade rörs
+aldrig. Till sist visas hur många som fick ett nytt förslag, godkändes av dina regler eller var
+oförändrade, med länk till varje resa.
+
 ## Sammanslagning av resor
 
 Bilen delar upp en resa varje gång du stannar. Under *Inställningar → Sammanslagning av resor*
@@ -453,7 +559,8 @@ taget, även med tangentbordet (A = arbete, P = privat, G = godkänn).
 | Slå samman? | Ja / Nej |
 | Övrigt (saknad mätarställning, kalenderkonflikt, möjlig dubblett) | Kontrollera |
 
-Ärenden kan skjutas upp eller avfärdas, och varje åtgärd kan ångras.
+Ärenden kan skjutas upp eller avfärdas, och varje åtgärd kan ångras. **Gå igenom väntande med
+AI** överst bedömer alla väntande resor på nytt (se *Ärendet och AI*).
 
 Nästa ärende visas så fort du har svarat – du behöver inte vänta på servern och kan svara i
 rask takt. Ett svar påverkar ofta förslagen för andra resor (till exempel andra resor till
@@ -518,10 +625,11 @@ blandas med din riktiga journal. *Stäng av demoläge* tar bort demodatan.
 | Milersättning och export | Kronor per mil, visa belopp, exportens utseende, vad som redovisas |
 | Självgående läge | *Självgående* eller *Jag godkänner allt själv*, kontorstid och vetotid för antagna kundbesök, skälen för automatiska godkännanden och länk till dina egna regler |
 | Sammanslagning av resor | Gränserna 15 och 60 minuter (i självgående läge, se ovan) |
-| Förslag och AI | Trösklar, strikt läge, vad som får skickas till AI-leverantören |
+| Lunchregeln | Av/på och gränserna för lunchmönstret (fönster, körtid, sträcka, stopp) |
+| Förslag och AI | Trösklar, strikt läge, underlagsnivå (Fullständigt/Minimalt), Om mitt arbete, AI-förslag på syfte |
 | Notiser | Typer, tysta timmar, max per dygn, påminnelser, veckosammanställning |
-| Kalender | Tidsfönster för matchning |
-| Tjänsteställe | Avancerat: ordinarie tjänsteställe, bostaden som tjänsteställe, förmånsbil och krav på godkännande vid skattemässig osäkerhet |
+| Kalender | Läs hela bokningen, arbetsgivarens e-postdomän, tidsfönster för matchning |
+| Tjänsteställe | Hem ↔ kontor som tjänsteresor, ordinarie tjänsteställe, bostaden som tjänsteställe, förmånsbil och krav på godkännande vid skattemässig osäkerhet |
 | Förkortningar | Egna förkortningar i kommentarer, t.ex. ortsförkortningar |
 | Sekretess | Karta, geokodning (OpenStreetMap, på som standard), gallring, om originalfiler sparas vid import, radering av historik |
 | Säkerhet | Lösenord, API-tokens |

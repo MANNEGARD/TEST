@@ -12,6 +12,11 @@ export type SettingsMap = Record<string, Record<string, unknown>>;
 export interface SettingsPayload {
   settings: SettingsMap;
   defaults: SettingsMap;
+  /**
+   * Läge som inställningarna beror på (1.3.0, routes/settings.py). `lunch_office_ready`: minst ett
+   * av arbetsgivarens kontor finns som bekräftad plats – annars gäller lunchregeln aldrig.
+   */
+  status?: { lunch_office_ready?: boolean };
 }
 
 /** Ändringar att spara, grupperade per sektion (en PATCH /settings/{sektion} per nyckel här). */
