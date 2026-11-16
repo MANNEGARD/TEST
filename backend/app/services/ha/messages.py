@@ -1,8 +1,11 @@
 """Notistexter på svenska.
 
-Sekretess: gatuadresser förekommer aldrig. Hemmet visas som "Hemmet" och privata
-platser som "Privat plats". När ``hide_locations_on_lock_screen`` är på innehåller
-låsskärmstexten inga platsnamn alls – detaljerna visas först i den inloggade appen.
+Platser (1.3.0, precision före integritet): frågorna i självgående läge visar hela adressen med
+husnummer för platser utan bekräftat namn, bostaden med sin adress och privata platser med sitt
+namn eller sin adress (``place_label``); postnummer tas alltid bort. De går via Home Assistant
+till telefonen. När ``hide_locations_on_lock_screen`` är på innehåller låsskärmstexten inga
+platser alls – detaljerna visas först i den inloggade appen. Larm och månadsnotiser innehåller
+aldrig platser. Notiserna i manuellt läge (``safe_label``) visar som förut bara orten.
 """
 
 from __future__ import annotations
@@ -232,21 +235,38 @@ def _same_text(a: str | None, b: str | None) -> bool:
     return bool(address_key(a)) and address_key(a) == address_key(b)
 
 
-def place_label(loc: KnownLocation | None, address: str | None) -> str:
-    """Platsens namn i notiser (E.3), aldrig med husnummer.
+def _full_address(text: str | None) -> str | None:
+    """"Storgatan 5, 553 21 Jönköping" → "Storgatan 5, Jönköping" (gata med nummer och ort)."""
+    parsed = parse_address(text)
+    if not parsed.raw:
+        return None
+    parts = [p.strip() for p in parsed.raw.split(",") if p.strip()]
+    first = _POSTCODE_RE.sub("", parts[0]).strip() if parts else ""
+    city = _POSTCODE_RE.sub("", parts[-1]).strip() if len(parts) >= 2 else ""
+    if first and city and city.lower() not in first.lower():
+        return f"{first}, {city}"
+    return first or city or None
 
-    Hemmet blir "Hemmet" och privata platser "Privat plats". En bekräftad plats visas med
-    sitt namn. En obekräftad plats visas som "POI-namn, ort" eller "gata utan nummer, ort".
-    Hela adressen visas bara i den inloggade appen.
+
+def place_label(loc: KnownLocation | None, address: str | None) -> str:
+    """Platsens etikett i notiserna (1.3.0: hela adressen).
+
+    Bekräftad plats med namn → namnet. Bostaden → dess adress, annars namnet ("Hemmet").
+    Privat plats → dess namn, annars adressen. Övriga (obekräftade) → hela adressen med
+    husnummer, "Storgatan 5, Jönköping", med kartans namn först när det finns ("Dagab,
+    Lagergatan 7, Jönköping"). Postnummer visas aldrig.
     """
-    if loc is not None and loc.type in ("home", "private"):
-        return places.public_label(loc, address)
-    city_raw = (loc.city if loc is not None and loc.city else None) or parse_address(
-        (loc.address if loc is not None and loc.address else None) or address
-    ).city
-    city = _POSTCODE_RE.sub("", city_raw or "").strip() or None
-    if loc is not None and loc.confirmed and loc.name and not _same_text(loc.name, loc.address) \
-            and not _same_text(loc.name, address):
+    own_address = loc.address if loc is not None and loc.address else None
+    full = _full_address(own_address or address)
+    named = (
+        loc is not None and bool(loc.name) and not _same_text(loc.name, loc.address)
+        and not _same_text(loc.name, address)
+    )
+    if loc is not None and loc.type == "home":
+        return _full_address(own_address) or (loc.name if named else "") or "Hemmet"
+    if loc is not None and loc.type == "private":
+        return (_POSTCODE_RE.sub("", loc.name).strip() if named else "") or full or "Privat plats"
+    if loc is not None and loc.confirmed and named:
         return _POSTCODE_RE.sub("", loc.name).strip() or "okänd plats"
     name = None
     if loc is not None:
@@ -256,13 +276,12 @@ def place_label(loc: KnownLocation | None, address: str | None) -> str:
                     and parse_address(candidate).number is None:
                 name = candidate.strip()
                 break
-    if name is None:
-        street = parse_address((loc.address if loc is not None and loc.address else None) or address).street
-        if street and street != city_raw:
-            name = street
-    if name and city and city.lower() not in name.lower():
-        return f"{name}, {city}"
-    return name or city or "okänd plats"
+    city_raw = (loc.city if loc is not None and loc.city else None) or parse_address(own_address or address).city
+    city = _POSTCODE_RE.sub("", city_raw or "").strip() or None
+    where = full or city
+    if name and where and name.lower() not in where.lower():
+        return f"{name}, {where}"
+    return name or where or "okänd plats"
 
 
 def place_labels(db: Session, trip: LogicalTrip) -> tuple[str, str]:
