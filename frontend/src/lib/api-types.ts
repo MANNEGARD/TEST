@@ -936,6 +936,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/locations/home-from-vehicle": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Markera bostaden där bilen står nu (bilens senast rapporterade position)
+         * @description Skapar eller kompletterar ägarens bekräftade hem med bilens senaste position.
+         *
+         *     Inget nätverk: positionen finns redan i databasen. Hemmets koordinat skickas aldrig till
+         *     karttjänsten; den låser bara upp adressuppslagningen för bilens övriga stopp.
+         */
+        post: operations["home_from_vehicle_api_v1_locations_home_from_vehicle_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/locations/{location_id}": {
         parameters: {
             query?: never;
@@ -3168,6 +3191,42 @@ export interface components {
             /** Status */
             status: string;
         };
+        /** HomeFromVehicleIn */
+        HomeFromVehicleIn: {
+            /** Name */
+            name?: string | null;
+            /** Address */
+            address?: string | null;
+            /**
+             * Replace
+             * @default false
+             */
+            replace: boolean;
+            /** Vehicle Id */
+            vehicle_id?: string | null;
+        };
+        /** HomeFromVehicleOut */
+        HomeFromVehicleOut: {
+            location: components["schemas"]["LocationOut"];
+            /**
+             * Position Reported At
+             * Format: date-time
+             */
+            position_reported_at: string;
+            /**
+             * Vehicle Id
+             * Format: uuid
+             */
+            vehicle_id: string;
+            /** Vehicle Name */
+            vehicle_name: string;
+            /** Action */
+            action: string;
+            /** Absorbed */
+            absorbed: number;
+            /** Geocoding Unlocked */
+            geocoding_unlocked: boolean;
+        };
         /** ImportBatchOut */
         ImportBatchOut: {
             /**
@@ -3255,6 +3314,25 @@ export interface components {
              * @default false
              */
             clear_coordinates: boolean;
+        };
+        /** LocationMetaOut */
+        LocationMetaOut: {
+            /** Types */
+            types: {
+                [key: string]: string;
+            };
+            /** By Type */
+            by_type: {
+                [key: string]: number;
+            };
+            /** Unconfirmed */
+            unconfirmed: number;
+            /** Has Confirmed Home */
+            has_confirmed_home: boolean;
+            /** Home Has Coordinate */
+            home_has_coordinate: boolean;
+            /** Geocoding Enabled */
+            geocoding_enabled: boolean;
         };
         /** LocationOut */
         LocationOut: {
@@ -6193,9 +6271,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["LocationMetaOut"];
                 };
             };
         };
@@ -6218,6 +6294,39 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+        };
+    };
+    home_from_vehicle_api_v1_locations_home_from_vehicle_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HomeFromVehicleIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HomeFromVehicleOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

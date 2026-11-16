@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Query, Response
@@ -12,14 +13,22 @@ from sqlalchemy import func, or_, select
 from app.api.deps import DbDep, PrincipalDep, WebPrincipalDep, owned_vehicle_ids
 from app.api.errors import bad_request, conflict, not_found
 from app.api.serializers import location_out
-from app.models import KnownLocation, LocationAlias, LocationPattern, RawTrip, Vehicle, WorkplacePeriod
-from app.models.enums import LOCATION_TYPE_LABELS_SV, LocationType
+from app.models import (
+    KnownLocation,
+    LocationAlias,
+    LocationPattern,
+    RawTrip,
+    Vehicle,
+    VehicleObservation,
+    WorkplacePeriod,
+)
+from app.models.enums import LOCATION_TYPE_LABELS_SV, GeocodeStatus, LocationType
 from app.schemas.common import LocationOut
 from app.services import audit
 from app.services.learning import feedback
+from app.services.places import geocode, suggest
 from app.services.places import registry as places
-from app.services.places import suggest
-from app.services.places.normalize import clean, parse_address, valid_coordinates
+from app.services.places.normalize import clean, haversine_m, parse_address, valid_coordinates
 
 router = APIRouter(tags=["Locations"])
 
@@ -37,6 +46,38 @@ class LocationIn(BaseModel):
     confirmed: bool | None = None
     notes: str | None = Field(default=None, max_length=2000)
     clear_coordinates: bool = False
+
+
+class HomeFromVehicleIn(BaseModel):
+    name: str | None = Field(default=None, max_length=200)
+    # Adresstexten som ägaren själv skriver och som visas i underlaget. Skickas aldrig vidare.
+    address: str | None = Field(default=None, max_length=300)
+    # Ersätt koordinaten för ett hem som redan är markerat.
+    replace: bool = False
+    vehicle_id: uuid.UUID | None = None
+
+
+class HomeFromVehicleOut(BaseModel):
+    location: LocationOut
+    # När bilen rapporterade positionen (bilens egen tid, annars när den hämtades).
+    position_reported_at: datetime
+    vehicle_id: uuid.UUID
+    vehicle_name: str
+    # "created", "completed" (ett befintligt hem fick koordinat) eller "replaced".
+    action: str
+    # Obekräftade platser från bilen inom hemmets radie som slogs ihop med hemmet.
+    absorbed: int
+    geocoding_unlocked: bool
+
+
+class LocationMetaOut(BaseModel):
+    types: dict[str, str]
+    by_type: dict[str, int]
+    unconfirmed: int
+    has_confirmed_home: bool
+    # Har det bekräftade hemmet en koordinat? Först då slås adresser upp (geocode._user_provider).
+    home_has_coordinate: bool
+    geocoding_enabled: bool
 
 
 class MergeIn(BaseModel):
@@ -95,8 +136,8 @@ def list_locations(
     return [location_out(loc, stats.get(loc.id)) for loc in rows]
 
 
-@router.get("/locations/meta", summary="Platstyper och sammanfattning")
-def meta(principal: PrincipalDep, db: DbDep) -> dict[str, Any]:
+@router.get("/locations/meta", response_model=LocationMetaOut, summary="Platstyper och sammanfattning")
+def meta(principal: PrincipalDep, db: DbDep) -> LocationMetaOut:
     rows = db.execute(
         select(KnownLocation.type, KnownLocation.confirmed, func.count())
         .where(KnownLocation.owner_user_id == principal.user.id, KnownLocation.merged_into_id.is_(None),
@@ -110,8 +151,11 @@ def meta(principal: PrincipalDep, db: DbDep) -> dict[str, Any]:
         if not conf:
             unconfirmed += n
     has_home = any(t == LocationType.HOME for t, conf, _ in rows if conf)
-    return {"types": {k: v for k, v in LOCATION_TYPE_LABELS_SV.items()}, "by_type": by_type,
-            "unconfirmed": unconfirmed, "has_confirmed_home": has_home}
+    return LocationMetaOut(
+        types={k: v for k, v in LOCATION_TYPE_LABELS_SV.items()}, by_type=by_type, unconfirmed=unconfirmed,
+        has_confirmed_home=has_home, home_has_coordinate=geocode._home_has_coordinate(db, principal.user.id),
+        geocoding_enabled=geocode.geocoding_enabled(db, principal.user.id),
+    )
 
 
 @router.get("/locations/suggestions", summary="Förslag: platstyper att godkänna och platser att slå ihop")
@@ -154,6 +198,143 @@ def create_location(body: LocationIn, principal: WebPrincipalDep, db: DbDep) -> 
     audit.record(db, principal.actor, "location.create", "known_location", loc.id, after={"name": loc.name, "type": loc.type})
     db.commit()
     return location_out(loc)
+
+
+def _latest_position(db, principal, vehicle_id: uuid.UUID | None) -> tuple[VehicleObservation, Vehicle]:
+    """Nyaste avläsningen med position för ägarens riktiga fordon (aldrig demobilen)."""
+    vehicles = select(Vehicle.id).where(Vehicle.owner_user_id == principal.user.id, Vehicle.is_demo.is_(False))
+    if vehicle_id is not None:
+        vehicle = db.get(Vehicle, vehicle_id)
+        if vehicle is None or vehicle.owner_user_id != principal.user.id:
+            raise not_found("Fordonet")
+        if vehicle.is_demo:
+            raise bad_request("Demobilens position är påhittad och kan inte bli din bostad.", "demo_vehicle")
+        vehicles = vehicles.where(Vehicle.id == vehicle_id)
+    when = func.coalesce(VehicleObservation.position_reported_at, VehicleObservation.fetched_at)
+    rows = db.execute(
+        select(VehicleObservation)
+        .where(
+            VehicleObservation.vehicle_id.in_(vehicles),
+            VehicleObservation.latitude.is_not(None),
+            VehicleObservation.longitude.is_not(None),
+        )
+        .order_by(when.desc(), VehicleObservation.last_seen_at.desc())
+        .limit(20)
+    ).scalars()
+    for obs in rows:
+        if valid_coordinates(obs.latitude, obs.longitude):
+            return obs, db.get(Vehicle, obs.vehicle_id)
+    raise bad_request(
+        "Bilen har inte rapporterat någon position än. Anslut bilen under Integrationer och vänta tills den "
+        "skickat sin första position, eller markera bostaden på kartan under Platser.",
+        "no_position",
+    )
+
+
+def _absorb_pending_near(db, home: KnownLocation) -> int:
+    """Obekräftade platser från bilen inom hemmets radie slås ihop med hemmet, så att de
+    aldrig slås upp hos karttjänsten (stopp inom kända platser slås aldrig upp)."""
+    absorbed = 0
+    candidates = db.execute(
+        select(KnownLocation).where(
+            KnownLocation.owner_user_id == home.owner_user_id,
+            KnownLocation.id != home.id,
+            KnownLocation.created_from == "api",
+            KnownLocation.is_demo.is_(False),
+            KnownLocation.confirmed.is_(False),
+            KnownLocation.merged_into_id.is_(None),
+            KnownLocation.type == LocationType.UNKNOWN,
+            KnownLocation.latitude.is_not(None),
+            KnownLocation.longitude.is_not(None),
+            or_(KnownLocation.geocode_status.is_(None), KnownLocation.geocode_status != GeocodeStatus.OK),
+        )
+    ).scalars().all()
+    for other in candidates:
+        d = haversine_m(home.latitude, home.longitude, other.latitude, other.longitude)  # type: ignore[arg-type]
+        if d <= max(home.radius_m, 30):
+            places.merge_locations(db, home, other)
+            absorbed += 1
+    return absorbed
+
+
+@router.post(
+    "/locations/home-from-vehicle", response_model=HomeFromVehicleOut,
+    summary="Markera bostaden där bilen står nu (bilens senast rapporterade position)",
+)
+def home_from_vehicle(body: HomeFromVehicleIn, principal: WebPrincipalDep, db: DbDep) -> HomeFromVehicleOut:
+    """Skapar eller kompletterar ägarens bekräftade hem med bilens senaste position.
+
+    Inget nätverk: positionen finns redan i databasen. Hemmets koordinat skickas aldrig till
+    karttjänsten; den låser bara upp adressuppslagningen för bilens övriga stopp.
+    """
+    uid = principal.user.id
+    obs, vehicle = _latest_position(db, principal, body.vehicle_id)
+    name = clean(body.name) or None
+    address = clean(body.address) or None
+    homes = db.execute(
+        select(KnownLocation)
+        .where(
+            KnownLocation.owner_user_id == uid, KnownLocation.type == LocationType.HOME,
+            KnownLocation.is_demo.is_(False), KnownLocation.merged_into_id.is_(None),
+        )
+        .order_by(KnownLocation.confirmed.desc(), KnownLocation.visit_count.desc(), KnownLocation.created_at)
+    ).scalars().all()
+    ready = next((h for h in homes if h.confirmed and h.latitude is not None and h.longitude is not None), None)
+    if ready is not None and not body.replace:
+        raise conflict(
+            f"Bostaden är redan markerad ({ready.name}). Välj att ersätta den om bilen nu står vid din nya bostad.",
+            "home_exists", {"location_id": str(ready.id)},
+        )
+    home = ready or (homes[0] if homes else None)
+    if address:
+        owner = places.find_by_address(db, uid, address)
+        if owner is not None and (home is None or owner.id != home.id):
+            raise conflict(
+                f"Adressen tillhör redan platsen {owner.name!r}. Ändra den platsen under Platser i stället.",
+                "address_exists", {"location_id": str(owner.id)},
+            )
+    before: dict[str, Any] | None = None
+    if home is None:
+        action = "created"
+        home = KnownLocation(
+            owner_user_id=uid, name=name or "Hem", type=LocationType.HOME, radius_m=150, confirmed=True,
+            created_from="user",
+        )
+        db.add(home)
+    else:
+        action = "replaced" if ready is not None else "completed"
+        before = {"name": home.name, "confirmed": home.confirmed, "had_coordinate": home.latitude is not None}
+        if name:
+            home.name = name
+        home.confirmed = True
+        home.suggested_type, home.suggested_name, home.suggestion_reason = None, None, None
+    home.latitude, home.longitude, home.coordinate_source = obs.latitude, obs.longitude, "user"
+    if address:
+        home.address, home.city = address, parse_address(address).city
+    db.flush()
+    if address:
+        places.add_alias(db, home, address)
+    absorbed = _absorb_pending_near(db, home)
+    if absorbed:
+        from app.services.learning import patterns
+
+        patterns.rebuild(db, uid)
+    geocode._fill_trips(db, home)  # bilens resor till och från hemmet får hemmets egen text
+    reported = obs.position_reported_at or obs.fetched_at
+    audit.record(
+        db, principal.actor, "location.home_from_vehicle", "known_location", home.id,
+        before=before,
+        after={"action": action, "name": home.name, "vehicle_id": str(vehicle.id),
+               "position_reported_at": reported.isoformat(), "absorbed": absorbed},
+    )
+    db.flush()
+    _reevaluate(db, principal)  # hemmet styr klassningen av oavgjorda resor
+    db.commit()
+    return HomeFromVehicleOut(
+        location=location_out(home, suggest.location_stats(db, uid).get(home.id)),
+        position_reported_at=reported, vehicle_id=vehicle.id, vehicle_name=vehicle.name, action=action,
+        absorbed=absorbed, geocoding_unlocked=geocode._user_provider(db, uid) is not None,
+    )
 
 
 @router.get("/locations/{location_id}", response_model=LocationOut, summary="En plats")

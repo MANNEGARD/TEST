@@ -23,7 +23,7 @@
  */
 import { createRequire } from "node:module";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -51,7 +51,11 @@ mkdirSync(WORK, { recursive: true });
 const problems = [];
 process.on("unhandledRejection", (err) => problems.push(`ohanterat löfte: ${(err?.stack ?? String(err)).split("\n").slice(0, 3).join(" | ")}`));
 /** Svar som är förväntade i flödet (t.ex. auth-kontroll innan inloggning). */
-const EXPECTED = [{ status: 401, url: /\/api\/v1\/auth\/me$/ }];
+const EXPECTED = [
+  { status: 401, url: /\/api\/v1\/auth\/me$/ },
+  // "Bilen står hemma nu" innan bilen rapporterat någon position (Kom igång på ny databas).
+  { status: 400, url: /\/api\/v1\/locations\/home-from-vehicle$/ },
+];
 // 1×1 transparent PNG – kartplattor hämtas aldrig från internet under testet.
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64");
 
@@ -173,6 +177,20 @@ function responseTo(page, method, re) {
 }
 
 /** HH:MM i Europe/Stockholm (samma tidszon som webbläsarkontexten och appens standard). */
+/** Lägger in en avläsning med påhittad position för ett fordon (argument: fordonets id, rapporterad tid). */
+const INSERT_OBSERVATION = `
+import sys, uuid
+from datetime import UTC, datetime
+import app.models as M
+from app.db import session_scope
+vid, reported = uuid.UUID(sys.argv[1]), datetime.fromisoformat(sys.argv[2].replace("Z", "+00:00"))
+now = datetime.now(UTC)
+with session_scope() as db:
+    db.add(M.VehicleObservation(vehicle_id=vid, source="e2e", fetched_at=now, last_seen_at=now, latitude=59.0,
+                                longitude=15.0, position_reported_at=reported, processed_at=now,
+                                content_hash=uuid.uuid4().hex))
+`;
+
 function stockholmTime(iso) {
   return new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Stockholm", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(iso));
 }
@@ -256,6 +274,24 @@ try {
     await page.getByRole("button", { name: "Skapa konto och fortsätt" }).click();
     await page.waitForURL(`${BASE}/`, { timeout: 20000 });
     await expectText(page, "Översikt", "setup");
+
+    await section("kom igång", async () => {
+      step("Kom igång: kortet på ny databas i självgående läge");
+      const card = page.getByTestId("get-started");
+      await card.waitFor({ timeout: 15000 });
+      for (const [id, done] of [["car", "false"], ["home", "false"], ["phone", "false"]]) {
+        const got = await page.getByTestId(`get-started-step-${id}`).getAttribute("data-done");
+        if (got !== done) fail("kom igång", `steget ${id} har data-done=${got}, väntade ${done}`);
+      }
+      await expectText(page, "Din hemadress skickas aldrig till karttjänsten", "kom igång");
+      await expectText(page, "Markera på kartan i stället", "kom igång");
+      const res = responseTo(page, "POST", /\/api\/v1\/locations\/home-from-vehicle$/);
+      await page.getByTestId("get-started-home-button").click();
+      if ((await res).status() !== 400) fail("kom igång", "knappen gav inte 400 utan position");
+      await page.getByTestId("get-started-home-error").waitFor({ timeout: 10000 });
+      await expectText(page, "Bilen har inte rapporterat någon position än", "kom igång");
+      await shot(page, "get-started-light");
+    });
 
     step("Import via webbgränssnittet");
     const files = readdirSync(SAMPLES).filter((f) => /\.(xlsx|csv)$/i.test(f));
@@ -827,6 +863,41 @@ print(json.dumps({"sheets": wb.sheetnames, "rows": rows, "km": round(km, 2), "to
       await page.reload();
       await page.waitForLoadState("networkidle").catch(() => {});
       if (await page.getByTestId("ha-banner").count()) fail("banderoll", "banderollen ligger kvar efter frånkopplingen");
+    });
+
+    // ---------------------------------------------------------------- Kom igång: bostaden med bilens position
+    await section("kom igång", async () => {
+      step("Kom igång: \"Bilen står hemma nu\" med en inlagd avläsning");
+      const db = path.join(WORK, "data.sqlite3");
+      if (!existsSync(db)) {
+        step(`  (ingen databas i ${db} – avläsningen läggs inte in, steget prövas inte)`);
+        return;
+      }
+      const vehicle = (await api(page, "GET", "/vehicles")).find((v) => !v.is_demo);
+      if (!vehicle) throw new Error("inget riktigt fordon efter importen");
+      const reported = new Date(Date.now() - 3 * 60_000).toISOString();
+      // Påhittad position; avläsningen märks som bearbetad så att resedetekteringen inte rör den.
+      execFileSync(PYTHON, ["-c", INSERT_OBSERVATION, vehicle.id, reported], {
+        cwd: path.resolve(HERE, "../../backend"),
+        env: { ...process.env, DRIVELOG_ENVIRONMENT: "development", DRIVELOG_DATABASE_URL: `sqlite:///${db}`, DRIVELOG_DATA_DIR: path.join(WORK, "data") },
+        stdio: ["ignore", "ignore", "inherit"],
+      });
+      await page.goto(`${BASE}/`);
+      await page.getByTestId("get-started").waitFor({ timeout: 15000 });
+      const homeStep = page.getByTestId("get-started-step-home");
+      await page.getByTestId("get-started-home-address").fill("Påhittade vägen 1, Exempelstad");
+      const res = responseTo(page, "POST", /\/api\/v1\/locations\/home-from-vehicle$/);
+      await page.getByTestId("get-started-home-button").click();
+      const r = await res;
+      if (r.status() !== 200) fail("kom igång", `"Bilen står hemma nu" gav ${r.status()}`);
+      await page.waitForFunction(() => document.querySelector('[data-testid="get-started-step-home"]')?.getAttribute("data-done") === "true", null, { timeout: 15000 })
+        .catch(() => fail("kom igång", "steget för bostaden blev inte klart efter knapptrycket"));
+      await expectText(page, `Markerad med bilens position kl. ${stockholmTime(reported)}`, "kom igång");
+      const meta = await api(page, "GET", "/locations/meta");
+      if (meta.home_has_coordinate !== true) fail("kom igång", "platsöversikten säger att hemmet saknar koordinat");
+      if ((await homeStep.getAttribute("data-done")) !== "true") fail("kom igång", "steget för bostaden är inte klart");
+      if (!(await page.getByTestId("get-started").count())) fail("kom igång", "kortet försvann fast bilen och telefonen inte är anslutna");
+      await shot(page, "get-started-home-done-light");
     });
 
     storageState = await ctx.storageState();

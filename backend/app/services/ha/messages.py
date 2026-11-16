@@ -389,11 +389,11 @@ def assumed(
     }
 
 
-def alert(title: str, message: str) -> dict[str, Any]:
+def alert(title: str, message: str, uri: str = "/settings") -> dict[str, Any]:
     return {
         "title": f"DriveLog: {title}",
         "message": message,
-        "actions": [{"key": A.OPEN, "title": "Öppna", "uri": "/settings"}],
+        "actions": [{"key": A.OPEN, "title": "Öppna", "uri": uri}],
         "context": {"detail_message": message},
     }
 
@@ -417,12 +417,22 @@ def month_waiting(month: str, blockers: list[Any], notes: list[Any]) -> dict[str
     missing_start = _note_count(notes, "missing_start_time")
     if missing_start:
         message += f". {_count(missing_start, 'resa saknar', 'resor saknar')} starttid."
+    home = _note_text(notes, "home_missing")
+    if home:
+        message += f"{'' if message.endswith('.') else '.'} {home}."
     return {
         "title": f"{month_name(month)} väntar",
         "message": message,
         "actions": [{"key": A.OPEN, "title": "Öppna", "uri": "/export"}],
         "context": {"detail_message": message, "month": month},
     }
+
+
+def _note_text(notes: list[Any], code: str) -> str:
+    for n in notes:
+        if getattr(n, "code", None) == code:
+            return str(getattr(n, "text", "") or "")
+    return ""
 
 
 def _note_count(notes: list[Any], code: str) -> int:
@@ -476,6 +486,9 @@ def month_ready(
         acts.append({"key": A.OPEN, "title": "Öppna underlaget", "uri": f"{A.EXPORT_LINK_PREFIX}{export_id}"})
     if missing_start:
         message += f" {_count(missing_start, 'resa saknar', 'resor saknar')} starttid."
+    home = _note_text(notes, "home_missing")
+    if home:
+        message += f" {home}."
     if assumed_n:
         acts.append({"key": A.OPEN_SECOND, "title": "Se antagna", "uri": f"/m/month/{month}"})
     return {"title": title, "message": message, "actions": acts,

@@ -3172,9 +3172,7 @@
       "content": {
        "application/json": {
         "schema": {
-         "additionalProperties": true,
-         "type": "object",
-         "title": "Response Meta Api V1 Locations Meta Get"
+         "$ref": "#/components/schemas/LocationMetaOut"
         }
        }
       }
@@ -3198,6 +3196,48 @@
          "additionalProperties": true,
          "type": "object",
          "title": "Response Suggestions Api V1 Locations Suggestions Get"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/locations/home-from-vehicle": {
+   "post": {
+    "tags": [
+     "Locations"
+    ],
+    "summary": "Markera bostaden där bilen står nu (bilens senast rapporterade position)",
+    "description": "Skapar eller kompletterar ägarens bekräftade hem med bilens senaste position.\n\nInget nätverk: positionen finns redan i databasen. Hemmets koordinat skickas aldrig till\nkarttjänsten; den låser bara upp adressuppslagningen för bilens övriga stopp.",
+    "operationId": "home_from_vehicle_api_v1_locations_home_from_vehicle_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/HomeFromVehicleIn"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HomeFromVehicleOut"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
         }
        }
       }
@@ -10226,6 +10266,97 @@
     ],
     "title": "HeartbeatOut"
    },
+   "HomeFromVehicleIn": {
+    "properties": {
+     "name": {
+      "anyOf": [
+       {
+        "type": "string",
+        "maxLength": 200
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Name"
+     },
+     "address": {
+      "anyOf": [
+       {
+        "type": "string",
+        "maxLength": 300
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Address"
+     },
+     "replace": {
+      "type": "boolean",
+      "title": "Replace",
+      "default": false
+     },
+     "vehicle_id": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "uuid"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Vehicle Id"
+     }
+    },
+    "type": "object",
+    "title": "HomeFromVehicleIn"
+   },
+   "HomeFromVehicleOut": {
+    "properties": {
+     "location": {
+      "$ref": "#/components/schemas/LocationOut"
+     },
+     "position_reported_at": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Position Reported At"
+     },
+     "vehicle_id": {
+      "type": "string",
+      "format": "uuid",
+      "title": "Vehicle Id"
+     },
+     "vehicle_name": {
+      "type": "string",
+      "title": "Vehicle Name"
+     },
+     "action": {
+      "type": "string",
+      "title": "Action"
+     },
+     "absorbed": {
+      "type": "integer",
+      "title": "Absorbed"
+     },
+     "geocoding_unlocked": {
+      "type": "boolean",
+      "title": "Geocoding Unlocked"
+     }
+    },
+    "type": "object",
+    "required": [
+     "location",
+     "position_reported_at",
+     "vehicle_id",
+     "vehicle_name",
+     "action",
+     "absorbed",
+     "geocoding_unlocked"
+    ],
+    "title": "HomeFromVehicleOut"
+   },
    "ImportBatchOut": {
     "properties": {
      "id": {
@@ -10513,6 +10644,50 @@
     },
     "type": "object",
     "title": "LocationIn"
+   },
+   "LocationMetaOut": {
+    "properties": {
+     "types": {
+      "additionalProperties": {
+       "type": "string"
+      },
+      "type": "object",
+      "title": "Types"
+     },
+     "by_type": {
+      "additionalProperties": {
+       "type": "integer"
+      },
+      "type": "object",
+      "title": "By Type"
+     },
+     "unconfirmed": {
+      "type": "integer",
+      "title": "Unconfirmed"
+     },
+     "has_confirmed_home": {
+      "type": "boolean",
+      "title": "Has Confirmed Home"
+     },
+     "home_has_coordinate": {
+      "type": "boolean",
+      "title": "Home Has Coordinate"
+     },
+     "geocoding_enabled": {
+      "type": "boolean",
+      "title": "Geocoding Enabled"
+     }
+    },
+    "type": "object",
+    "required": [
+     "types",
+     "by_type",
+     "unconfirmed",
+     "has_confirmed_home",
+     "home_has_coordinate",
+     "geocoding_enabled"
+    ],
+    "title": "LocationMetaOut"
    },
    "LocationOut": {
     "properties": {

@@ -308,6 +308,29 @@ def _locations(db: Session, trips: list[LogicalTrip]) -> dict[Any, KnownLocation
     return {loc.id: loc for loc in db.execute(select(KnownLocation).where(KnownLocation.id.in_(ids))).scalars()}
 
 
+HOME_MISSING_TEXT = "Adresser slås inte upp förrän du markerat din bostad (Översikt → Kom igång)"
+
+
+def _home_missing_note(
+    db: Session, user_id: uuid.UUID, vehicle: Vehicle, trips: list[LogicalTrip], locs: dict[Any, KnownLocation]
+) -> Blocker | None:
+    """Resor vars plats från bilen väntar på adress för att bostaden inte är markerad
+    (places.geocode._user_provider). En upplysning, ingen blockerare: den säger bara varför."""
+    from app.services.places import geocode
+
+    if vehicle.is_demo or not geocode.geocoding_enabled(db, user_id) or geocode._home_has_coordinate(db, user_id):
+        return None
+    waiting = [
+        t for t in trips
+        if any(locs.get(i) is not None and locs[i].created_from == "api"
+               and locs[i].geocode_status == GeocodeStatus.PENDING
+               for i in (t.start_location_id, t.end_location_id))
+    ]
+    if not waiting:
+        return None
+    return Blocker("home_missing", HOME_MISSING_TEXT, count=len(waiting), trip_ids=_ids(waiting))
+
+
 def _address_blocker(reported: list[LogicalTrip], locs: dict[Any, KnownLocation]) -> Blocker | None:
     waiting = (GeocodeStatus.PENDING, GeocodeStatus.FAILED)
     trips = [
@@ -449,6 +472,9 @@ def _evaluate(
 
     notes = _notes(db, vehicle=vehicle, trips=trips, reported=reported, quality=quality, locs=locs,
                    start=start, end=end)
+    home_note = _home_missing_note(db, user_id, vehicle, trips, locs)
+    if home_note is not None:
+        notes.append(home_note)
 
     has_export = record is not None and record.export_id is not None
     state: Literal["open", "waiting", "exported", "stale", "empty"]

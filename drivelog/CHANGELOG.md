@@ -67,6 +67,11 @@ för den som vill använda den.
 - Exportens varning *osäker datakvalitet* för varje resa från bilen är ersatt med konkreta
   kontroller: saknad starttid, saknad adress, möjliga missade resor och privat adress i
   underlaget.
+- **Kom igång på översikten.** I självgående läge visar ett kort de tre stegen som återstår:
+  anslut bilen, markera bostaden och anslut telefonen. Bostaden markeras med ett tryck på
+  *Bilen står hemma nu* (bilens senast rapporterade position, med tidpunkten), eller på kartan.
+  Utan markerad bostad slås inga adresser upp – nu står det varför, på översikten, i ett larm
+  i telefonen och i månadsläget.
 - Starttiden ur bilens trippmätare är byggd men avstängd tills den har prövats mot en riktig
   bil.
 

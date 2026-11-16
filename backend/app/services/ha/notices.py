@@ -177,7 +177,8 @@ def queue_month_ready(
 
 
 def queue_alert(
-    db: Session, *, user_id: uuid.UUID, code: str, episode: str, title: str, message: str, now: datetime
+    db: Session, *, user_id: uuid.UUID, code: str, episode: str, title: str, message: str, now: datetime,
+    uri: str = "/settings",
 ) -> NotificationRequest | None:
     """Larm med dedupe-nyckeln ``alert:{code}:{episode}``: en push per episod.
 
@@ -189,7 +190,7 @@ def queue_alert(
     key = f"alert:{code}:{episode}"[:160]
     if notifier._exists(db, user_id, key):
         return None
-    built = messages.alert(title, message)
+    built = messages.alert(title, message, uri)
     return _create(
         db, user_id=user_id, kind=NotificationKind.ALERT, built=built, now=now, valid=ALERT_VALID,
         dedupe_key=key, extra_context={"alert_code": code, "episode": episode},

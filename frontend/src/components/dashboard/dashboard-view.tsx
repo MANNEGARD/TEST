@@ -47,6 +47,7 @@ import {
 import { useOpenReviewCount } from "@/lib/queries/review";
 import type { DashboardSummary, TimeseriesPoint } from "@/lib/types";
 import { readStorage, writeStorage } from "@/lib/utils";
+import { GetStartedCard } from "./get-started-card";
 import { WeeklyCard } from "./weekly-card";
 
 const PERIOD_KEY = "drivelog.dashboard.period";
@@ -193,6 +194,8 @@ export function DashboardView() {
         description={s ? `${s.vehicle.name}${s.vehicle.registration_number ? ` · ${s.vehicle.registration_number}` : ""} · ${s.period.label}` : "Tjänstekörning och milersättning"}
         actions={<DateRangePicker value={period} onChange={setPeriod} />}
       />
+
+      <GetStartedCard />
 
       {summary.isError ? (
         <Card>

@@ -46,6 +46,29 @@ godkänner allt själv**. Läget gäller bara resor från bilen som kommer in ef
 på (*Självgående sedan …*). Importerade och manuellt inlagda resor, och resor från före dess,
 rörs aldrig.
 
+### Kom igång
+
+Överst på *Översikt* visas kortet **Kom igång** i självgående läge så länge något av de tre
+stegen återstår. Varje steg har en status och en knapp eller länk:
+
+1. **Anslut bilen (Volvo)** – under *Integrationer*. Demobilen räknas inte.
+2. **Markera bostaden** – ställ dig hemma med bilen och tryck **Bilen står hemma nu**. Bilens
+   senast rapporterade position blir din bostad, och kortet visar när bilen rapporterade den
+   (*Markerad med bilens position kl. 21:14*). Skriv gärna adressen som ska stå i underlaget;
+   lämnar du fältet tomt står det *Hem*. Har bilen inte rapporterat någon position än säger
+   kortet det. Vill du hellre peka ut bostaden själv väljer du *Markera på kartan i stället*
+   (sidan Platser). Först när bostaden är markerad slår DriveLog upp adresser för dina resor –
+   hemadressen skickas aldrig till karttjänsten, och stopp vid bostaden slås aldrig upp.
+3. **Anslut telefonen (Home Assistant)** – under *Integrationer*, och välj vilken telefon
+   frågorna ska gå till.
+
+När alla steg är klara försvinner kortet (en gång visas *Klart – resten sköter sig självt*).
+Kortet visas inte i läget *Jag godkänner allt själv*. Är bilen ansluten och har kört eller
+rapporterat något sedan läget slogs på, men bostaden inte är markerad, får du ett larm i
+telefonen: *DriveLog kan inte slå upp adresser än: markera din bostad i DriveLog (Översikt →
+Kom igång).* Samma förklaring står i månadsläget och månadsnotisen så länge resor väntar på
+adress av det skälet.
+
 ### Så avgörs en resa
 
 När bilen har stått still i 10 minuter skapas resan. Ligger stoppet vid en känd plats används
@@ -131,7 +154,7 @@ arbetsförmedling, förening eller ett vineri/bryggeri. Där uträttar man ofta 
 När bilen stannar på en okänd plats slår DriveLog inom någon minut upp adressen i
 OpenStreetMap (Nominatim). Bara mittpunkten av en liten ruta (koordinaten med fyra decimaler)
 skickas – aldrig resa, tid eller namn – och samma ruta slås bara upp en gång. Ingenting skickas
-förrän hemmet finns som plats med koordinat. Svaret ger gatuadress och, om kartan har det,
+förrän hemmet finns som plats med koordinat (se *Kom igång* ovan). Svaret ger gatuadress och, om kartan har det,
 namn och typ. Matchar adressen en plats som redan finns, till exempel från en import, används
 den. Går uppslaget inte att göra står adressen tom; ingen adress hittas på.
 

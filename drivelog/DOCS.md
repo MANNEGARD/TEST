@@ -99,6 +99,10 @@ Från 1.1.0 sköter körjournalen sig själv utan Excel-uppladdning när Volvo �
   Självgående läge* om du hellre godkänner allt.
 - När månaden är klar skapas underlaget, och notisen i telefonen har en länk som går att
   öppna utan inloggning.
+- **Kom igång:** överst på *Översikt* visar kortet *Kom igång* vad som återstår – anslut
+  bilen, markera bostaden (*Bilen står hemma nu* använder bilens senaste position) och anslut
+  telefonen. Adresser slås upp först när bostaden är markerad; hemadressen skickas aldrig till
+  karttjänsten. Kortet försvinner när allt är klart.
 
 **Om nedladdningslänken:** den gäller i 7 dagar och för högst 10 hämtningar. Notisen går via
 Home Assistant, så den som har en Home Assistant-token eller kommer åt Home Assistants

@@ -1,4 +1,4 @@
-"""Larm om kopplingarna: Volvo, kalendern och en tyst bil (byggkontraktet C.5).
+"""Larm om kopplingarna: Volvo, kalendern, en tyst bil och en omarkerad bostad (byggkontraktet C.5).
 
 ``run`` körs i tick men prövar villkoren högst var 15:e minut. Varje fel har en
 *episod* (t.ex. tidpunkten för den senaste lyckade hämtningen). Ett larm skickas en
@@ -24,8 +24,8 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db import utcnow
-from app.models import IntegrationConnection, NotificationRequest, Vehicle, VehicleObservation
-from app.models.enums import IntegrationProvider, IntegrationStatus, NotificationKind
+from app.models import IntegrationConnection, NotificationRequest, RawTrip, Vehicle, VehicleObservation
+from app.models.enums import IntegrationProvider, IntegrationStatus, NotificationKind, TripSource
 from app.services import settings as settings_svc
 from app.services.ha import notices, notifier
 
@@ -43,9 +43,13 @@ VOLVO_REAUTH = "volvo_reauth"
 VOLVO_FETCH_FAILING = "volvo_fetch_failing"
 VEHICLE_SILENT = "vehicle_silent"
 CALENDAR_BROKEN = "calendar_broken"
+HOME_MISSING = "home_missing"
+
+# Vart "Öppna" leder; övriga larm öppnar inställningarna.
+_URIS = {HOME_MISSING: "/"}
 
 # Ordningen avgör vilket larm som går först när dygnsgränsen är nära.
-CODES = (VOLVO_REAUTH, VOLVO_FETCH_FAILING, CALENDAR_BROKEN, VOLVO_REAUTH_SOON, VEHICLE_SILENT)
+CODES = (VOLVO_REAUTH, VOLVO_FETCH_FAILING, CALENDAR_BROKEN, HOME_MISSING, VOLVO_REAUTH_SOON, VEHICLE_SILENT)
 
 _ACTIVE = (IntegrationStatus.CONNECTED, IntegrationStatus.ERROR, IntegrationStatus.NEEDS_REAUTH)
 
@@ -172,6 +176,44 @@ def _calendar_alerts(db: Session, user_id: uuid.UUID, now: datetime, tz) -> list
     return [Alert(_stamp(last), "Kalendern synkas inte", message)]
 
 
+def _home_alerts(db: Session, user_id: uuid.UUID) -> list[Alert]:
+    """Bostaden är inte markerad, så inga adresser slås upp (places.geocode._user_provider).
+
+    Bara i självgående läge med adressuppslagningen på, när bilen är ansluten på riktigt och
+    har skickat en resa eller avläsning efter att läget slogs på. Episoden är tidpunkten då
+    läget slogs på: ett larm per påslag, och larmet tas bort när bostaden är markerad.
+    """
+    from app.services.places import geocode
+
+    if settings_svc.automation_mode(db, user_id) != settings_svc.MODE_SELF_DRIVING:
+        return []
+    since = settings_svc.active_since(db, user_id)
+    if since is None or not geocode.geocoding_enabled(db, user_id):
+        return []
+    conn = _conn(db, user_id, IntegrationProvider.VOLVO)
+    if conn is None or conn.status != IntegrationStatus.CONNECTED:
+        return []
+    if geocode._home_has_coordinate(db, user_id):
+        return []
+    real = select(Vehicle.id).where(Vehicle.owner_user_id == user_id, Vehicle.is_demo.is_(False))
+    seen = db.execute(
+        select(VehicleObservation.id).where(
+            VehicleObservation.vehicle_id.in_(real), VehicleObservation.fetched_at >= since
+        ).limit(1)
+    ).first() or db.execute(
+        select(RawTrip.id).where(
+            RawTrip.vehicle_id.in_(real), RawTrip.source == TripSource.VOLVO_API, RawTrip.created_at >= since
+        ).limit(1)
+    ).first()
+    if seen is None:
+        return []
+    return [Alert(
+        _stamp(since),
+        "Markera din bostad",
+        "DriveLog kan inte slå upp adresser än: markera din bostad i DriveLog (Översikt → Kom igång).",
+    )]
+
+
 # ----------------------------------------------------------------------------- tillståndet
 
 
@@ -226,7 +268,8 @@ def _sync_code(
             stats["deferred_cap"] += 1
             continue
         req = notices.queue_alert(
-            db, user_id=user_id, code=code, episode=alert.episode, title=alert.title, message=alert.message, now=now
+            db, user_id=user_id, code=code, episode=alert.episode, title=alert.title, message=alert.message, now=now,
+            uri=_URIS.get(code, "/settings"),
         )
         if req is not None:
             stats["queued"] += 1
@@ -238,6 +281,7 @@ def run_user(db: Session, user_id: uuid.UUID, now: datetime) -> dict[str, int]:
     tz = settings_svc.user_timezone(db, user_id)
     found = _volvo_alerts(db, user_id, now, tz)
     found[CALENDAR_BROKEN] = _calendar_alerts(db, user_id, now, tz)
+    found[HOME_MISSING] = _home_alerts(db, user_id)
     used = _sent_last_day(db, user_id, now)
 
     def budget() -> bool:

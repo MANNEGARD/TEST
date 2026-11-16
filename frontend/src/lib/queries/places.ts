@@ -2,6 +2,7 @@
 
 import { useMutation, useQueries, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { api } from "../api";
+import type { components } from "../api-types";
 import type { Pattern, PatternStatus, Place, PlaceInput, PlaceSuggestions, RuleInput } from "../places-types";
 import type { Feedback, Trip, TripDetail } from "../types";
 import { useVehicle } from "../vehicle";
@@ -26,6 +27,7 @@ export const placeKeys = {
   all: qk.places.all,
   list: (includeDemo: boolean) => ["places", "list", { includeDemo }] as const,
   suggestions: ["places", "suggestions"] as const,
+  meta: ["places", "meta"] as const,
   patterns: ["learning", "patterns"] as const,
   /** Ligger under qk.learning.feedback så att invalidateJournalData() även träffar den. */
   corrections: (limit: number) => [...qk.learning.feedback, "corrections", limit] as const,
@@ -54,6 +56,27 @@ export function usePlaces() {
     queryKey: placeKeys.list(includeDemo),
     queryFn: ({ signal }) =>
       api.get<Place[]>("/locations", { query: { sort: "visits", limit: 2000, include_demo: includeDemo || undefined }, signal }),
+  });
+}
+
+export type LocationMeta = components["schemas"]["LocationMetaOut"];
+export type HomeFromVehicleResult = components["schemas"]["HomeFromVehicleOut"];
+export type HomeFromVehicleInput = components["schemas"]["HomeFromVehicleIn"];
+
+/** Sammanfattningen av platserna, bl.a. om hemmet har koordinat (då slås adresser upp). */
+export function useLocationMeta() {
+  return useQuery({
+    queryKey: placeKeys.meta,
+    queryFn: ({ signal }) => api.get<LocationMeta>("/locations/meta", { signal }),
+  });
+}
+
+/** "Bilen står hemma nu": bostaden markeras med bilens senast rapporterade position. */
+export function useHomeFromVehicle() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: Partial<HomeFromVehicleInput>) => api.post<HomeFromVehicleResult>("/locations/home-from-vehicle", body),
+    onSuccess: () => invalidatePlaces(qc),
   });
 }
 
