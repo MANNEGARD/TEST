@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="sv">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0f1419">
+  <title>SMGD Hem</title>
+  <link rel="icon" href="icon.png">
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <!-- Inloggning -->
+  <section id="setup" class="screen" hidden>
+    <div class="setup-box">
+      <h1>SMGD Hem</h1>
+      <p class="muted">Styr ditt Home Assistant från TV:n.</p>
+
+      <label class="field">
+        <span>Adress till Home Assistant</span>
+        <input id="setup-url" class="focusable" type="url" spellcheck="false" autocomplete="off"
+               placeholder="http://homeassistant.local:8123">
+      </label>
+
+      <div class="segmented" role="tablist">
+        <button id="mode-password" class="focusable seg active" type="button">Användare och lösenord</button>
+        <button id="mode-token" class="focusable seg" type="button">Åtkomsttoken</button>
+      </div>
+
+      <div id="password-fields">
+        <label class="field">
+          <span>Användarnamn</span>
+          <input id="setup-user" class="focusable" type="text" spellcheck="false" autocomplete="username"
+                 autocapitalize="none">
+        </label>
+        <label class="field">
+          <span>Lösenord</span>
+          <input id="setup-pass" class="focusable" type="password" autocomplete="current-password">
+        </label>
+        <label class="field" id="mfa-field" hidden>
+          <span>Engångskod (tvåstegsverifiering)</span>
+          <input id="setup-mfa" class="focusable" type="text" inputmode="numeric" autocomplete="one-time-code">
+        </label>
+      </div>
+
+      <div id="token-fields" hidden>
+        <label class="field">
+          <span>Långlivad åtkomsttoken (Profil → Säkerhet i Home Assistant)</span>
+          <input id="setup-token" class="focusable" type="password" spellcheck="false" autocomplete="off">
+        </label>
+      </div>
+
+      <button id="setup-connect" class="focusable btn primary wide" type="button">Anslut</button>
+      <p id="setup-error" class="error" role="alert"></p>
+    </div>
+  </section>
+
+  <!-- Huvudvy -->
+  <section id="main" class="screen" hidden>
+    <header class="topbar">
+      <div class="brand">
+        <span class="dot" id="conn-dot" title="Anslutning"></span>
+        <span id="site-name">Hem</span>
+      </div>
+      <nav id="tabs" class="tabs"></nav>
+      <div class="topright">
+        <span id="weather" class="weather"></span>
+        <span id="clock" class="clock">--:--</span>
+      </div>
+    </header>
+    <main id="content" class="content"></main>
+    <footer class="hints" id="hints">
+      <span><b>OK</b> växla / starta</span>
+      <span><b>Håll OK</b> detaljer</span>
+      <span><i class="key yellow"></i> favorit</span>
+      <span><i class="key blue"></i> uppdatera</span>
+      <span><b>Bakåt</b> stäng</span>
+    </footer>
+  </section>
+
+  <!-- Detaljer och inställningar -->
+  <div id="overlay" class="overlay" hidden>
+    <div class="panel" id="panel" role="dialog" aria-modal="true"></div>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+  <div id="splash" class="splash"><div class="spinner"></div><p id="splash-text">Ansluter…</p></div>
+
+  <script src="js/icons.js"></script>
+  <script src="js/ha.js"></script>
+  <script src="js/nav.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

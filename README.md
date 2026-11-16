@@ -26,6 +26,7 @@ integrationer som kan slås på var för sig; allt fungerar även utan dem.
 | Home Assistant-integration | [`custom_components/smgd_drivelog/`](custom_components/smgd_drivelog/) | Custom integration, installeras via HACS |
 | Drift | [`docker-compose.yml`](docker-compose.yml), [`deploy/`](deploy/) | Docker Compose, Caddy (HTTPS), backup-skript |
 | Home Assistant-app (tillägg) | [`drivelog/`](drivelog/), [`repository.yaml`](repository.yaml) | En container: API, webbapp och Caddy; SQLite; avbilder för amd64/aarch64 |
+| TV-app för Home Assistant (LG webOS) | [`webos/`](webos/) | HTML/CSS/JS utan byggsteg; paketeras med ares-cli eller serveras från Home Assistant |
 | Dokumentation | [`docs/`](docs/) | Svenska guider |
 
 ## Två sätt att köra DriveLog

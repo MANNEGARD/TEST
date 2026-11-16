@@ -1,0 +1,3 @@
+# Innehåller adress och åtkomsttoken – checkas aldrig in
+config.json
+*.ipk

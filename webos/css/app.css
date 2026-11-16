@@ -1,0 +1,220 @@
+/* SMGD Hem – TV-gränssnitt för Home Assistant.
+   Byggt för 1920×1080 och fjärrkontroll, men fungerar även med mus och pekskärm.
+   Skriven för gamla Chromium-versioner (webOS 4+): inga CSS-funktioner som clamp()/max(). */
+
+:root {
+  --bg: #0f1419;
+  --bg-2: #161d24;
+  --card: #1c252e;
+  --card-hi: #243039;
+  --line: #2c3a46;
+  --text: #e8eef3;
+  --muted: #8b9aa7;
+  --accent: #3ea6ff;
+  --on: #ffc857;
+  --ok: #4cd18a;
+  --warn: #ff9f43;
+  --bad: #ff5d5d;
+  --focus: #ffffff;
+  --radius: 1.1rem;
+}
+
+* { box-sizing: border-box; }
+
+html {
+  font-size: 16px; /* 1920 px bred skärm */
+}
+@media (max-width: 1600px) { html { font-size: 13.3px; } }  /* 1280×720-TV */
+@media (max-width: 1000px) { html { font-size: 14px; } }    /* surfplatta / telefon */
+@media (min-width: 2400px) { html { font-size: 21px; } }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "LG Smart UI", "Museo Sans", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  overflow: hidden;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+[hidden] { display: none !important; }
+.muted { color: var(--muted); }
+.error { color: var(--bad); min-height: 1.5em; font-size: 1.2rem; }
+
+button { font: inherit; color: inherit; }
+
+/* ---------- Fokus (det viktigaste på en TV) ---------- */
+.focusable { outline: none; transition: transform .12s ease, box-shadow .12s ease, background .12s ease; }
+.focusable.focused,
+.focusable:focus {
+  box-shadow: 0 0 0 .25rem var(--focus), 0 .6rem 1.8rem rgba(0, 0, 0, .55);
+  transform: scale(1.04);
+  z-index: 2;
+}
+input.focusable.focused, input.focusable:focus { transform: none; }
+
+/* ---------- Skärmar ---------- */
+.screen { position: absolute; inset: 0; top: 0; left: 0; right: 0; bottom: 0; display: flex; flex-direction: column; }
+
+/* Inloggning */
+#setup { align-items: center; justify-content: center; overflow-y: auto; }
+.setup-box { width: 46rem; max-width: 92vw; padding: 3rem; background: var(--bg-2); border-radius: 1.6rem; border: 1px solid var(--line); }
+.setup-box h1 { margin: 0 0 .3rem; font-size: 2.8rem; }
+.setup-box > p { margin: 0 0 2rem; font-size: 1.3rem; }
+.field { display: block; margin: 0 0 1.3rem; }
+.field span { display: block; margin-bottom: .45rem; color: var(--muted); font-size: 1.1rem; }
+.field input {
+  width: 100%; padding: 1rem 1.2rem; font-size: 1.4rem; color: var(--text);
+  background: var(--bg); border: 2px solid var(--line); border-radius: .8rem;
+  -webkit-user-select: text; user-select: text;
+}
+.field input.focused, .field input:focus { border-color: var(--accent); }
+.segmented { display: flex; gap: .6rem; margin: 0 0 1.4rem; }
+.seg { flex: 1; padding: .9rem; font-size: 1.15rem; background: var(--bg); border: 2px solid var(--line); border-radius: .8rem; cursor: pointer; }
+.seg.active { border-color: var(--accent); background: rgba(62, 166, 255, .14); }
+
+/* Knappar */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: .6rem;
+  padding: .95rem 1.6rem; min-width: 7rem; font-size: 1.3rem;
+  background: var(--card-hi); border: 0; border-radius: .9rem; cursor: pointer;
+}
+.btn svg { width: 1.7rem; height: 1.7rem; fill: currentColor; }
+.btn.primary { background: var(--accent); color: #04121f; font-weight: 600; }
+.btn.danger { background: #4a2228; color: #ffd1d1; }
+.btn.active { background: var(--on); color: #2b1d00; }
+.btn.wide { width: 100%; margin-top: .6rem; }
+.btn.icon-only { min-width: 0; padding: .95rem 1.1rem; }
+
+/* ---------- Huvudvy ---------- */
+.topbar {
+  display: flex; align-items: center; gap: 2rem;
+  padding: 1.6rem 3.2rem 1rem;
+  background: linear-gradient(var(--bg) 70%, rgba(15, 20, 25, 0));
+}
+.brand { display: flex; align-items: center; gap: .8rem; font-size: 1.6rem; font-weight: 600; white-space: nowrap; }
+.dot { width: .8rem; height: .8rem; border-radius: 50%; background: var(--muted); }
+.dot.ok { background: var(--ok); }
+.dot.bad { background: var(--bad); }
+.dot.wait { background: var(--warn); }
+
+.tabs { flex: 1; display: flex; gap: .5rem; overflow: hidden; white-space: nowrap; }
+.tab {
+  padding: .65rem 1.3rem; font-size: 1.25rem; color: var(--muted);
+  background: transparent; border: 0; border-radius: 2rem; cursor: pointer;
+}
+.tab.active { color: var(--text); background: var(--card); }
+.tab.focused, .tab:focus { color: #04121f; background: var(--focus); transform: none; }
+
+.topright { display: flex; align-items: center; gap: 1.6rem; white-space: nowrap; }
+.clock { font-size: 2rem; font-weight: 300; }
+.weather { display: flex; align-items: center; gap: .5rem; font-size: 1.3rem; color: var(--muted); }
+.weather svg { width: 1.8rem; height: 1.8rem; fill: currentColor; }
+
+.content { flex: 1; overflow-y: auto; overflow-x: hidden; padding: .5rem 3.2rem 2rem; scroll-behavior: smooth; }
+.section-title { margin: 1.6rem 0 1rem .2rem; font-size: 1.5rem; font-weight: 600; color: var(--muted); }
+.section-title:first-child { margin-top: .4rem; }
+
+.grid { display: flex; flex-wrap: wrap; margin: 0 -.6rem; }
+.card {
+  position: relative; display: flex; flex-direction: column; justify-content: space-between;
+  width: 16rem; height: 10rem; margin: .6rem; padding: 1.1rem 1.2rem;
+  text-align: left; background: var(--card); border: 0; border-radius: var(--radius);
+  cursor: pointer; overflow: hidden;
+}
+.card .ic { width: 2.6rem; height: 2.6rem; fill: var(--muted); }
+.card .name { font-size: 1.2rem; line-height: 1.25; max-height: 2.5em; overflow: hidden; }
+.card .state { font-size: 1.05rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card .fav { position: absolute; top: .9rem; right: 1rem; width: 1.3rem; height: 1.3rem; fill: var(--on); }
+.card.on { background: var(--card-hi); }
+.card.on .ic { fill: var(--on); }
+.card.on .state { color: var(--text); }
+.card.alert .ic { fill: var(--bad); }
+.card.unavailable { opacity: .45; }
+.card .bar { position: absolute; left: 0; bottom: 0; height: .3rem; background: var(--on); }
+.card.big { width: 33.2rem; }
+.card .value { font-size: 2.3rem; font-weight: 300; }
+.card .value small { font-size: 1.1rem; color: var(--muted); margin-left: .2rem; }
+.card.camera { width: 33.2rem; height: 20.6rem; padding: 0; }
+.card.camera img { width: 100%; height: 100%; object-fit: cover; background: #000; }
+.card.camera .caption { position: absolute; left: 0; right: 0; bottom: 0; padding: .9rem 1.2rem; background: linear-gradient(rgba(0,0,0,0), rgba(0,0,0,.8)); }
+
+.empty { margin-top: 6rem; text-align: center; font-size: 1.5rem; color: var(--muted); line-height: 1.6; }
+
+.hints {
+  display: flex; gap: 2.4rem; padding: .9rem 3.2rem 1.4rem; font-size: 1.05rem; color: var(--muted);
+}
+.hints b { color: var(--text); font-weight: 600; margin-right: .3rem; }
+.key { display: inline-block; width: 1rem; height: 1rem; border-radius: .25rem; margin-right: .4rem; vertical-align: -.1rem; }
+.key.red { background: #e5484d; } .key.green { background: #30a46c; }
+.key.yellow { background: #f5d90a; } .key.blue { background: #3e63dd; }
+@media (hover: hover) and (pointer: fine) { .hints { display: none; } }
+
+/* ---------- Detaljpanel ---------- */
+.overlay {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 10;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(5, 8, 11, .72);
+}
+.panel {
+  width: 60rem; max-width: 94vw; max-height: 90vh; overflow-y: auto;
+  padding: 2.4rem 2.8rem; background: var(--bg-2); border: 1px solid var(--line); border-radius: 1.6rem;
+}
+.panel h2 { display: flex; align-items: center; gap: 1rem; margin: 0 0 .3rem; font-size: 2rem; }
+.panel h2 svg { width: 2.6rem; height: 2.6rem; fill: var(--on); }
+.panel .sub { margin: 0 0 1.8rem; color: var(--muted); font-size: 1.2rem; }
+.panel .big-state { font-size: 3.6rem; font-weight: 300; margin: .4rem 0 1.4rem; }
+.row { display: flex; flex-wrap: wrap; gap: .9rem; margin: 0 0 1.3rem; align-items: center; }
+.row-label { width: 100%; color: var(--muted); font-size: 1.1rem; margin-bottom: -.3rem; }
+
+.slider { flex: 1; min-width: 20rem; height: 3.4rem; position: relative; background: var(--card); border-radius: .9rem; cursor: pointer; overflow: hidden; }
+.slider .fill { position: absolute; top: 0; left: 0; bottom: 0; background: var(--on); opacity: .85; }
+.slider .lbl { position: absolute; top: 0; left: 0; right: 0; bottom: 0; display: flex; align-items: center; justify-content: center; font-size: 1.3rem; font-weight: 600; text-shadow: 0 1px 3px rgba(0,0,0,.6); }
+.slider.focused { transform: none; }
+
+.swatch { width: 3.4rem; height: 3.4rem; border-radius: 50%; border: 0; cursor: pointer; }
+
+.media-art { width: 12rem; height: 12rem; border-radius: 1rem; object-fit: cover; background: var(--card); float: right; margin-left: 1.5rem; }
+.camera-view { width: 100%; border-radius: 1rem; background: #000; display: block; margin-bottom: 1.3rem; }
+
+.attrs { width: 100%; border-collapse: collapse; font-size: 1.1rem; margin-top: .6rem; }
+.attrs td { padding: .45rem .3rem; border-top: 1px solid var(--line); vertical-align: top; }
+.attrs td:first-child { color: var(--muted); width: 40%; }
+
+.temp-big { font-size: 4.4rem; font-weight: 300; min-width: 12rem; text-align: center; }
+
+/* ---------- Övrigt ---------- */
+.toast {
+  position: fixed; left: 50%; bottom: 4rem; z-index: 20; transform: translateX(-50%);
+  padding: 1rem 2rem; font-size: 1.3rem; background: var(--card-hi); border-radius: 2rem;
+  box-shadow: 0 .6rem 2rem rgba(0,0,0,.5);
+}
+.toast.bad { background: #5a2329; }
+
+.splash {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 30;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  background: var(--bg); font-size: 1.4rem; color: var(--muted);
+}
+.splash.gone { display: none; }
+.spinner {
+  width: 4rem; height: 4rem; border-radius: 50%;
+  border: .4rem solid var(--line); border-top-color: var(--accent);
+  -webkit-animation: spin 1s linear infinite; animation: spin 1s linear infinite;
+}
+@-webkit-keyframes spin { to { -webkit-transform: rotate(360deg); } }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Smal skärm (webbläsare i telefon) */
+@media (max-width: 1000px) {
+  .topbar { flex-wrap: wrap; gap: .8rem; padding: 1rem 16px .6rem; }
+  .tabs { order: 3; width: 100%; flex: none; overflow-x: auto; }
+  .content { padding: .3rem 16px 1.5rem; }
+  .card { width: calc(50% - 1.2rem); height: 9rem; }
+  .card.big, .card.camera { width: calc(100% - 1.2rem); }
+  .card.camera { height: 14rem; }
+  .panel { padding: 1.6rem; }
+  .slider { min-width: 12rem; }
+}
