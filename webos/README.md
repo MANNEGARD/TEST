@@ -140,5 +140,6 @@ python3 -m http.server 8080
 | `js/app.js` | Flikar, kort, detaljpaneler och tangenthantering |
 | `js/icons.js` | Egna ikoner, så att inget behöver hämtas från internet |
 | `package.sh` | Bygger `.ipk` och installerar på TV:n med ares-cli |
+| `smgd.project.json` | Byggbeskrivning för SMGD Developer Lab (webOS-webbapp, inget byggsteg) |
 
 Koden är skriven utan `async/await` och `?.`, så den fungerar på webOS 4 (2018) och nyare.

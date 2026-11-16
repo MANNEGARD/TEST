@@ -1,0 +1,9 @@
+{
+  "schema": 1,
+  "subtype": "webos_web",
+  "package_dir": ".",
+  "install_command": null,
+  "build_command": null,
+  "check_commands": [],
+  "exclude": ["README.md", "package.sh", "config.example.json", ".gitignore"]
+}

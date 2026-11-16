@@ -9,7 +9,7 @@ if ! command -v ares-package >/dev/null 2>&1; then
   exit 1
 fi
 out="$(mktemp -d)"
-ares-package . --outdir "$out" --no-minify -e package.sh -e README.md -e config.example.json -e .gitignore
+ares-package . --outdir "$out" --no-minify -e package.sh -e README.md -e config.example.json -e .gitignore -e smgd.project.json
 ipk="$(ls "$out"/*.ipk)"
 cp "$ipk" .
 echo "Byggt: $(basename "$ipk")"
