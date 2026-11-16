@@ -47,9 +47,19 @@ function hasProposal(t: Trip | null | undefined): boolean {
 
 // ----------------------------------------------------------------------------- ärendekort
 
-/** Ett klick på en knapp: den andra halvan av ett dubbelklick hamnar annars på nästa ärende. */
+/** Så tätt kommer klicken i ett dubbelklick; ett snabbt tryck på nästa ärende kommer senare. */
+const DOUBLE_CLICK_MS = 300;
+let lastClickAt = -Infinity;
+
+/** Ett klick på en knapp: den andra halvan av ett dubbelklick hamnar annars på nästa ärende.
+ *  Webbläsaren räknar även två snabba klick eller tryck på samma ställe som ett dubbelklick
+ *  (detail 2) när nästa ärendes knapp hamnar där den förra låg – därför avgör tiden mellan
+ *  klicken, och tryck på en pekskärm (där man inte dubbelklickar) räknas alltid. */
 function once(e: React.MouseEvent, fn: () => void) {
-  if (e.detail <= 1) fn();
+  const touch = "pointerType" in e.nativeEvent && e.nativeEvent.pointerType === "touch";
+  const double = !touch && e.detail > 1 && e.timeStamp - lastClickAt < DOUBLE_CLICK_MS;
+  lastClickAt = e.timeStamp;
+  if (!double) fn();
 }
 
 function MergeQuestion({ item, onAnswer }: { item: ReviewItem; onAnswer: (accept: boolean) => void }) {
