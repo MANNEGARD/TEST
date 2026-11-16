@@ -56,9 +56,16 @@ function boot(): Promise<void> {
     state.workplaces ??= rec("/settings/workplaces/list");
     state.odometer ??= rec(`/vehicles/${state.vehicleId}/odometer`);
     // Körtiden saknas på de rekonstruerade resorna i inspelningen; räkna den ur start- och sluttid.
+    // Med en uträknad starttid lämnas den tom som i den riktiga servern, så resans sida visar "≈".
     for (const d of Object.values(state.trips)) {
       const t = d.trip;
-      if (t.driving_seconds == null && t.started_at && t.ended_at && !["bounded", "unknown"].includes(t.start_time_quality)) {
+      if (
+        t.driving_seconds == null &&
+        t.started_at &&
+        t.ended_at &&
+        t.start_time_source !== "estimated" &&
+        !["bounded", "unknown", "estimated"].includes(t.start_time_quality)
+      ) {
         t.driving_seconds = Math.max(0, Math.round((Date.parse(t.ended_at) - Date.parse(t.started_at)) / 1000));
       }
     }
