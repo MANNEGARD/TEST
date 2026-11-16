@@ -21,7 +21,7 @@ from app.models.enums import LocationType, LogicalState, ReviewKind, TripSource
 from app.services import settings as settings_svc
 from app.services.classify import textnorm
 from app.services.places.normalize import fold, haversine_m, parse_address, valid_coordinates
-from app.services.trips import review
+from app.services.trips import review, start_time
 from app.services.trips import segments as seg
 
 DEPARTURE_BEFORE_END_MIN = 30
@@ -160,7 +160,8 @@ def candidates_for_trip(
     cal: dict[str, Any],
     abbreviations: dict[str, str],
 ) -> list[Candidate]:
-    start, end = trip.started_at, trip.ended_at
+    # En starttid uppskattad ur sträckan räknas som okänd: avfärden matchas inte mot den.
+    start, end = start_time.known_start(trip), trip.ended_at
     if start is None and end is None:
         return []
     before, after = float(cal["arrival_window_before_minutes"]), float(cal["arrival_window_after_minutes"])

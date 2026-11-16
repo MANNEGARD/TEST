@@ -165,13 +165,16 @@ Adressdata © OpenStreetMap-bidragsgivare, under licensen ODbL.
 
 **Adressen i underlaget.** Underlaget skriver alltid start och mål med gatuadress och ort,
 aldrig *Hem*. En bekräftad plats med eget namn står som *Acme AB, Kundvägen 2, Exempelstad*,
-bostaden med sin adress. I appen i övrigt visas platsernas namn som förut. Bostadens adress
-slås aldrig upp av sig själv, så den kan saknas. Saknar bostaden eller en annan bekräftad
-plats adress står det på exportsidan (*Bostaden saknar adress – fyll i den under Platser*),
-och månadens underlag skapas inte förrän den är ifylld. Öppna platsen under **Platser** och
+bostaden med sin adress – även en manuell eller importerad resa där det står "Hem". En privat
+plats står bara med sin adress, utan namnet. I appen i övrigt visas platsernas namn som förut.
+Bostadens adress slås aldrig upp av sig själv, så den kan saknas. Saknar bostaden eller en
+annan bekräftad plats adress eller ort står det på exportsidan (*Bostaden saknar adress – fyll
+i den under Platser*), och månadens underlag skapas inte förrän den är ifylld. Öppna platsen under **Platser** och
 skriv adressen i fältet **Adress**, eller tryck **Hämta adressen från kartan**: då skickas
-just den platsens position (fyra decimaler) en gång till OpenStreetMap, och svaret fylls i
-fältet så att du kan kontrollera det innan du sparar. Knappen kräver att platsen har en
+just den platsens position (fyra decimaler) en gång till karttjänsten (standard
+OpenStreetMap), och svaret fylls i fältet så att du kan kontrollera det innan du sparar. Svaret
+sparas, så ett nytt tryck skickar ingenting, och uppslagen räknas mot samma gräns som övriga
+(500 per dygn). Knappen kräver att platsen har en
 sparad position och att geokodningen är på.
 
 ### Starttid
@@ -188,8 +191,13 @@ mellan samma platser (minst 3), annars med liknande längd (minst 5), annars fr�
 tabell (under 3 km 25 km/h, under 10 km 35, under 30 km 50, under 80 km 65, längre 80 km/h).
 Exempel: 9 km, framme 16:42, inga egna resor → 35 km/h, 15 minuter → **≈ 16:27 (±5 min)**.
 Tiden märks precis som en uträknad tid: "≈" och felmarginal i appen, **ca** i underlaget, och
-körtiden visas som uppskattad. Ett tryck på tiden visar varifrån farten kommer. Resor som
-saknade starttid före 1.2.1 får uppskattningen vid nästa hämtning från bilen.
+körtiden visas som uppskattad. Ett tryck på tiden visar varifrån farten kommer. Felmarginalen
+blir större när dina egna resor på sträckan varierar mycket, och egna resor med en snittfart
+under 15 km/h (t.ex. en importerad resa där bilen stod parkerad) räknas inte. Resor som
+saknade starttid före 1.2.1 får uppskattningen vid nästa hämtning från bilen – utom resor i
+en månad vars underlag månadsskiftet redan har skapat, så att ett inlämnat underlag inte
+ändras. Kalendern, klassningen och AI-förslagen räknar inte med en uppskattning ur sträckan
+som känd avfärdstid.
 
 Saknas mätarställning eller en säker ankomsttid visas *Start okänd (mellan 06:10 och 08:52)*
 och knappen **Ange starttid**. En tid du anger märks *angiven av dig* och ändras aldrig av

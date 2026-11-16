@@ -3,7 +3,7 @@
  "info": {
   "title": "SMGD DriveLog API",
   "description": "REST-API för SMGD DriveLog – intelligent körjournal. Webbappen autentiserar med sessionskaka + X-CSRF-Token; Home Assistant-integrationen med Bearer-token.",
-  "version": "1.2.0"
+  "version": "1.2.1"
  },
  "paths": {
   "/api/v1/auth/setup-status": {
@@ -3379,7 +3379,7 @@
      "Locations"
     ],
     "summary": "Hämta platsens adress från kartan (en gång, efter ägarens tryck)",
-    "description": "Slår upp just den här platsens adress hos användarens geokodare (standard OpenStreetMap).\n\nBara platsens position (avrundad till fyra decimaler) skickas, och bara när ägaren trycker\npå knappen. Förslaget sparas inte: ägaren ser det i adressfältet och sparar platsen.",
+    "description": "Slår upp just den här platsens adress hos användarens geokodare (standard OpenStreetMap).\n\nBara platsens position (avrundad till fyra decimaler) skickas, och bara när ägaren trycker\npå knappen. Samma skydd som uppslagen i bakgrunden: svaret sparas per ruta (ett nytt tryck\nskickar ingenting) och anropet räknas mot dygnets gräns. Förslaget sparas inte på platsen:\nägaren ser det i adressfältet och sparar platsen.",
     "operationId": "lookup_address_api_v1_locations__location_id__lookup_address_post",
     "parameters": [
      {

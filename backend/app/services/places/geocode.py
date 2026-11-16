@@ -120,6 +120,10 @@ class GeocodeError(Exception):
     """Uppslaget gick inte att göra (nätverk, skydd eller ogiltigt svar)."""
 
 
+class DailyLimitReached(GeocodeError):
+    """Dygnets gräns för anrop till karttjänsten är nådd."""
+
+
 def set_default_transport(transport: httpx.BaseTransport | None) -> None:
     global _default_transport
     _default_transport = transport
@@ -394,6 +398,35 @@ def _home_has_coordinate(db: Session, user_id: uuid.UUID) -> bool:
         ).first()
         is not None
     )
+
+
+def lookup_for_place(
+    db: Session, user_id: uuid.UUID, provider_url: str, lat: float, lon: float, *, now: datetime | None = None
+) -> GeoAddress | None:
+    """Ägarens tryck på "Hämta adressen från kartan": samma skydd som uppslagen i bakgrunden.
+
+    Svaret sparas per ruta (ett nytt tryck besvaras ur cachen) och anropet räknas mot
+    ``DAILY_LIMIT``; är gränsen nådd kastas ``DailyLimitReached`` utan att något skickas.
+    """
+    now = now or utcnow()
+    job = _Job(uuid.uuid4(), user_id, provider_url, (urlsplit(provider_url).hostname or "").lower(),
+               cell_key(lat), cell_key(lon))
+    cache = _cache_row(db, user_id, job.host, job.lat_key, job.lon_key)
+    if cache is not None and cache.status == GeocodeStatus.NOT_FOUND:
+        return None
+    if cache is not None and cache.status == GeocodeStatus.OK:
+        found = _from_cache(cache.result if isinstance(cache.result, dict) else None)
+        if found is not None:
+            return found
+    if _calls_last_day(db, now) >= DAILY_LIMIT:
+        raise DailyLimitReached("Dygnets gräns för adressuppslag är nådd.")
+    try:
+        found = reverse(provider_url=provider_url, lat_key=job.lat_key, lon_key=job.lon_key)
+    except (GeocodeError, ValueError):
+        _store_result(db, job, GeocodeStatus.FAILED, None, now)
+        raise
+    _store_result(db, job, GeocodeStatus.OK if found is not None else GeocodeStatus.NOT_FOUND, found, now)
+    return found
 
 
 def _calls_last_day(db: Session, now: datetime) -> int:

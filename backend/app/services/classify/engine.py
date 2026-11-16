@@ -49,6 +49,7 @@ from app.services.classify.purpose import PurposeProposal
 from app.services.classify.signals import ENGINE_VERSION, RuleResult, Signal, TripContext
 from app.services.places.normalize import parse_address
 from app.services.trips import segments as seg
+from app.services.trips import start_time
 
 logger = logging.getLogger(__name__)
 
@@ -289,7 +290,8 @@ def build_llm_document(
     doc: dict[str, Any] = {
         "trip": {
             "weekday": _WEEKDAYS[local_start.weekday()] if local_start else None,
-            "start_time": local_start.strftime("%H:%M") if (local_start and trip.started_at) else None,
+            # En starttid uppskattad ur sträckan skickas inte som känd (start_time.known_start).
+            "start_time": local_start.strftime("%H:%M") if (local_start and start_time.known_start(trip)) else None,
             "end_time": local_end.strftime("%H:%M") if local_end else None,
             "distance_km": round(trip.distance_km, 1),
             "stops": max(0, trip.segment_count - 1),

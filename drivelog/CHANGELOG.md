@@ -13,14 +13,15 @@ Rättningar efter den första riktiga resan.
 - **Adress i underlaget, aldrig "Hem".** Start och mål står alltid med gatuadress och ort. En
   bekräftad plats med eget namn står som *Namn, adress*, bostaden med sin adress. Saknar
   bostaden eller en annan bekräftad plats adress visas det före exporten, och månadens underlag
-  väntar tills den är ifylld. Adressen skrivs på platsen under *Platser*, eller hämtas med
-  knappen **Hämta adressen från kartan** (platsens position skickas då en gång till
-  OpenStreetMap).
+  väntar tills den är ifylld (även när orten saknas). Adressen skrivs på platsen under
+  *Platser*, eller hämtas med knappen **Hämta adressen från kartan** (platsens position skickas
+  då en gång till karttjänsten, standard OpenStreetMap). En privat plats står bara med adressen.
 - **Starttid ur sträckan.** När bilen bara rapporterar efter ankomsten uppskattas starttiden ur
   sträckan och en snittfart – från dina egna resor mellan samma platser (eller med liknande
   längd) när de räcker, annars en vanlig fart för sträckan. Den visas som *≈ 07:35 (±5 min)*,
   står som *ca* i underlaget, och ett tryck visar varifrån den kommer. En starttid du själv
-  angett rörs aldrig. Resor som redan saknar starttid får uppskattningen efter uppdateringen.
+  angett rörs aldrig. Resor som redan saknar starttid får uppskattningen efter uppdateringen,
+  utom i månader vars underlag redan har skapats av månadsskiftet.
 
 ## 1.2.0
 

@@ -375,7 +375,7 @@ def test_excel_writes_ca_and_footnote_for_estimated_start(db, user, vehicle, act
     texts = _sheet_texts(_export(db, user, vehicle, actor))
     assert f"ca{NBSP}07:35–08:10" in texts
     assert simple.FOOTNOTE_TIMES in texts
-    assert simple.FOOTNOTE_TIMES.startswith("ca = uträknad ur bilens egna uppgifter")
+    assert simple.FOOTNOTE_TIMES.startswith("ca = uträknad ur bilens uppgifter eller uppskattad ur sträckan")
 
 
 def test_excel_footnote_for_unknown_start_on_live_trip(db, user, vehicle, actor, trips):

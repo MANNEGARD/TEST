@@ -992,7 +992,9 @@ export interface paths {
          * @description Slår upp just den här platsens adress hos användarens geokodare (standard OpenStreetMap).
          *
          *     Bara platsens position (avrundad till fyra decimaler) skickas, och bara när ägaren trycker
-         *     på knappen. Förslaget sparas inte: ägaren ser det i adressfältet och sparar platsen.
+         *     på knappen. Samma skydd som uppslagen i bakgrunden: svaret sparas per ruta (ett nytt tryck
+         *     skickar ingenting) och anropet räknas mot dygnets gräns. Förslaget sparas inte på platsen:
+         *     ägaren ser det i adressfältet och sparar platsen.
          */
         post: operations["lookup_address_api_v1_locations__location_id__lookup_address_post"];
         delete?: never;

@@ -199,7 +199,7 @@ def _address(ctx: ExportContext, trip: LogicalTrip, address: str | None, loc_id:
         return f"Privat resa ({city})" if city else "Privat resa"
     # Gatuadress och ort, aldrig "Hem"; bekräftad plats med eget namn: "Namn, adress".
     loc = ctx.locations.get(loc_id) if loc_id else None
-    return place_text.report_text(loc, address, live=trip.source in place_text.LIVE_SOURCES)
+    return place_text.report_text(loc, address, live=trip.source in place_text.LIVE_SOURCES, locs=ctx.locations)
 
 
 def _contacts(ctx: ExportContext, trip: LogicalTrip) -> str:
@@ -262,7 +262,8 @@ def _notes(ctx: ExportContext, trip: LogicalTrip, refuels: list[FuelRecord]) -> 
             if loc is not None and loc.type in (LocationType.HOME, LocationType.PRIVATE) and trip.source in place_text.LIVE_SOURCES:
                 label = "Privat stopp"
             else:
-                label = place_text.report_text(loc, stop.get("address"), live=trip.source in place_text.LIVE_SOURCES)
+                label = place_text.report_text(loc, stop.get("address"), live=trip.source in place_text.LIVE_SOURCES,
+                                               locs=ctx.locations)
             label = label or "okänd plats"
             minutes = stop.get("stop_minutes")
             vias.append(f"{label} ({minutes:.0f} min)" if minutes is not None else label)

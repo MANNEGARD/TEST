@@ -297,19 +297,31 @@ def reported_quality_checks(db: Session, reported: list[LogicalTrip]) -> list[di
         rows, locs, private_stop_ids([t for t in rows if t.source in LIVE_SOURCES]))
     if lacking:
         home_only = len(lacking) == 1 and lacking[0].type == LocationType.HOME
+        city_only = all(place_text.missing_city_only(loc) for loc in lacking)
+        what = "ort i adressen" if city_only else "adress"
         names = "bostaden" if home_only else (
             ", ".join(clean(loc.name) for loc in lacking[:5]) + (" …" if len(lacking) > 5 else ""))
-        title = ("Bostaden saknar adress – fyll i den under Platser" if home_only
-                 else f"{len(lacking)} {'plats' if len(lacking) == 1 else 'platser'} saknar adress – "
-                      f"fyll i {'den' if len(lacking) == 1 else 'dem'} under Platser")
+        if home_only:
+            title = ("Bostadens adress saknar ort – fyll i den under Platser" if city_only
+                     else "Bostaden saknar adress – fyll i den under Platser")
+        else:
+            title = (f"{len(lacking)} {'plats' if len(lacking) == 1 else 'platser'} saknar {what} – "
+                     f"fyll i {'den' if len(lacking) == 1 else 'dem'} under Platser")
         out.append(
             _check("place_address_missing", ERROR, title,
-                   f"Underlaget skriver alltid gatuadress och ort, men {names} saknar adress. Öppna platsen under "
-                   "Platser och skriv adressen, eller tryck \"Hämta adressen från kartan\" där.",
+                   f"Underlaget skriver alltid gatuadress och ort, men {names} saknar {what}. Öppna platsen under "
+                   "Platser och skriv adressen med ort, eller tryck \"Hämta adressen från kartan\" där.",
                    lacking_trips, location_ids=[str(loc.id) for loc in lacking])
         )
+    # Adress saknas räknas på det som underlaget skriver, inte på resans egen text.
     lacking_ids = {t.id for t in lacking_trips}
-    no_address = [t for t in rows if t.id not in lacking_ids and (not clean(t.start_address) or not clean(t.end_address))]
+
+    def _written(t: LogicalTrip, loc_id: Any, text: str | None) -> str:
+        loc = locs.get(loc_id) if loc_id is not None else None
+        return place_text.report_text(loc, text, live=t.source in LIVE_SOURCES, locs=locs)
+
+    no_address = [t for t in rows if t.id not in lacking_ids and (
+        not _written(t, t.start_location_id, t.start_address) or not _written(t, t.end_location_id, t.end_address))]
     if no_address:
         out.append(
             _check("missing_address", WARNING, "Adress saknas",

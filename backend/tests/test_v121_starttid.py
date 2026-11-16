@@ -318,3 +318,93 @@ def test_api_shows_estimated_source_and_basis(client, db, user, vehicle):
     t = body.get("trip", body)
     assert t["start_time_source"] == "estimated" and t["start_time_text"] == "≈ 16:27"
     assert t["start_estimate_basis"]["method"] == "distance_speed"
+
+
+# ----------------------------------------------------------------------------- granskningen
+
+
+def test_own_trips_slower_than_the_floor_are_not_used(db, user, vehicle, trips):
+    """Egna resor där sluttiden ligger långt efter körningen (20 km på 3 h = 6,7 km/h) är ingen
+    snittfart: tabellen gäller."""
+    known_trips(trips, 3, km=20.0, minutes=180)
+    trip = live_trip(db, vehicle, user, km=20.0)
+    start_time.fill_from_distance(db, vehicle.id)
+    trip = reload_trip(db, trip.id)
+    basis = trip.segments[0].raw_trip.start_estimate_basis
+    assert basis["speed_source"] == "table" and basis["speed_kmh"] == 50
+    assert local(trip.started_at) == "16:18"
+
+
+def test_margin_follows_the_spread_of_own_trips(db, user, vehicle, trips):
+    """20 km på 60, 24 och 10 min (20, 50 och 120 km/h): medianen 50 km/h ger 24 min, men
+    kvartilerna (35 och 85 km/h) säger 14–34 min, så marginalen blir ±10 min, inte ±6."""
+    for i, minutes in enumerate((60, 24, 10)):
+        known_trips(trips, 1, km=20.0, minutes=minutes, first=datetime(2026, 9, 1, 6, 0, tzinfo=UTC) + timedelta(days=i))
+    trip = live_trip(db, vehicle, user, km=20.0)
+    start_time.fill_from_distance(db, vehicle.id)
+    trip = reload_trip(db, trip.id)
+    basis = trip.segments[0].raw_trip.start_estimate_basis
+    assert basis["speed_source"] == "route" and basis["speed_kmh"] == 50.0
+    assert local(trip.started_at) == "16:18"
+    assert start_time.margin_text(basis) == "±10 min"
+
+
+def test_margin_is_held_to_the_window_when_the_time_is_held(db, user, vehicle):
+    """300 km kan inte ha körts på de två timmarna sedan bilen stod still: tiden hålls vid E,
+    och marginalen sträcker sig inte utanför fönstret (E till L är 10 min)."""
+    E = ARRIVAL - timedelta(hours=2)
+    est = start_time.estimate_from_distance(ended_at=ARRIVAL, distance_km=300, earliest=E,
+                                            latest=E + timedelta(minutes=10), speed=start_time.Speed(80, "table", 0))
+    assert est.at == E and est.basis["held_to_window"] is True
+    assert est.margin_min == 10
+    free = start_time.estimate_from_distance(ended_at=ARRIVAL, distance_km=9, earliest=ARRIVAL - timedelta(hours=5),
+                                             latest=ARRIVAL, speed=start_time.Speed(35, "table", 0))
+    assert free.basis["held_to_window"] is False
+
+
+def test_months_whose_report_is_already_made_are_left_alone(db, user, vehicle):
+    """Ett underlag som månadsskiftet redan har skapat (och som kanske är inlämnat) ändras inte:
+    en resa i den månaden, eller som skulle flytta dit, behåller sin okända starttid."""
+    db.add(M.MonthClose(user_id=user.id, vehicle_id=vehicle.id, month="2026-10", state="exported"))
+    db.flush()
+    in_october = live_trip(db, vehicle, user, km=9.0, ended=datetime(2026, 10, 14, 14, 42, tzinfo=UTC), odo_start=10000)
+    # Framme 00:10 den 1 november: 20 km i 50 km/h skulle flytta starten till 31 oktober.
+    over_the_edge = live_trip(db, vehicle, user, km=20.0, ended=datetime(2026, 10, 31, 23, 10, tzinfo=UTC),
+                              odo_start=20000)
+    assert not start_time.has_distance_candidates(db, vehicle.id)
+    assert start_time.fill_from_distance(db, vehicle.id) == 0
+    for t in (in_october, over_the_edge):
+        t = reload_trip(db, t.id)
+        assert t.started_at is None and t.start_time_quality == TimeQuality.BOUNDED
+    # En öppen månad får uppskattningen som vanligt.
+    in_november = live_trip(db, vehicle, user, km=9.0, ended=datetime(2026, 11, 10, 14, 42, tzinfo=UTC),
+                            odo_start=30000)
+    assert start_time.has_distance_candidates(db, vehicle.id)
+    assert start_time.fill_from_distance(db, vehicle.id) == 1
+    assert reload_trip(db, in_november.id).start_time_quality == TimeQuality.ESTIMATED
+
+
+def test_estimate_is_not_used_as_a_known_start(db, user, vehicle, actor):
+    """Kalenderns avfärd, pendlingskedjan och AI-underlaget räknar inte med en uppskattning ur
+    sträckan som känd starttid; en starttid som ägaren angett gäller som vanligt."""
+    from app.services.calendar import matching
+
+    trip = live_trip(db, vehicle, user)
+    start_time.fill_from_distance(db, vehicle.id)
+    trip = reload_trip(db, trip.id)
+    assert trip.started_at is not None and start_time.from_distance(trip)
+    assert start_time.known_start(trip) is None
+    # Ett möte som slutar precis vid den uppskattade starten ger ingen avfärdsträff.
+    db.add(M.CalendarEvent(user_id=user.id, calendar_id="cal", external_id="ev-k4", subject="Genomgång",
+                           start_at=trip.started_at - timedelta(hours=3), end_at=trip.started_at,
+                           location_name="Fiktivstad"))
+    db.flush()
+    assert matching.match_trip(db, trip, user_id=user.id, is_demo=False) == []
+    own = ARRIVAL - timedelta(minutes=40)
+    start_time.set_override(db, trip, own, actor=actor)
+    trip = reload_trip(db, trip.id)
+    assert not start_time.from_distance(trip) and start_time.known_start(trip) == own
+
+
+def test_footnote_says_the_time_can_be_estimated_from_the_distance():
+    assert "uppskattad ur sträckan" in simple.FOOTNOTE_TIMES

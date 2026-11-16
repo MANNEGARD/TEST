@@ -20,7 +20,13 @@ rapporterar bara när resan är slut, men ankomsttiden och den uppmätta sträck
 Körtiden räknas ur sträckan och en snittfart – ägarens egna resor med kända tider (samma
 rutt, annars liknande sträcka) när de är tillräckligt många, annars en enkel tabell – och
 starttiden blir ankomsten minus körtiden, hållen inom ``[E, L]``. Den märks ``estimated``
-precis som K2/K3, och grunden (fart, varifrån farten kommer, körtid) sparas.
+precis som K2/K3, och grunden (fart, varifrån farten kommer, körtid) sparas. Felmarginalen
+växer med spridningen i ägarens egna resor. Resor i månader vars underlag redan har skapats
+av månadsskiftet lämnas orörda, så att ett inlämnat underlag inte ändras i efterhand.
+
+Tider som räknar med starttiden som känd (kalenderns avfärd, pendlingskedjan, AI-underlaget)
+använder ``known_start``: en uppskattning ur sträckan räknas där som okänd, precis som
+stilleståndet mellan resor (``merge.stop_gap``) redan bedöms med gränserna.
 """
 
 from __future__ import annotations
@@ -36,8 +42,8 @@ from typing import Any, Literal
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from app.models import LogicalTrip, RawTrip, TripSegment
-from app.models.enums import LogicalState, TimeQuality, TripSource
+from app.models import LogicalTrip, MonthClose, RawTrip, TripSegment, Vehicle
+from app.models.enums import LogicalState, MonthCloseState, TimeQuality, TripSource
 from app.services import audit
 
 # Starttid ur trippmätaren (K1) är avstängd tills ett prov mot den riktiga bilen visat att
@@ -58,7 +64,9 @@ K4_ROUTE_MIN_TRIPS = 3  # egna resor på samma rutt som krävs
 K4_SIMILAR_MIN_TRIPS = 5  # egna resor med liknande sträcka som krävs
 K4_SIMILAR_SHARE = 0.3  # "liknande sträcka": inom ±30 %
 K4_HISTORY_LIMIT = 500  # de senaste resorna med kända tider räcker
-K4_MIN_SPEED, K4_MAX_SPEED = 5.0, 130.0  # rimlig snittfart för en egen resa
+# Rimlig snittfart för en egen resa. Långsammare än 15 km/h i snitt är nästan alltid en
+# sluttid som ligger efter själva körningen (t.ex. parkering i en importerad resa).
+K4_MIN_SPEED, K4_MAX_SPEED = 15.0, 130.0
 K4_MIN_MINUTES = 1.0
 K4_MARGIN = {"route": (2.0, 0.25), "similar": (2.0, 0.25), "table": (3.0, 0.35)}  # (minst min, andel av körtiden)
 _LIVE = (TripSource.VOLVO_API, TripSource.DEMO)
@@ -96,6 +104,9 @@ class Speed:
     kmh: float
     source: Literal["route", "similar", "table"]
     samples: int
+    # Kvartilerna av de egna resornas fart (km/h): felmarginalen följer spridningen.
+    low_kmh: float | None = None
+    high_kmh: float | None = None
 
 
 def obs_view(obs: Any) -> ObsView:
@@ -280,9 +291,19 @@ def estimate_from_distance(
     if E is not None and L < E:
         return _none(earliest, latest)
     minutes = max(K4_MIN_MINUTES, distance_km / speed.kmh * 60)
-    at = _clamp_round(ended_at - timedelta(minutes=minutes), E, L)
+    wanted = ended_at - timedelta(minutes=minutes)
+    at = _clamp_round(wanted, E, L)
+    held = wanted > L or (E is not None and wanted < E)
     least, share = K4_MARGIN[speed.source]
-    margin = round(max(least, share * minutes), 1)
+    margin = max(least, share * minutes)
+    if speed.low_kmh and speed.high_kmh:
+        # Spretar de egna resorna blir marginalen så stor som kvartilerna säger.
+        slow, fast = distance_km / speed.low_kmh * 60, distance_km / speed.high_kmh * 60
+        margin = max(margin, slow - minutes, minutes - fast)
+    if E is not None:
+        # Starten ligger alltid inom [E, L]: marginalen sträcker sig aldrig längre.
+        margin = min(margin, max(_minutes(at - E), _minutes(L - at), 1.0))
+    margin = round(margin, 1)
     window = _minutes(L - E) if E is not None else None
     basis: dict[str, Any] = {
         "method": "distance_speed",
@@ -294,6 +315,7 @@ def estimate_from_distance(
         "speed_source": speed.source,
         "samples": speed.samples,
         "duration_minutes": round(minutes, 1),
+        "held_to_window": held,
         "margin_min": margin,
     }
     return StartEstimate(at=at, earliest=E, latest=L, method="distance_speed", margin_min=margin, basis=basis)
@@ -340,11 +362,17 @@ def typical_speed(raw: RawTrip, history: Sequence[tuple[uuid.UUID | None, uuid.U
     if a is not None and b is not None:
         route = [v for s, e, _, v in history if {s, e} == {a, b} and s is not None and e is not None]
         if len(route) >= K4_ROUTE_MIN_TRIPS:
-            return Speed(round(statistics.median(route), 1), "route", len(route))
+            return _own_speed(route, "route")
     similar = [v for _, _, d, v in history if abs(d - km) <= K4_SIMILAR_SHARE * km]
     if len(similar) >= K4_SIMILAR_MIN_TRIPS:
-        return Speed(round(statistics.median(similar), 1), "similar", len(similar))
+        return _own_speed(similar, "similar")
     return Speed(table_speed(km), "table", 0)
+
+
+def _own_speed(values: list[float], source: Literal["route", "similar"]) -> Speed:
+    """Medianen av de egna resornas fart, med kvartilerna för felmarginalen."""
+    low, _, high = statistics.quantiles(values, n=4, method="inclusive")
+    return Speed(round(statistics.median(values), 1), source, len(values), round(low, 1), round(high, 1))
 
 
 def _distance_candidates_query(vehicle_id: uuid.UUID):
@@ -366,8 +394,51 @@ def _distance_candidates_query(vehicle_id: uuid.UUID):
     )
 
 
+def _closed_months(db: Session, vehicle_id: uuid.UUID) -> tuple[set[str], tzinfo | None]:
+    """Månader vars underlag månadsskiftet redan har skapat ("2026-10"), och ägarens tidszon."""
+    months = set(db.execute(select(MonthClose.month).where(
+        MonthClose.vehicle_id == vehicle_id,
+        MonthClose.state.in_((MonthCloseState.EXPORTED, MonthCloseState.STALE)),
+    )).scalars())
+    if not months:
+        return months, None
+    from app.services import settings as settings_svc
+
+    owner = db.execute(select(Vehicle.owner_user_id).where(Vehicle.id == vehicle_id)).scalar_one_or_none()
+    return months, settings_svc.user_timezone(db, owner) if owner is not None else None
+
+
+def _distance_plan(db: Session, vehicle_id: uuid.UUID) -> list[tuple[RawTrip, StartEstimate]]:
+    """Resorna som ska få en uppskattning ur sträckan, med uppskattningen.
+
+    En resa i en månad vars underlag redan har skapats av månadsskiftet (eller som skulle
+    flytta dit) lämnas orörd: ett underlag som kanske redan är inlämnat ändras inte i efterhand.
+    """
+    raws = list(db.execute(_distance_candidates_query(vehicle_id).order_by(RawTrip.ended_at)).scalars())
+    if not raws:
+        return []
+    history = _known_speeds(db, vehicle_id)
+    closed, tz = _closed_months(db, vehicle_id)
+    plan: list[tuple[RawTrip, StartEstimate]] = []
+    for raw in raws:
+        est = estimate_from_distance(
+            ended_at=raw.ended_at, distance_km=raw.distance_km, earliest=raw.start_earliest,
+            latest=raw.start_latest, speed=typical_speed(raw, history),
+        )
+        if est.at is None:
+            continue
+        if tz is not None and any(
+            when is not None and when.astimezone(tz).strftime("%Y-%m") in closed for when in (raw.sort_time, est.at)
+        ):
+            continue
+        plan.append((raw, est))
+    return plan
+
+
 def has_distance_candidates(db: Session, vehicle_id: uuid.UUID) -> bool:
-    return db.execute(_distance_candidates_query(vehicle_id).limit(1)).first() is not None
+    if db.execute(_distance_candidates_query(vehicle_id).limit(1)).first() is None:
+        return False
+    return bool(_distance_plan(db, vehicle_id))
 
 
 def fill_from_distance(db: Session, vehicle_id: uuid.UUID) -> int:
@@ -376,20 +447,13 @@ def fill_from_distance(db: Session, vehicle_id: uuid.UUID) -> int:
     Rör bara delresornas starttid; en starttid som ägaren angett på journalresan gäller
     fortfarande före (``segments.refresh_logical``). Returnerar antalet uppskattade delresor.
     """
-    raws = list(db.execute(_distance_candidates_query(vehicle_id).order_by(RawTrip.ended_at)).scalars())
-    if not raws:
+    plan = _distance_plan(db, vehicle_id)
+    if not plan:
         return 0
     from app.services.trips import segments as seg
 
-    history = _known_speeds(db, vehicle_id)
     filled: list[uuid.UUID] = []
-    for raw in raws:
-        est = estimate_from_distance(
-            ended_at=raw.ended_at, distance_km=raw.distance_km, earliest=raw.start_earliest,
-            latest=raw.start_latest, speed=typical_speed(raw, history),
-        )
-        if est.at is None:
-            continue
+    for raw, est in plan:
         raw.started_at, raw.start_time_quality, raw.start_estimate_basis = est.at, TimeQuality.ESTIMATED, est.basis
         raw.start_earliest, raw.start_latest = est.earliest, est.latest
         seg.set_raw_sort_time(raw)
@@ -426,6 +490,23 @@ def set_override(db: Session, trip: LogicalTrip, value: datetime | None, *, acto
         seg.refresh_logical(db, trip)
     db.flush()
     return trip
+
+
+def from_distance(trip: LogicalTrip) -> bool:
+    """Är resans starttid en uppskattning ur sträckan (K4)? En angiven starttid är det aldrig."""
+    if getattr(trip, "start_time_override", None) is not None or trip.start_time_quality != TimeQuality.ESTIMATED:
+        return False
+    segments = sorted(trip.segments or [], key=lambda s: (s.seq, s.part))
+    raw = segments[0].raw_trip if segments else None
+    basis = raw.start_estimate_basis if raw is not None else None
+    return isinstance(basis, dict) and basis.get("method") == "distance_speed"
+
+
+def known_start(trip: LogicalTrip) -> datetime | None:
+    """Starttiden för det som räknar med den som känd (kalenderns avfärd, pendlingskedjan,
+    AI-underlaget). En uppskattning ur sträckan kan vara fel med en kvart eller mer och räknas
+    därför som okänd där, så som stilleståndet mellan resor bedöms med gränserna."""
+    return None if from_distance(trip) else trip.started_at
 
 
 def display(trip: LogicalTrip, tz: tzinfo) -> str:

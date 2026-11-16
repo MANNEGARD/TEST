@@ -44,7 +44,10 @@ FOOTNOTE_MIXED = " För delvis privata resor anges endast tjänstedelen under Km
 # Tider som DriveLog räknat fram märks "ca" (hårt mellanslag, så att märkningen aldrig
 # hamnar ensam på en rad). Fotnoten står på en egen rad under tabellen.
 ESTIMATED_PREFIX = "ca\u00a0"
-FOOTNOTE_TIMES = "ca = uträknad ur bilens egna uppgifter, felmarginalen visas i DriveLog; –08:52 = starttid okänd"
+FOOTNOTE_TIMES = (
+    "ca = uträknad ur bilens uppgifter eller uppskattad ur sträckan, felmarginalen visas i DriveLog; "
+    "–08:52 = starttid okänd"
+)
 LIVE_SOURCES = (TripSource.VOLVO_API, TripSource.DEMO)
 EMPTY_TEXT = "Inga tjänsteresor att redovisa i perioden."
 # Ett mellanstopp hemma eller vid en privat plats skrivs aldrig med adress (A.5).
@@ -301,7 +304,7 @@ def _via(
             address = PRIVATE_STOP
         else:
             loc = place_text.via_location(stop, locs or {})
-            address = place_text.report_text(loc, stop.get("address"), live=live)
+            address = place_text.report_text(loc, stop.get("address"), live=live, locs=locs)
         if address and (not out or out[-1] != address):
             out.append(address)
     return tuple(out)
@@ -368,8 +371,8 @@ def build_row(
         trip_id=trip.id,
         date=when.astimezone(tz).date() if when is not None else None,
         time=time,
-        from_address=place_text.report_text(start, trip.start_address, live=live),
-        to_address=place_text.report_text(end, trip.end_address, live=live),
+        from_address=place_text.report_text(start, trip.start_address, live=live, locs=locs),
+        to_address=place_text.report_text(end, trip.end_address, live=live, locs=locs),
         via=_via(trip, private_ids, locs),
         purpose=purpose_text(trip),
         odometer_start=trip.odometer_start,

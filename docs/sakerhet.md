@@ -119,7 +119,8 @@ som standard hos OpenStreetMaps Nominatim.
   Platser och i inställningen.
 - **Hämta adressen från kartan** (på en plats under *Platser*) skickar just den platsens
   position, avrundad till fyra decimaler, en gång när du trycker – samma anrop och skydd som
-  ovan. Det är det enda sättet bostadens position når karttjänsten; den slås aldrig upp av sig
+  ovan: svaret sparas per ruta (ett nytt tryck skickar ingenting) och anropet räknas mot
+  gränsen 500 per dygn. Det är det enda sättet bostadens position når karttjänsten; den slås aldrig upp av sig
   själv. Svaret sparas inte förrän du sparar platsen.
 
 ### Kartbilderna och Referer

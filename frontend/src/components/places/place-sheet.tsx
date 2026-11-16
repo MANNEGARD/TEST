@@ -174,7 +174,13 @@ function PlaceEditor({
     });
   };
   // Att spara bekräftar platsen, och en bekräftad plats behöver en adress i underlaget.
+  // Som underlagets kontroll (place_text.needs_address): bostaden och bekräftade platser måste ha
+  // gatuadress och ort. En plats som sparas här blir alltid bekräftad, så det gäller alla.
   const addressMissing = !address.trim();
+  const cityMissing =
+    !!address.trim() &&
+    address.split(",").filter((part) => part.trim()).length < 2 &&
+    !(address.trim() === (place.address ?? "").trim() && place.city);
 
   const clearPosition = () => {
     setPos(null);
@@ -403,15 +409,17 @@ function PlaceEditor({
             </div>
             <FieldHint id="place-address-hint">
               {type === "home" ? "Bostaden står med sin adress i underlaget, aldrig som ”Hem”. " : "Underlaget skriver platsens namn och adress. "}
-              Knappen skickar platsens position till OpenStreetMap en gång för att slå upp adressen; inget skickas utan att du trycker.
+              Knappen skickar platsens position till karttjänsten (standard OpenStreetMap) en gång för att slå upp adressen; inget skickas utan att
+              du trycker.
             </FieldHint>
             {lookupNote ? (
               <p role="status" className="text-xs text-ok-ink">
                 {lookupNote}
               </p>
-            ) : addressMissing ? (
+            ) : addressMissing || cityMissing ? (
               <p className="text-xs text-warn-ink" data-testid="place-address-missing">
-                Adress saknas – underlaget för månaden skapas inte förrän den är ifylld.
+                {addressMissing ? "Adress saknas" : "Orten saknas – skriv den efter ett kommatecken"} – står platsen i en tjänsteresa skapas månadens
+                underlag inte förrän {addressMissing ? "den" : "orten"} är ifylld.
               </p>
             ) : null}
           </div>

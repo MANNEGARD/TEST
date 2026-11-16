@@ -233,27 +233,32 @@ async function checkStartTimes(page, tag) {
     await basis.waitFor({ timeout: 5000 }).catch(() => fail(tag, "grunden för den uträknade tiden visas inte"));
     await shot(page, "trip-start-estimated-light");
   } else step("  (ingen demoresa med uträknad starttid – bara okänd prövas)");
-  if (unknown) {
-    await page.goto(`${BASE}/journal/${unknown.id}`);
-    const box = page.getByTestId("start-time-unknown");
-    await box.waitFor({ timeout: 15000 });
-    if (!(await box.innerText()).includes("Start okänd")) fail(tag, "okänd starttid visas inte som \"Start okänd\"");
-    await box.getByRole("button", { name: "Ange starttid" }).click();
-    const input = page.getByTestId("start-time-input");
-    await input.waitFor({ timeout: 5000 });
-    const time = stockholmTime(new Date(new Date(unknown.ended_at).getTime() - 20 * 60_000).toISOString());
-    await input.fill(time);
-    const saved = responseTo(page, "PATCH", /\/api\/v1\/trips\/[^/]+$/);
-    await page.getByRole("button", { name: "Spara", exact: true }).click();
-    if ((await saved).status() !== 200) fail(tag, "den angivna starttiden sparades inte");
-    await page.getByTestId("start-time-user").waitFor({ timeout: 10000 });
-    await expectText(page, "angiven av dig", tag);
-    await shot(page, "trip-start-user-light");
-    const removed = responseTo(page, "PATCH", /\/api\/v1\/trips\/[^/]+$/);
-    await page.getByRole("button", { name: "Ta bort den angivna starttiden" }).click();
-    if ((await removed).status() !== 200) fail(tag, "den angivna starttiden togs inte bort");
-    await page.getByTestId("start-time-unknown").waitFor({ timeout: 10000 }).catch(() => fail(tag, "starttiden blev inte okänd igen"));
-  } else step("  (ingen demoresa med okänd starttid – \"Ange starttid\" prövas inte)");
+  // Ägarens egen starttid: på en okänd starttid ("Ange starttid") eller, när alla starttider är
+  // uppskattade, på en uppskattad ("Ange starttiden själv"). Tas den bort gäller det som gällde förut.
+  const target = unknown ?? estimated;
+  await page.goto(`${BASE}/journal/${target.id}`);
+  const before = unknown ? "start-time-unknown" : "start-time-estimated";
+  const box = page.getByTestId(before);
+  await box.waitFor({ timeout: 15000 });
+  if (unknown && !(await box.innerText()).includes("Start okänd")) fail(tag, "okänd starttid visas inte som \"Start okänd\"");
+  await box.getByRole("button", { name: unknown ? "Ange starttid" : "Ange starttiden själv" }).click();
+  const input = page.getByTestId("start-time-input");
+  await input.waitFor({ timeout: 5000 });
+  const own = unknown ? new Date(new Date(unknown.ended_at).getTime() - 20 * 60_000).toISOString() : estimated.started_at;
+  await input.fill(stockholmTime(own));
+  const saved = responseTo(page, "PATCH", /\/api\/v1\/trips\/[^/]+$/);
+  await page.getByRole("button", { name: "Spara", exact: true }).click();
+  if ((await saved).status() !== 200) fail(tag, "den angivna starttiden sparades inte");
+  await page.getByTestId("start-time-user").waitFor({ timeout: 10000 });
+  await expectText(page, "angiven av dig", tag);
+  await shot(page, "trip-start-user-light");
+  const removed = responseTo(page, "PATCH", /\/api\/v1\/trips\/[^/]+$/);
+  await page.getByRole("button", { name: "Ta bort den angivna starttiden" }).click();
+  if ((await removed).status() !== 200) fail(tag, "den angivna starttiden togs inte bort");
+  await page
+    .getByTestId(before)
+    .waitFor({ timeout: 10000 })
+    .catch(() => fail(tag, unknown ? "starttiden blev inte okänd igen" : "uppskattningen gäller inte igen efter att den angivna tiden togs bort"));
 }
 
 /**

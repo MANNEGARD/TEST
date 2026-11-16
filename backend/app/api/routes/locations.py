@@ -415,7 +415,9 @@ def lookup_address(location_id: uuid.UUID, principal: WebPrincipalDep, db: DbDep
     """Slår upp just den här platsens adress hos användarens geokodare (standard OpenStreetMap).
 
     Bara platsens position (avrundad till fyra decimaler) skickas, och bara när ägaren trycker
-    på knappen. Förslaget sparas inte: ägaren ser det i adressfältet och sparar platsen.
+    på knappen. Samma skydd som uppslagen i bakgrunden: svaret sparas per ruta (ett nytt tryck
+    skickar ingenting) och anropet räknas mot dygnets gräns. Förslaget sparas inte på platsen:
+    ägaren ser det i adressfältet och sparar platsen.
     """
     loc = _owned(db, principal, location_id)
     if loc.is_demo:
@@ -432,9 +434,13 @@ def lookup_address(location_id: uuid.UUID, principal: WebPrincipalDep, db: DbDep
     raw_url = settings_svc.get_section(db, principal.user.id, "privacy").get("geocoder_url") or ""
     try:
         url = settings_svc.validate_geocoder_url(raw_url)
-        found = geocode.reverse(provider_url=url, lat_key=geocode.cell_key(loc.latitude),
-                                lon_key=geocode.cell_key(loc.longitude))
+        found = geocode.lookup_for_place(db, principal.user.id, url, loc.latitude, loc.longitude)
+    except geocode.DailyLimitReached as exc:
+        db.commit()
+        raise ApiError(429, "Dagens gräns för adressuppslag är nådd. Försök igen i morgon, eller skriv adressen själv.",
+                       "daily_limit") from exc
     except (ValueError, geocode.GeocodeError) as exc:
+        db.commit()  # ett misslyckat anrop räknas också mot dygnets gräns
         raise ApiError(502, "Kartan gick inte att nå just nu. Försök igen om en stund, eller skriv adressen själv.",
                        "lookup_failed") from exc
     audit.record(db, principal.actor, "location.address_lookup", "known_location", loc.id,

@@ -26,6 +26,8 @@ export interface StartBasis {
   speed_source?: "route" | "similar" | "table" | string | null;
   samples?: number | null;
   duration_minutes?: number | null;
+  /** K4: körtiden rymdes inte mellan bilens avläsningar, så tiden hölls inom fönstret. */
+  held_to_window?: boolean;
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -54,6 +56,7 @@ export function readBasis(raw: unknown): StartBasis {
     speed_source: str(b.speed_source),
     samples: num(b.samples),
     duration_minutes: num(b.duration_minutes),
+    held_to_window: b.held_to_window === true,
   };
 }
 
@@ -87,6 +90,7 @@ export function basisText(basis: StartBasis): string {
   }
   if (basis.method === "distance_speed") {
     if (basis.earliest && basis.latest) parts.push(`Starten låg någon gång mellan ${formatDateTime(basis.earliest)} och ${formatTime(basis.latest)}.`);
+    if (basis.held_to_window) parts.push("Körtiden ryms inte där, så tiden hölls inom det möjliga.");
   } else if (basis.earliest && basis.latest) parts.push(`Bilen stod still ${formatTime(basis.earliest)} och var på väg ${formatTime(basis.latest)}.`);
   else if (basis.latest) parts.push(`Bilen var på väg ${formatTime(basis.latest)}.`);
   if (basis.engine_running_at) parts.push(`Motorn gick ${formatTime(basis.engine_running_at)}.`);

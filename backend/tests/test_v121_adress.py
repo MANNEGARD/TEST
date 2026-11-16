@@ -326,3 +326,102 @@ def test_lookup_address_when_the_map_has_none(client, db, user, monkeypatch, loo
     db.commit()
     r = client.post(f"/api/v1/locations/{home.id}/lookup-address")
     assert r.status_code == 404 and r.json()["code"] == "address_not_found"
+
+
+# ----------------------------------------------------------------------------- granskningen
+
+
+def test_manual_trip_written_as_hem_gets_the_home_address(client, db, user, vehicle, home):
+    """En manuell resa där ägaren skrev "Hem" kopplas inte till bostaden, men underlaget
+    skriver ändå bostadens adress – aldrig ordet Hem."""
+    db.commit()
+    r = client.post("/api/v1/trips/manual", json={
+        "vehicle_id": str(vehicle.id), "started_at": "2026-09-15T08:00:00+02:00",
+        "ended_at": "2026-09-15T08:30:00+02:00", "start_address": "Hem", "end_address": ACME_ADDR,
+        "distance_km": 20, "category": "work", "purpose": "Möte"})
+    assert r.status_code in (200, 201), r.text
+    assert client.post(f"/api/v1/trips/{r.json()['id']}/approve").status_code == 200
+    db.expire_all()
+    assert journal(db, vehicle).rows[0].from_address == HOME_ADDR
+    body = client.get("/api/v1/exports/preview", params={**PERIOD, "vehicle_id": str(vehicle.id)}).json()
+    assert body["rows"][0]["from"] == HOME_ADDR
+
+
+def test_imported_trip_from_hem_gets_the_home_address_or_an_error(db, user, vehicle, trips):
+    trip = trips.trip("Hem", "Kundvägen 9, 234 56 Exempelstad", category=Category.WORK, purpose="Möte", start_at=T1)
+    # Utan markerad bostad: tom cell och ett fel som säger var adressen fylls i.
+    assert journal(db, vehicle).rows[0].from_address == ""
+    c = next(c for c in checks_mod.reported_quality_checks(db, [trip]) if c["code"] == "place_address_missing")
+    assert c["severity"] == checks_mod.ERROR
+    # Med bostaden markerad och ifylld: bostadens adress.
+    place(db, user, name="Hem", type=LocationType.HOME, address=HOME_ADDR, lat=59.9)
+    assert journal(db, vehicle).rows[0].from_address == HOME_ADDR
+    assert "place_address_missing" not in {c["code"] for c in checks_mod.reported_quality_checks(db, [trip])}
+
+
+def test_private_place_is_written_with_its_address_only(db, user, vehicle, home, acme):
+    """En privat plats eget namn (t.ex. en släktings bostad) går inte till arbetsgivaren."""
+    relative = place(db, user, name="Släktingens hus", type=LocationType.PRIVATE,
+                     address="Släktgatan 3, 345 67 Fiktivby", lat=59.7)
+    live_trip(db, vehicle, relative, acme, at=T1)
+    assert journal(db, vehicle).rows[0].from_address == "Släktgatan 3, 345 67 Fiktivby"
+
+
+def test_home_with_street_but_no_city_is_an_error(client, db, user, vehicle, acme):
+    home = place(db, user, name="Hem", type=LocationType.HOME, address=None)
+    db.commit()
+    r = client.patch(f"/api/v1/locations/{home.id}", json={"address": "Låtsasgatan 4"})
+    assert r.status_code == 200 and r.json()["city"] is None
+    db.expire_all()
+    home = db.get(M.KnownLocation, home.id)
+    trip = live_trip(db, vehicle, home, acme, at=T1)
+    c = next(c for c in checks_mod.reported_quality_checks(db, [trip]) if c["code"] == "place_address_missing")
+    assert c["severity"] == checks_mod.ERROR and c["title"] == "Bostadens adress saknar ort – fyll i den under Platser"
+    status = month_close.evaluate(db, user_id=user.id, vehicle=vehicle, month=date(2026, 9, 1), now=NOW)
+    assert status.state == "waiting"
+    # Med orten ifylld är allt klart.
+    home.address, home.city = "Låtsasgatan 4, 123 45 Påhittby", "123 45 Påhittby"
+    db.flush()
+    assert "place_address_missing" not in {c["code"] for c in checks_mod.reported_quality_checks(db, [trip])}
+
+
+def test_name_or_city_inside_the_street_name_is_still_written(db, user, vehicle, home):
+    hill = place(db, user, name="Berg", type=LocationType.CUSTOMER, address="Bergsgatan 2, 123 45 Påhittby", lat=59.3)
+    shop = place(db, user, name="Verkstaden", type=LocationType.CUSTOMER, address="Lundavägen 5", city="Lund", lat=59.4)
+    live_trip(db, vehicle, home, hill, at=T1)
+    live_trip(db, vehicle, hill, shop, at=T1 + timedelta(hours=2), odo=20012)
+    rows = journal(db, vehicle).rows
+    assert rows[0].to_address == "Berg, Bergsgatan 2, 123 45 Påhittby"
+    assert rows[1].to_address == "Verkstaden, Lundavägen 5, Lund"
+
+
+def test_missing_address_counts_on_what_the_report_writes(db, user, vehicle, home):
+    """En obekräftad plats utan adress: resan heter som platsen, men underlagets cell blir tom
+    – det ska varnas för."""
+    poi = place(db, user, name="Kartnamn", type=LocationType.UNKNOWN, address=None, confirmed=False)
+    trip = live_trip(db, vehicle, home, poi, at=T1)
+    assert trip.end_address == "Kartnamn" and journal(db, vehicle).rows[0].to_address == ""
+    assert "missing_address" in {c["code"] for c in checks_mod.reported_quality_checks(db, [trip])}
+
+
+def test_lookup_address_is_cached_and_counted_against_the_daily_limit(client, db, user, lookup, monkeypatch):
+    monkeypatch.setattr(geocode, "_sleep", lambda s: None)
+    settings_svc.update_section(db, user.id, "privacy", {"geocoding_enabled": True,
+                                                         "geocoder_url": "https://nominatim.example.org"})
+    home = place(db, user, name="Hem", type=LocationType.HOME, address=None, lat=59.123456, lon=15.654321)
+    other = place(db, user, name="Kund", type=LocationType.CUSTOMER, address=None, lat=59.3, lon=15.3)
+    db.commit()
+    for _ in range(3):
+        r = client.post(f"/api/v1/locations/{home.id}/lookup-address")
+        assert r.status_code == 200 and r.json()["address"] == HOME_ADDR
+    assert len(lookup.requests) == 1  # samma ruta slås bara upp en gång
+    assert geocode._calls_last_day(db, datetime.now(UTC)) == 1
+    # Är dygnets gräns nådd skickas ingenting.
+    now = datetime.now(UTC)
+    for i in range(geocode.DAILY_LIMIT):
+        db.add(M.GeocodeCache(owner_user_id=user.id, provider_host="nominatim.example.org", lat_key=i, lon_key=i,
+                              attempts=1, status="ok", fetched_at=now))
+    db.commit()
+    r = client.post(f"/api/v1/locations/{other.id}/lookup-address")
+    assert r.status_code == 429 and r.json()["code"] == "daily_limit"
+    assert len(lookup.requests) == 1

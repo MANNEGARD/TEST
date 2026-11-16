@@ -34,6 +34,7 @@ from app.models.enums import (
 )
 from app.services.learning import patterns as patterns_svc
 from app.services.places import registry as places
+from app.services.trips import start_time
 
 ENGINE_VERSION = "1.0"
 RETURN_LOOKBACK_DAYS = 14
@@ -157,9 +158,10 @@ def _commute_chain_from_home(db: Session, trip: LogicalTrip, origin: KnownLocati
             .order_by(LogicalTrip.sort_time.desc())
             .limit(1)
         ).scalar_one_or_none()
-        if prev is None or prev.ended_at is None or current.started_at is None:
+        started = start_time.known_start(current)  # en uppskattning ur sträckan räknas som okänd
+        if prev is None or prev.ended_at is None or started is None:
             return False
-        if current.started_at - prev.ended_at > COMMUTE_CHAIN_MAX_PAUSE:
+        if started - prev.ended_at > COMMUTE_CHAIN_MAX_PAUSE:
             return False
         if current.start_location_id is None or prev.end_location_id != current.start_location_id:
             return False
