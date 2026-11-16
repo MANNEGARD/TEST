@@ -57,6 +57,7 @@ from app.models.enums import (
 from app.services import audit
 from app.services import settings as settings_svc
 from app.services.text_safety import sanitize_text
+from app.services.trips.segments import TripError
 
 HISTORY_MIN = 3
 # Beslutet väntar på adressen, men högst så här länge efter att platsen skapades (A.1).
@@ -973,6 +974,14 @@ def on_owner_decision(db: Session, trip: LogicalTrip, *, before: dict[str, Any],
     return None
 
 
+class AssumptionError(TripError, ValueError):
+    """Antagandet eller företagsnamnet kan inte sparas. Är ett TripError, så att svaret
+    från telefonen blir "invalid" med texten, och ett ValueError som remember_always."""
+
+    def __init__(self, message: str):
+        super().__init__(message, "assumption")
+
+
 def _after_assumption(db: Session, trip: LogicalTrip) -> None:
     """Första antagandet för en plats: platsen blir "antagen kund" och notisen köas
     (``notices.queue_assumed`` skickar bara första gången per plats)."""
@@ -1096,9 +1105,9 @@ def _on_assumed_correction(db: Session, trip: LogicalTrip, *, before: dict[str, 
     db.flush()
     text = f"{_label(dest)} räknas inte längre som kund."
     if reopened == 1:
-        text += " 1 annan resa dit frågas om igen."
+        text += " 1 annan antagen resa frågas om igen."
     elif reopened > 1:
-        text += f" {reopened} andra resor dit frågas om igen."
+        text += f" {reopened} andra antagna resor frågas om igen."
     return text
 
 
@@ -1110,13 +1119,13 @@ def _make_customer(
     from app.services.learning import patterns as patterns_svc
 
     if trip.state != LogicalState.ACTIVE:
-        raise ValueError("Resan är inte aktiv.")
+        raise AssumptionError("Resan är inte aktiv.")
     vehicle = db.get(Vehicle, trip.vehicle_id)
     dest = db.get(KnownLocation, trip.end_location_id) if trip.end_location_id else None
     if vehicle is None or dest is None:
-        raise ValueError("Resan har ingen plats att spara företaget på.")
+        raise AssumptionError("Resan har ingen plats att spara företaget på.")
     if dest.type in _NEVER_ASSUMED_TYPES and dest.confirmed:
-        raise ValueError("Platsen kan inte bli en kund.")
+        raise AssumptionError("Platsen kan inte bli en kund.")
     user_id = vehicle.owner_user_id
     before = {"type": dest.type, "confirmed": dest.confirmed, "company": dest.company, "assumption": dest.assumption}
     dest.company = name
@@ -1145,14 +1154,14 @@ def confirm_assumption(db: Session, trip: LogicalTrip, *, actor: audit.Actor) ->
     from app.services.learning import feedback
 
     if trip.approval_source != ApprovalSource.ASSUMED or trip.category != Category.WORK:
-        raise ValueError("Resan är inte längre antagen.")
+        raise AssumptionError("Resan är inte längre antagen.")
     dest = db.get(KnownLocation, trip.end_location_id) if trip.end_location_id else None
     basis = trip.approval_basis or {}
     if basis.get("related_trip_id"):
-        raise ValueError("Svara på resan till kunden i stället.")
+        raise AssumptionError("Svara på resan till kunden i stället.")
     name = _poi_name(dest)
     if dest is None or not name:
-        raise ValueError("Platsen saknar namn.")
+        raise AssumptionError("Platsen saknar namn.")
     _dest, _pat, user_id = _make_customer(db, trip, name, actor=actor, action="location.assumption_confirmed")
     feedback.apply_decision(
         db, trip, user_id=user_id, actor=actor, channel="ha" if actor.type == "ha" else "web",
@@ -1170,7 +1179,7 @@ def set_company(db: Session, trip: LogicalTrip, text: str, *, actor: audit.Actor
 
     name = sanitize_text(text, limit=COMPANY_MAX)
     if not name:
-        raise ValueError("Skriv företagets namn.")
+        raise AssumptionError("Skriv företagets namn.")
     _dest, _pat, user_id = _make_customer(db, trip, name, actor=actor, action="location.company_set")
     feedback.apply_decision(
         db, trip, user_id=user_id, actor=actor, channel="ha" if actor.type == "ha" else "web",

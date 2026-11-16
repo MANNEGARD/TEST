@@ -58,7 +58,7 @@ export function HaBanner() {
           <span className="inline-flex items-center gap-1.5 font-semibold">
             <Smartphone className="size-4" aria-hidden /> Ingen telefon vald
           </span>
-          <span>DriveLog har frågor till dig men vet inte vilken telefon i Home Assistant de ska skickas till. Frågorna ligger kvar tills du väljer.</span>
+          <span>DriveLog vet inte vilken telefon i Home Assistant frågor och notiser ska skickas till. De ligger kvar tills du väljer.</span>
         </>
       ) : (
         <>

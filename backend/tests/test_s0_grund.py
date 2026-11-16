@@ -305,9 +305,13 @@ def test_stubs_are_neutral(db, user, vehicle, trips, actor):
     with pytest.raises(ValueError):
         autopilot.remember_always(db, user_id=user.id, trip=trip, category=Category.WORK, purpose="x", actor=actor)
     assert autopilot.on_owner_decision(db, trip, before={}, actor=actor) is None
-    assert autopilot.confirm_assumption(db, trip, actor=actor) is None
-    assert autopilot.set_company(db, trip, "Acme", actor=actor) is None
-    assert autopilot.classify_place("building", "warehouse") == "unclear"
+    # S1d: antagandet är byggt – en resa som inte är antagen kan inte bekräftas, och ett
+    # tomt företagsnamn avvisas innan något ändras.
+    with pytest.raises(ValueError):
+        autopilot.confirm_assumption(db, trip, actor=actor)
+    with pytest.raises(ValueError):
+        autopilot.set_company(db, trip, "  ", actor=actor)
+    assert autopilot.classify_place("building", "warehouse") == "work"
 
     est = start_time.estimate(earliest=now - timedelta(hours=2), latest=now - timedelta(minutes=30),
                               start_odometer=100.0, ended_at=now, distance_km=20.0, steps=[],

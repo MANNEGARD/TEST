@@ -117,6 +117,8 @@ _STREET_RE = re.compile(
 _COORD_RE = re.compile(r"-?\d{1,3}[.,]\d{4,}")
 _GENERIC_LABELS = {"hemmet", "hem", "bostaden", "privat plats", "privat", "okänd plats", "kontoret", "kontor"}
 _PRIVATE_SENSITIVITY = ("personal", "private")
+# Obekräftade platser vars kartnamn och kartans typ får skickas till AI (A.3).
+_PLACE_AI_KINDS = ("work", "unclear")
 
 # Regelsignaler vars UI-text bara består av fasta formuleringar och siffror.
 _SAFE_SIGNAL_KINDS = {
@@ -189,6 +191,13 @@ def _place_doc(loc, address: str | None, send_street: bool) -> dict[str, Any]:
     }
     if loc.confirmed and loc.company:
         doc["company"] = _safe(loc.company)
+    if not loc.confirmed and loc.place_kind in _PLACE_AI_KINDS:
+        # Platsantagandet (A.3): kartans namn och typ för obekräftade platser. Aldrig
+        # gatuadressen – ett namn som bara är adressen skickas inte.
+        if loc.name and not _name_is_address(loc):
+            doc["poi_name"] = _safe(loc.name)
+        if loc.osm_class:
+            doc["osm_class"] = _safe(loc.osm_class, 60)
     if send_street and loc.address:
         doc["address"] = _safe(loc.address)
     return doc
@@ -338,11 +347,31 @@ def build_llm_document(
     return _redact(doc, pattern, send_street)
 
 
-def _should_call_llm(rules: RuleResult, proposal: PurposeProposal | None, ctx: TripContext) -> bool:
+def _place_needs_ai(ctx: TripContext) -> bool:
+    """Platsantagandet (A.3): AI bedömer bara obekräftade platser med ``place_kind=unclear``
+    och ett namn i kartan."""
+    d = ctx.destination
+    return (
+        d is not None
+        and not d.confirmed
+        and d.place_kind == "unclear"
+        and d.assumption != "revoked"
+        and d.type not in (LocationType.HOME, LocationType.PRIVATE, LocationType.REGULAR_WORKPLACE,
+                           LocationType.OFFICE, LocationType.HOTEL)
+        and bool(d.name)
+        and not _name_is_address(d)
+    )
+
+
+def _should_call_llm(
+    rules: RuleResult, proposal: PurposeProposal | None, ctx: TripContext, *, place_ai: bool = False
+) -> bool:
     if rules.tax_note:
         return False  # skattemässig bedömning avgörs av användaren, inte av AI
     if any(s.kind == sig.ASK_ALWAYS_KIND for s in rules.signals):
         return False  # manuell regel "fråga mig alltid": AI får inte heller föreslå kategori
+    if place_ai and rules.category == Category.UNDECIDED:
+        return True  # självgående läge: en okänd plats med namn bedöms av AI (A.3)
     has_material = any(s.direction != "neutral" for s in rules.signals) or bool(ctx.calendar_matches)
     if not has_material:
         return False  # inget underlag – en LLM kan bara gissa
@@ -478,7 +507,8 @@ def _assess(
     source, model, llm_info = DecisionSource.RULE, None, None
     suggested = rules.category if rules.category != Category.UNDECIDED else None
 
-    if provider is not None and _should_call_llm(rules, proposal, ctx):
+    place_ai = provider is not None and _place_needs_ai(ctx) and _autopilot_holds(db, trip, user_id, cache)
+    if provider is not None and _should_call_llm(rules, proposal, ctx, place_ai=place_ai):
         if "private_terms" not in cache:
             cache["private_terms"] = private_location_terms(db, user_id)
         try:
