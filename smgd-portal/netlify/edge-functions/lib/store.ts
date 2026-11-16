@@ -67,6 +67,45 @@ export async function loadPending(): Promise<PendingSetup | null> {
   return p;
 }
 
+// ---------- Spärr efter upprepade fel (per IP-adress) ----------
+
+export const MAX_FAILURES = 5;
+const FAILURE_WINDOW_MS = 15 * 60 * 1000;
+export const LOCKOUT_MS = 15 * 60 * 1000;
+
+interface Failures {
+  count: number;
+  first: number;
+  lockedUntil: number;
+}
+
+async function failureKey(ip: string): Promise<string> {
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`smgd:${ip}`)));
+  return "fail/" + Array.from(digest.slice(0, 12), (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** Hur länge till (ms) IP-adressen är spärrad, eller 0. */
+export async function lockedFor(ip: string): Promise<number> {
+  const f = (await authStore().get(await failureKey(ip), { type: "json" })) as Failures | null;
+  return f && f.lockedUntil > Date.now() ? f.lockedUntil - Date.now() : 0;
+}
+
+export async function recordFailure(ip: string): Promise<boolean> {
+  const key = await failureKey(ip);
+  const store = authStore();
+  const now = Date.now();
+  let f = (await store.get(key, { type: "json" })) as Failures | null;
+  if (!f || now - f.first > FAILURE_WINDOW_MS) f = { count: 0, first: now, lockedUntil: 0 };
+  f.count += 1;
+  if (f.count >= MAX_FAILURES) f.lockedUntil = now + LOCKOUT_MS;
+  await store.setJSON(key, f);
+  return f.lockedUntil > now;
+}
+
+export async function clearFailures(ip: string): Promise<void> {
+  await authStore().delete(await failureKey(ip));
+}
+
 export async function clearPending(): Promise<void> {
   await authStore().delete(PENDING_KEY);
 }

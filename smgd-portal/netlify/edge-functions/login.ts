@@ -8,7 +8,14 @@ import {
   verifyPassword,
   verifyTotp,
 } from "./lib/security.ts";
-import { authStore, loadAuthConfig } from "./lib/store.ts";
+import {
+  authStore,
+  clearFailures,
+  loadAuthConfig,
+  LOCKOUT_MS,
+  lockedFor,
+  recordFailure,
+} from "./lib/store.ts";
 
 const GENERIC_ERROR = "Fel lösenord eller engångskod.";
 
@@ -42,6 +49,14 @@ export default async (request: Request, context: Context) => {
     return json({ error: "Inloggningen är inte installerad ännu." }, 503);
   }
 
+  const lockMs = await lockedFor(context.ip);
+  if (lockMs > 0) {
+    const min = Math.ceil(lockMs / 60_000);
+    return json({ error: `För många misslyckade försök. Försök igen om ${min} min.` }, 429, {
+      "Retry-After": String(Math.ceil(lockMs / 1000)),
+    });
+  }
+
   const raw = await request.text();
   if (raw.length > 2048) return json({ error: "Ogiltig begäran." }, 413);
 
@@ -61,9 +76,15 @@ export default async (request: Request, context: Context) => {
 
   if (!passwordOk || step === null || !(await claimTotpStep(step))) {
     console.warn(`Misslyckad inloggning från ${context.ip}`);
+    const nowLocked = await recordFailure(context.ip);
     await sleep(700 + Math.floor(Math.random() * 500)); // bromsar gissningar (väntan, inte CPU)
+    if (nowLocked) {
+      return json({ error: `För många misslyckade försök. Försök igen om ${LOCKOUT_MS / 60_000} min.` }, 429);
+    }
     return json({ error: GENERIC_ERROR }, 401);
   }
+
+  await clearFailures(context.ip);
 
   const { token, session } = await createSessionToken(cfg.sessionSecret, cfg.sessionVersion);
   console.log(`Lyckad inloggning från ${context.ip}`);

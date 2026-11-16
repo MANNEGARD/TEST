@@ -61,16 +61,13 @@
         return;
       }
 
-      let message = "Något gick fel. Försök igen.";
-      if (res.status === 429) {
-        message = "För många försök. Vänta en minut och försök igen.";
-      } else {
-        try {
-          const data = await res.json();
-          if (data && typeof data.error === "string") message = data.error;
-        } catch (_) {
-          /* behåll standardtexten */
-        }
+      let message =
+        res.status === 429 ? "För många försök. Vänta en stund och försök igen." : "Något gick fel. Försök igen.";
+      try {
+        const data = await res.json();
+        if (data && typeof data.error === "string") message = data.error;
+      } catch (_) {
+        /* behåll standardtexten */
       }
       showError(message);
       code.value = "";
