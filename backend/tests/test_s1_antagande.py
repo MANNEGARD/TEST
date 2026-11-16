@@ -301,7 +301,8 @@ def test_wrong_revokes_and_reopens_other_assumed_trips(db, user, vehicle, trips,
     assert db.execute(select(M.AuditEvent).where(M.AuditEvent.action == "location.assumption_revoked")).first()
 
 
-def test_wrong_does_not_reopen_trips_in_exported_month_but_marks_it_stale(db, user, vehicle, trips, auto, locs):
+def test_wrong_reopens_trips_in_exported_month_and_marks_it_stale(db, user, vehicle, trips, auto, locs):
+    # Ändrat efter granskningen: även antagna resor i en skickad månad frågas om (filen ersätts sedan).
     t1 = live(trips, HOME, LAGER, km=23.0, start_at=TUE_1015)
     t2 = live(trips, HOME, LAGER, km=23.0, start_at=datetime(2026, 10, 6, 7, 55, tzinfo=UTC))
     run(db, user, vehicle)
@@ -310,7 +311,7 @@ def test_wrong_does_not_reopen_trips_in_exported_month_but_marks_it_stale(db, us
     db.flush()
     feedback.apply_decision(db, reload_trip(db, t2.id), user_id=user.id, actor=owner(user),
                             category=Category.PRIVATE, approve=True)
-    assert reload_trip(db, t1.id).approval_source == ApprovalSource.ASSUMED
+    assert reload_trip(db, t1.id).approval_source is None
     db.refresh(mc)
     assert mc.state == "stale"
 
