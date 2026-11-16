@@ -450,7 +450,11 @@ def enqueue_for_changes(
             if req is not None:
                 created.append(req)
     db.flush()
-    if demo and created:
+    asked_live = False
+    if demo and since is not None:
+        # Demotelefonen visar frågan direkt; annars väntar den på nästa tick.
+        asked_live = bool(ensure_open_questions(db, now, user_id=user_id).get("created"))
+    if demo and (created or asked_live):
         deliver_user(db, user_id, now)
     return created
 
@@ -1184,7 +1188,9 @@ def _local_month(when: datetime, tz: ZoneInfo) -> tuple[int, int]:
     return local.year, local.month
 
 
-def ensure_open_questions(db: Session, now: datetime | None = None) -> dict[str, int]:
+def ensure_open_questions(
+    db: Session, now: datetime | None = None, *, user_id: uuid.UUID | None = None
+) -> dict[str, int]:
     """Skapar frågor för öppna ärenden på live-resor i självgående läge (byggkontraktet C.4).
 
     Gäller CATEGORY-, TAX_UNCERTAIN- och PURPOSE-ärenden på live-resor efter
@@ -1192,10 +1198,15 @@ def ensure_open_questions(db: Session, now: datetime | None = None) -> dict[str,
     Resor i läget ``wait`` (adressen slås upp) väntar. Varje resa får en fråga (samma
     dedupe-nyckel som förut). Vid månadsskiftet ställs månadens utgångna frågor om en gång,
     med dedupe-suffixet ``:m``. Leveransen (en fråga åt gången) sköts av ``deliver_user``.
+    Med ``user_id`` gäller det bara den användaren (demotelefonen, se ``enqueue_for_changes``).
     """
     now = now or utcnow()
     stats: Counter[str] = Counter()
-    for user_id in db.execute(select(User.id).where(User.is_active.is_(True))).scalars().all():
+    if user_id is not None:
+        user_ids = [user_id]
+    else:
+        user_ids = list(db.execute(select(User.id).where(User.is_active.is_(True))).scalars().all())
+    for user_id in user_ids:
         since = _self_driving_since(db, user_id)
         if since is None:
             continue
