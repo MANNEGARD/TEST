@@ -231,9 +231,11 @@ Positionen märks *ungefärlig position ur adressen* på platsen och på resans 
 pågår visar kartan *Positionen slås upp*. Hittar kartan inte adressen, eller ger den flera
 möjliga platser, står det *Adressen hittades inte på kartan*; sätt då ut platsen själv under
 **Platser**. En sådan adress prövas inte igen förrän du ändrar den. En position som du har satt
-eller som kommer från bilen skrivs aldrig över. Hamnar en uppslagen plats vid bostaden eller ett
-kontor som saknar adress slås de ihop, och bostaden eller kontoret får adressen; har båda olika
-adresser visas ett förslag om att slå ihop dem under Platser.
+eller som kommer från bilen skrivs aldrig över; en ungefärlig position ersätts däremot av bilens
+när bilen kommer dit. Hamnar en uppslagen plats vid bostaden eller ett kontor som saknar adress
+slås de ihop, och bostaden eller kontoret får adressen. Har båda olika adresser, är den uppslagna
+platsen en bekräftad kund (eller har företag eller en egen regel), eller ligger flera olika
+adresser vid bostaden, visas i stället ett förslag om att slå ihop dem under Platser.
 
 ### Starttid
 
@@ -627,7 +629,8 @@ med de viktigaste nyheterna – en gång per version, aldrig vid en vanlig omsta
 
 Längst ned i sidomenyn står till exempel *DriveLog 1.3.0* (på mobilen i användarmenyn uppe till
 höger). Tryck på den för *Inställningar → Om DriveLog*, där det står vad som är nytt i versionen.
-Hela ändringsloggen finns på tilläggets sida i Home Assistant.
+Hela ändringsloggen finns på GitHub (länken står där) och, om du kör DriveLog som tillägg, på
+tilläggets sida i Home Assistant.
 
 ## Bränsle och energi
 

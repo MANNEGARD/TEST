@@ -192,7 +192,7 @@ från 1.1.0) ser notiserna ut så här:
 | Antaget | *Antaget: Kundbesök Exempel AB · tis 2,3 mil · Räknas som tjänst i morgon 14:05 om du inte säger emot* | Stämmer, Fel – privat, Annat ärende (textsvar) |
 | Larm | *DriveLog: Kalendern synkas inte* | Öppna |
 | Månaden | *Oktober klart* (siffror, inga platser) eller *Oktober väntar* (vad som väntar) | Öppna underlaget, Se antagna |
-| Ny version | *DriveLog är uppdaterad till 1.3.0* – *Från 1.2.3. Nytt: …* (de tre första nyheterna) | Öppna (Inställningar → Om DriveLog) |
+| Ny version | *DriveLog är uppdaterad till 1.3.0* – *Från 1.2.3. Nytt: …* (direkt efter uppgraderingen från 1.2.x: *Från en tidigare version.*) (de tre första nyheterna) | Öppna (Inställningar → Om DriveLog) |
 
 - Kategori och ärende besvaras i **samma tryck**. Det kommer **en fråga åt gången**; nästa
   skickas när den förra är besvarad eller undanlagd. Ingen samlingsnotis och ingen

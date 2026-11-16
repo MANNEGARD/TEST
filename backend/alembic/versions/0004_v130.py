@@ -19,8 +19,9 @@ Data, för varje befintlig användare (övriga nycklar rörs inte):
 * ``calendar.store_body_preview = true`` – hela bokningen läses (ägaren har bett om det).
 * ``automation.home_office_is_work = true`` – resor mellan hemmet och arbetsgivarens kontor
   godkänns som tjänsteresor (ägarens val).
-* ``system.last_version`` – versionen som körde före uppgraderingen, så att DriveLog kan
-  säga till när den nya versionen har startat.
+* ``system.last_version = "0003"`` – en markering för "en version med databasversion 0003"
+  (1.2.2 och 1.2.3 har samma schema, så vilken som körde går inte att veta), så att DriveLog
+  kan säga till när den nya versionen har startat ("Från en tidigare version").
 
 Revision ID: 0004
 Revises: 0003
@@ -44,8 +45,9 @@ depends_on: str | Sequence[str] | None = None
 
 _JSON = sa.JSON().with_variant(postgresql.JSONB(astext_type=sa.Text()), 'postgresql')
 
-# Senaste versionen med databasversion 0003 (1.2.2 och 1.2.3 har samma schema).
-PREVIOUS_VERSION = '1.2.3'
+# Inte ett versionsnummer: 1.2.2 och 1.2.3 har samma databasversion (0003), så vilken version
+# som körde går inte att veta. Notisen säger då "Från en tidigare version" (messages.release).
+PREVIOUS_VERSION = '0003'
 
 # Sektion → nycklar som sätts för befintliga användare.
 _SEEDS: dict[str, dict[str, Any]] = {

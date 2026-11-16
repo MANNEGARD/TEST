@@ -163,13 +163,25 @@ def test_ai_button_costs_the_same_regardless_of_trip_count(client, engine, db, u
 
 
 @pytest.mark.new_defaults
-def test_reverted_change_after_stale_returns_to_exported(db, user, vehicle, trips, sd):
+@pytest.mark.usefixtures("sd")
+def test_reverted_change_after_stale_returns_to_exported(db, user, vehicle, trips):
     from datetime import timedelta
 
     from app.models.enums import ReviewStatus
     from app.services.trips import segments as seg
     from tests.conftest import reload_trip
-    from tests.test_v130_manad import NOW, at, due, exports, final_fetch, monthly, november, pending_work, run, work
+    from tests.test_v130_manad import (
+        NOW,
+        at,
+        due,
+        exports,
+        final_fetch,
+        monthly,
+        november,
+        pending_work,
+        run,
+        work,
+    )
 
     work(trips)
     assert run(db, user, vehicle, force=True).state == "exported"
@@ -259,8 +271,19 @@ def test_unsupported_ai_purpose_is_never_confirmed_via_the_calendar(db, user, ve
 
     from app.services.learning import patterns
     from tests.conftest import reload_trip
-    from tests.v130_ai_stod import CUSTOMER, HOME, FakeProvider, answer, classify, event, live, local, match, run, \
-        self_driving
+    from tests.v130_ai_stod import (
+        CUSTOMER,
+        HOME,
+        FakeProvider,
+        answer,
+        classify,
+        event,
+        live,
+        local,
+        match,
+        run,
+        self_driving,
+    )
 
     self_driving(db, user)
     patterns.set_manual_rule(db, user.id, origin_id=None, dest_id=ai_world["customer"].id,
@@ -278,8 +301,19 @@ def test_unsupported_ai_purpose_is_never_confirmed_via_the_calendar(db, user, ve
 def test_home_office_rule_does_not_confirm_a_name_from_an_unrelated_booking(db, user, vehicle, trips, ai_world):
     from app.services import settings as settings_svc
     from tests.conftest import reload_trip
-    from tests.v130_ai_stod import HOME, JKPG_OFFICE, FakeProvider, answer, classify, event, live, local, match, run, \
-        self_driving
+    from tests.v130_ai_stod import (
+        HOME,
+        JKPG_OFFICE,
+        FakeProvider,
+        answer,
+        classify,
+        event,
+        live,
+        local,
+        match,
+        run,
+        self_driving,
+    )
 
     self_driving(db, user)
     settings_svc.update_section(db, user.id, "automation", {"home_office_is_work": True})
@@ -389,8 +423,19 @@ def test_company_name_guessed_from_an_e_mail_domain_is_rejected(db, user, trips,
     from datetime import timedelta
 
     from tests.conftest import reload_trip
-    from tests.v130_ai_stod import CUSTOMER, OFFICE, FakeProvider, answer, attendee, classify, current_purpose, \
-        event, live, local, match
+    from tests.v130_ai_stod import (
+        CUSTOMER,
+        OFFICE,
+        FakeProvider,
+        answer,
+        attendee,
+        classify,
+        current_purpose,
+        event,
+        live,
+        local,
+        match,
+    )
 
     cust = ai_world["customer"]
     cust.type, cust.confirmed, cust.name, cust.company = LocationType.UNKNOWN, False, "Industrivägen 10", None
@@ -478,3 +523,15 @@ def test_level_without_a_reading_during_the_trip_needs_a_plausible_amount():
     # 40 → 36,5 l på 50 km (7 l/100 km): rimligt
     est = _estimate(_raw(50, 60), [_rd(-5, fuel_liters=40.0)], [_rd(61, fuel_liters=36.5)])
     assert est.fuel_liters == pytest.approx(3.5) and est.fuel_method == "level"
+
+
+# ----------------------------------------------------------------------------- 20. förra versionen okänd
+
+
+def test_release_notice_after_the_migration_does_not_name_a_guessed_version():
+    from app.services.ha import messages
+
+    out = messages.release("0003", "1.3.0", ["Lunchregeln"])
+    assert out["message"] == "Från en tidigare version. Nytt: Lunchregeln."
+    assert out["context"]["previous_version"] is None
+    assert messages.release("1.2.2", "1.3.0", [])["message"] == "Från 1.2.2."

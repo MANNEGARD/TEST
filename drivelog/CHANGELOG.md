@@ -34,7 +34,9 @@
   en importerad körjournal) får en ungefärlig position ur adressen, i bakgrunden och lite i
   taget. Kartan visar *Positionen slås upp* medan det pågår, och *Adressen hittades inte på
   kartan* om den inte gick att hitta. Hamnar en sådan plats vid bostaden eller kontoret slås de
-  ihop, så att bostaden får sin adress.
+  ihop, så att bostaden får sin adress – men aldrig en kund, en plats med företag eller egen regel,
+  eller när flera adresser ligger där; då blir det ett förslag under *Platser*. Kommer bilen sedan
+  till platsen ersätts den ungefärliga positionen av bilens.
 - **Träffsäkrare adresser.** Adressuppslaget skickar nu platsens exakta position, så att rätt hus
   hittas, och bostadens adress slås upp av sig själv när den saknas.
 - **Saknad adress syns i förhandsvisningen.** På exportsidan står *Adress saknas – lägg till under
@@ -46,7 +48,7 @@
   välj *Minimalt* under *Inställningar → Förslag och AI* om du vill skicka mindre. AI lämnar
   alltid ett färdigt ärende i din stil, märkt *Förslag att bekräfta* – du godkänner med ett tryck,
   AI godkänner aldrig något själv och namn som inte finns i underlaget kastas. Koordinater,
-  chassinummer, nycklar, e-postadresser och kalenderlänken skickas aldrig.
+  chassinummer, nycklar, deltagarnas e-postadresser och kalenderlänken skickas aldrig.
 - **Kalendern först för ärendet.** Stämmer en kalenderbokning med resan formuleras ärendet ur
   bokningen – för en resa till en annan ort ur hela vistelsens bokningar ("Rest till Jönköping för
   … med Lennart"). Godkänns resan automatiskt sätts kalenderns ärende utan fråga, märkt *Ur
@@ -72,7 +74,9 @@
   kunder, med en egen regel eller när en kalenderbokning stämmer. Lunchregeln är på från start och
   gäller även resor som väntar på svar när uppdateringen installeras. Gränserna ändras och regeln
   stängs av under *Inställningar → Lunchregeln*; den kräver att minst ett kontor finns som
-  bekräftad plats.
+  bekräftad plats. En kort tur hem och tillbaka till samma kontor görs inte privat av sig själv,
+  men godkänns inte heller automatiskt som tjänst när resor mellan hemmet och kontoret räknas som
+  tjänst – då får du en fråga.
 - **Bensin och el per resa.** Resor från bilen visade tidigare "–" för bensin och el. Nu räknas
   förbrukningen fram ur bilens egna avläsningar – i första hand den automatiska trippmätaren och
   snittförbrukningen för samma period, annars skillnaden i tanken; en tankning under resan gör

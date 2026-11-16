@@ -834,7 +834,7 @@ try {
     await page.waitForURL(/\/settings\/?\?sektion=om/, { timeout: 8000 });
     await page.getByTestId("about-card").waitFor({ timeout: 8000 });
     if ((await page.getByTestId("about-version").innerText()).trim() !== "DriveLog demo") fail("Om DriveLog visar inte demots version");
-    if (!(await page.getByText("Hela ändringsloggen finns på tilläggets sida i Home Assistant.").count())) fail("Om DriveLog saknar raden om ändringsloggen");
+    if (!(await page.getByTestId("about-changelog").getByRole("link", { name: "GitHub" }).count())) fail("Om DriveLog saknar länken till ändringsloggen");
     await page.screenshot({ path: path.join(SHOTS, "om-drivelog.png"), fullPage: true });
   });
 

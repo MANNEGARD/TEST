@@ -453,12 +453,15 @@ RELEASE_URI = "/settings?sektion=om"
 def release(old: str, new: str, items: list[str]) -> dict[str, Any]:
     """"DriveLog är uppdaterad till 1.3.0" med de första nyheterna ur ändringsloggen."""
     news = [i.strip().rstrip(".").strip() for i in items if i and i.strip()][:3]
-    message = f"Från {old}." + (f" Nytt: {'; '.join(news)}." if news else "")
+    known = bool(re.fullmatch(r"\d+\.\d+\.\d+", (old or "").strip()))
+    # Efter migreringen 0004 är den förra versionen okänd ("0003"): inget påhittat nummer.
+    message = f"Från {old}." if known else "Från en tidigare version."
+    message += f" Nytt: {'; '.join(news)}." if news else ""
     return {
         "title": f"DriveLog är uppdaterad till {new}",
         "message": message,
         "actions": [{"key": A.OPEN, "title": "Öppna", "uri": RELEASE_URI}],
-        "context": {"detail_message": message, "version": new, "previous_version": old},
+        "context": {"detail_message": message, "version": new, "previous_version": old if known else None},
     }
 
 

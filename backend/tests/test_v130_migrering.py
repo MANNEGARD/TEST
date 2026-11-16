@@ -95,7 +95,7 @@ def test_upgrade_from_a_0003_database_keeps_everything(tmp_path):
         assert after[(ids["owner"], "calendar")] == {"store_body_preview": True, "sync_days_back": 30}
         assert after[(ids["owner"], "automation")]["mode"] == "self_driving"
         assert after[(ids["owner"], "automation")]["home_office_is_work"] is True
-        assert after[(ids["owner"], "system")] == {"last_version": "1.2.3"}
+        assert after[(ids["owner"], "system")] == {"last_version": "0003"}
         assert after[(ids["bare"], "merge")] == {"by_category": False}
         assert after[(ids["bare"], "calendar")] == {"store_body_preview": True}
 

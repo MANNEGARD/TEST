@@ -7,6 +7,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useAbout, versionLabel } from "@/lib/queries/about";
 import { Note, SectionIntro } from "./form-parts";
 
+/** Ändringsloggen i projektets repo (samma adress som `url` i drivelog/config.yaml) – gäller alla driftsätt. */
+const CHANGELOG_URL = "https://github.com/SMGD-MP/TEST/blob/HEAD/drivelog/CHANGELOG.md";
+
 /** Punkterna kommer ur ändringsloggen; ta bort eventuell markdown (fetstil, kod) så att texten blir ren. */
 function plain(text: string): string {
   return text.replace(/\*\*|__|`/g, "").trim();
@@ -75,7 +78,18 @@ export function AboutSection() {
 
           <div className="px-5 py-4">
             <Note>
-              <p>Hela ändringsloggen finns på tilläggets sida i Home Assistant.</p>
+              <p data-testid="about-changelog">
+                Hela ändringsloggen finns på{" "}
+                <a
+                  href={CHANGELOG_URL}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="font-medium underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-ring"
+                >
+                  GitHub
+                </a>
+                {" "}– och, om du kör DriveLog som tillägg, på tilläggets sida i Home Assistant.
+              </p>
             </Note>
           </div>
         </Card>
