@@ -27,6 +27,7 @@ import {
   useVolvoSimulate,
   useVolvoStatus,
 } from "@/lib/queries/integrations";
+import { DEMO_MODE } from "@/lib/demo-hook";
 import { DemoPhone } from "./demo-phone";
 import { ConfirmButton, CopyButton, CopyField, DemoBlock, DemoVehicleSwitch, Fact, Facts, Field, Note, notifyError, Section, SecretField, StatusNote, TimeAgo } from "./shared";
 
@@ -494,6 +495,15 @@ export function HaPanel({ status }: { status: HaStatus }) {
           )}
           <DemoPhone />
         </DemoBlock>
+      ) : null}
+
+      {DEMO_MODE && !isDemo && connected ? (
+        <Section title="Telefonen (demo)">
+          <p className="text-[13px] text-fg-muted">
+            Så här ser notiserna ut i telefonen. Tryck på en knapp för att svara, eller på rubriken för att öppna frågan.
+          </p>
+          <DemoPhone />
+        </Section>
       ) : null}
 
       {!isDemo && status.status !== "not_configured" ? (

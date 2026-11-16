@@ -1,8 +1,10 @@
 import type { Metadata, Viewport } from "next";
 import { GeistSans } from "geist/font/sans";
 import { GeistMono } from "geist/font/mono";
+import { DemoBannerSlot } from "@/components/demo-slot";
 import { Providers } from "@/components/providers";
 import { ServiceWorkerRegistration } from "@/components/sw-register";
+import { DEMO_CLOCK_SCRIPT } from "@/lib/demo-hook";
 import { THEME_INIT_SCRIPT } from "@/lib/theme";
 import "./globals.css";
 
@@ -36,11 +38,13 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="sv" className={`${GeistSans.variable} ${GeistMono.variable}`} suppressHydrationWarning>
       <head>
+        {DEMO_CLOCK_SCRIPT ? <script dangerouslySetInnerHTML={{ __html: DEMO_CLOCK_SCRIPT }} /> : null}
         {/* Sätter tema före första målningen (undviker blink). */}
         <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
         <meta name="mobile-web-app-capable" content="yes" />
       </head>
       <body className="min-h-dvh antialiased">
+        {DemoBannerSlot ? <DemoBannerSlot /> : null}
         <Providers>{children}</Providers>
         <ServiceWorkerRegistration />
       </body>

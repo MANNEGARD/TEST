@@ -14,6 +14,7 @@
  */
 
 import type { paths } from "./api-types";
+import { demoFetch } from "./demo-hook";
 
 export const API_BASE = "/api/v1";
 
@@ -130,7 +131,7 @@ function redirectToLogin(): void {
 
 async function refreshCsrf(): Promise<boolean> {
   try {
-    const res = await fetch(buildUrl("/auth/me"), { credentials: "same-origin", headers: { Accept: "application/json" } });
+    const res = await (demoFetch ?? fetch)(buildUrl("/auth/me"), { credentials: "same-origin", headers: { Accept: "application/json" } });
     if (!res.ok) return false;
     const body = (await res.json()) as { csrf_token?: string };
     if (body.csrf_token) {
@@ -156,7 +157,7 @@ async function rawRequest(method: Method, path: string, opts: RequestOptions, re
 
   let res: Response;
   try {
-    res = await fetch(buildUrl(path, opts.query), {
+    res = await (demoFetch ?? fetch)(buildUrl(path, opts.query), {
       method,
       headers,
       body,

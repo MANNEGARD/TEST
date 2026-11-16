@@ -2,6 +2,7 @@
 
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, buildUrl } from "../api";
+import { DEMO_EXPORT_FILE } from "../demo-hook";
 import type { ExportChecks, ExportJob, ExportPreview, ExportRange, MonthClose, MonthStatus } from "../exports-types";
 import { useVehicle } from "../vehicle";
 import { qk } from "./keys";
@@ -112,6 +113,8 @@ export function useRevokeLinks() {
 }
 
 export function exportDownloadUrl(id: string): string {
+  // Demot har ingen server: alla filer är samma riktiga exempelfil (statisk).
+  if (DEMO_EXPORT_FILE) return DEMO_EXPORT_FILE;
   return buildUrl(`/exports/${id}/download`);
 }
 

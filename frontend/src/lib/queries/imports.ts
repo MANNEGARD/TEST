@@ -2,6 +2,7 @@
 
 import { keepPreviousData, useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { api, ApiError, buildUrl, getCsrfToken, type ApiErrorBody } from "../api";
+import { demoFetch } from "../demo-hook";
 import type {
   ImportBatch,
   ImportBatchList,
@@ -109,6 +110,15 @@ function uploadWithProgress<T>(
   fields: Record<string, string | undefined>,
   onProgress?: (fraction: number) => void,
 ): Promise<T> {
+  if (demoFetch) {
+    // Demot: förhandsgranskningen är ett inspelat exempel (filen lämnar aldrig webbläsaren).
+    onProgress?.(1);
+    return demoFetch(buildUrl(path), { method: "POST" }).then(async (res) => {
+      const body = (await res.json().catch(() => ({}))) as unknown;
+      if (res.ok) return body as T;
+      throw new ApiError(res.status, body && typeof body === "object" ? (body as ApiErrorBody) : {});
+    });
+  }
   return new Promise<T>((resolve, reject) => {
     const form = new FormData();
     for (const f of files) form.append("files", f);

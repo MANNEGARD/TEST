@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "build:demo": "node scripts/build-demo.mjs",
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "next typegen && tsc --noEmit",
@@ -12,6 +13,7 @@
     "gen:openapi": "cd ../backend && DRIVELOG_ENVIRONMENT=test DRIVELOG_DATABASE_URL=sqlite:// .venv/bin/python -m app.cli openapi --output ../frontend/openapi.json",
     "gen:icons": "node scripts/gen-icons.mjs",
     "e2e": "node e2e/smoke.mjs",
+    "e2e:demo": "node e2e/demo.mjs",
     "postinstall": "node scripts/copy-maplibre-worker.mjs"
   },
   "dependencies": {

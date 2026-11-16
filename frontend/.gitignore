@@ -17,6 +17,12 @@
 /.next/
 /out/
 
+# demot (npm run build:demo, npm run e2e:demo) – startdatat i demo-static/ ska ligga i repot
+/.next-demo/
+/.next-vanligt-bygge/
+/out-demo/
+/e2e-shots-demo/
+
 # production
 /build
 
