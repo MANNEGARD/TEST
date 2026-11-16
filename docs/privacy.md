@@ -59,12 +59,16 @@ Nothing is sold, and nothing is used for advertising or profiling.
     bokning"), without subject, location, description or attendees.
   * **Minimal.** The place's name or town, weekday, time, distance, the rule engine's signals
     and earlier confirmed purposes. Home and private places are sent as "Home" and "Private
-    place". Calendar subjects, calendar body text and street addresses are only sent if the
-    owner turns each of them on.
-  * At both levels, never: coordinates, the vehicle's VIN or registration number, API keys,
-    tokens, passwords, the calendar link, the Home Assistant token or any e-mail address. Codes,
-    meeting IDs and passwords found in descriptions and notes are removed before sending, and
-    links are replaced. The provider processes the data under its own terms; DriveLog keeps
+    place". The subject, time and location of calendar entries that match the trip are sent
+    unless the owner turns that off (it is on by default). The first 300 characters of an
+    entry's description and street addresses are only sent if the owner turns each of them on.
+    At this level the subject and the description are sent as they are written in the calendar:
+    codes, links, e-mail addresses or passwords that someone has written there are not removed.
+  * At both levels, never: coordinates, the vehicle's VIN or registration number, DriveLog's own
+    API keys and tokens, the owner's passwords, the calendar link, the Home Assistant token or
+    the attendees' e-mail addresses. At the full level, links, e-mail addresses, codes, meeting
+    IDs and passwords found in subjects, locations, descriptions and notes are also removed
+    before sending. The provider processes the data under its own terms; DriveLog keeps
     nothing at the provider.
 * Notifications are sent to the owner's own Home Assistant when the owner has connected it.
   From version 1.3.0 the questions about new trips show the full street address with house

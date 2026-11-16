@@ -605,8 +605,9 @@ def reclassify(trip_id: uuid.UUID, principal: WebPrincipalDep, db: DbDep) -> dic
     result = classify_engine.classify_trip(
         db, trip, user_id=principal.user.id, actor=principal.actor, provider=provider, force=True
     )
-    if autopilot.is_active(db, principal.user.id):
-        autopilot.reconsider(db, user_id=principal.user.id, trip_ids=[trip.id], actor=principal.actor)
+    # Bara den här resan prövas i anropet; övriga resors förslag räknas om i bakgrunden.
+    trip = get_owned_trip(db, principal, trip_id)
+    autopilot.run_trip(db, user_id=principal.user.id, trip=trip, actor=principal.actor)
     trip = get_owned_trip(db, principal, trip_id)
     pipeline.sync_trip_review_items(db, trip, by=principal.actor.label)
     if trip.review_status in (ReviewStatus.APPROVED, ReviewStatus.IMPORTED):

@@ -266,6 +266,7 @@ export const NOTIFICATION_KIND_LABELS: Record<string, string> = {
   company: "Vilket företag?",
   alert: "Larm",
   monthly: "Månadens underlag",
+  release: "Ny version",
 };
 
 export const NOTIFICATION_STATUS_LABELS: Record<string, string> = {

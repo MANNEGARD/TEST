@@ -30,7 +30,8 @@ def rd(minutes: float, *, trip: float | None = None, fuel_avg: float | None = No
     at = DEP + timedelta(minutes=minutes)
     seen = DEP + timedelta(minutes=seen_minutes) if seen_minutes is not None else at
     return Reading(id=f"o{minutes}", fetched_at=at, last_seen_at=seen, fuel_liters=fuel, battery_percent=battery,
-                   avg_fuel_consumption=fuel_avg, avg_energy_consumption=energy_avg, trip_meter_auto_km=trip)
+                   avg_fuel_consumption_auto=fuel_avg, avg_energy_consumption_auto=energy_avg,
+                   trip_meter_auto_km=trip)
 
 
 def raw_trip(km: float, start_min: float, end_min: float) -> M.RawTrip:
@@ -149,9 +150,9 @@ def live_trip(db, trips, vehicle, *, km: float = 30.0, start: datetime = DEP, mi
 
 
 def test_fill_vehicle_sets_estimated_values_on_the_trip(db, trips, vehicle):
-    before = observation(db, vehicle, DEP - timedelta(minutes=5), trip_meter_auto_km=0.0, avg_fuel_consumption=0.0,
+    before = observation(db, vehicle, DEP - timedelta(minutes=5), trip_meter_auto_km=0.0, avg_fuel_consumption_auto=0.0,
                          fuel_liters=40.0)
-    after = observation(db, vehicle, DEP + timedelta(minutes=36), trip_meter_auto_km=30.0, avg_fuel_consumption=5.0,
+    after = observation(db, vehicle, DEP + timedelta(minutes=36), trip_meter_auto_km=30.0, avg_fuel_consumption_auto=5.0,
                         fuel_liters=38.5)
     trip = live_trip(db, trips, vehicle, obs=(before, after))
     assert consumption.fill_vehicle(db, vehicle.id) == 1
@@ -165,8 +166,8 @@ def test_fill_vehicle_sets_estimated_values_on_the_trip(db, trips, vehicle):
 
 
 def test_existing_values_are_never_overwritten(db, trips, vehicle):
-    before = observation(db, vehicle, DEP - timedelta(minutes=5), trip_meter_auto_km=0.0, avg_fuel_consumption=0.0)
-    after = observation(db, vehicle, DEP + timedelta(minutes=36), trip_meter_auto_km=30.0, avg_fuel_consumption=5.0)
+    before = observation(db, vehicle, DEP - timedelta(minutes=5), trip_meter_auto_km=0.0, avg_fuel_consumption_auto=0.0)
+    after = observation(db, vehicle, DEP + timedelta(minutes=36), trip_meter_auto_km=30.0, avg_fuel_consumption_auto=5.0)
     trip = live_trip(db, trips, vehicle, obs=(before, after))
     raw = trip.segments[0].raw_trip
     raw.fuel_liters, raw.fuel_quality = 2.2, ValueQuality.VERIFIED
@@ -177,16 +178,16 @@ def test_existing_values_are_never_overwritten(db, trips, vehicle):
 
 
 def test_imported_trips_are_never_touched(db, trips, vehicle):
-    before = observation(db, vehicle, DEP - timedelta(minutes=5), trip_meter_auto_km=0.0, avg_fuel_consumption=0.0)
-    after = observation(db, vehicle, DEP + timedelta(minutes=36), trip_meter_auto_km=30.0, avg_fuel_consumption=5.0)
+    before = observation(db, vehicle, DEP - timedelta(minutes=5), trip_meter_auto_km=0.0, avg_fuel_consumption_auto=0.0)
+    after = observation(db, vehicle, DEP + timedelta(minutes=36), trip_meter_auto_km=30.0, avg_fuel_consumption_auto=5.0)
     trip = live_trip(db, trips, vehicle, obs=(before, after), source=TripSource.VOLVO_IMPORT)
     assert consumption.fill_vehicle(db, vehicle.id) == 0
     assert trip.segments[0].raw_trip.fuel_quality == ValueQuality.UNKNOWN
 
 
 def test_old_trips_and_closed_months_are_left_alone(db, user, trips, vehicle):
-    before = observation(db, vehicle, DEP - timedelta(minutes=5), trip_meter_auto_km=0.0, avg_fuel_consumption=0.0)
-    after = observation(db, vehicle, DEP + timedelta(minutes=36), trip_meter_auto_km=30.0, avg_fuel_consumption=5.0)
+    before = observation(db, vehicle, DEP - timedelta(minutes=5), trip_meter_auto_km=0.0, avg_fuel_consumption_auto=0.0)
+    after = observation(db, vehicle, DEP + timedelta(minutes=36), trip_meter_auto_km=30.0, avg_fuel_consumption_auto=5.0)
     trip = live_trip(db, trips, vehicle, obs=(before, after))
     raw = trip.segments[0].raw_trip
     db.add(M.MonthClose(user_id=user.id, vehicle_id=vehicle.id, month="2026-11", state=MonthCloseState.EXPORTED))

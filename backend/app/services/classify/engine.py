@@ -566,11 +566,13 @@ def _assess(
     place_ai = provider is not None and _place_needs_ai(ctx) and _autopilot_holds(db, trip, user_id, cache)
     if provider is not None and _should_call_llm(rules, proposal, ctx, place_ai=place_ai):
         extra_texts: list[str] | None = None
+        domain_heads: set[str] | None = None
         if _level(ai) == settings_svc.CONTEXT_FULL:
             from app.services.classify import underlag
 
             document = underlag.build_full_document(db, ctx, rules, proposal, user_id=user_id, cfg=ai)
             extra_texts = underlag.document_texts(document)
+            domain_heads = underlag.document_domains(document)
         else:
             if "private_terms" not in cache:
                 cache["private_terms"] = private_location_terms(db, user_id)
@@ -617,7 +619,8 @@ def _assess(
 
             if category == Category.WORK:
                 proposal = _ai_purpose(
-                    ctx, rules, proposal, data, model=result.model, extra_texts=extra_texts, signals=signals
+                    ctx, rules, proposal, data, model=result.model, extra_texts=extra_texts, signals=signals,
+                    domain_heads=domain_heads,
                 )
 
     trip_category, review_status = _automation_level(category, confidence, requires_review, ai)
@@ -668,6 +671,7 @@ def _ai_purpose(
     model: str,
     extra_texts: list[str] | None,
     signals: list[Signal],
+    domain_heads: set[str] | None = None,
 ) -> PurposeProposal | None:
     """Ärendets text efter AI-svaret, i ordningen i byggkontraktet 3.E/3.F.
 
@@ -685,7 +689,8 @@ def _ai_purpose(
     text = data.get("purpose")
     accepted: PurposeProposal | None = None
     if text:
-        check = purpose_mod.check_generated(text, ctx, rules=rules, rule_proposal=proposal, extra_texts=extra_texts)
+        check = purpose_mod.check_generated(text, ctx, rules=rules, rule_proposal=proposal, extra_texts=extra_texts,
+                                            domain_heads=domain_heads)
         if not check.ok:
             label = (
                 "AI-förslag till syfte avvisades: innehöll namn som inte finns i underlaget"

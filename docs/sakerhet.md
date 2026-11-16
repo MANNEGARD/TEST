@@ -198,17 +198,22 @@ Två nivåer (*Inställningar → Förslag och AI*):
   valt** – ägaren har bett om det, och arbetsgivaren har godkänt att jobbkalendern används.
   Privata bokningar skickas bara som tid.
 - **Minimalt**: platsetikett eller ort, platstyp, veckodag, klockslag, sträcka, regelmotorns
-  signaler, tidigare bekräftade syften och – om tillåtet – rubrik, tid och plats för matchade
-  bokningar. Hemadress, privata platsers namn, gatuadresser och brödtext skickas inte (de två
-  sista kan slås på).
+  signaler, tidigare bekräftade syften och rubrik, tid och plats för matchade bokningar
+  (påslaget från början, kan stängas av). Hemadress, privata platsers namn, gatuadresser och
+  brödtext skickas inte (de två sista kan slås på; brödtexten är då de första 300 tecknen).
+  På den här nivån skickas rubrik och brödtext som de står i kalendern – koder, länkar,
+  e-postadresser eller lösenord som någon har skrivit där tas inte bort.
 
-Aldrig, på någon nivå: koordinater, VIN, registreringsnummer, API-nycklar, tokens, lösenord,
-kalenderlänken, Home Assistant-token och e-postadresser.
+Aldrig, på någon nivå: koordinater, VIN, registreringsnummer, DriveLogs egna API-nycklar och
+tokens, dina lösenord, kalenderlänken, Home Assistant-token och deltagarnas e-postadresser.
+På nivån Fullständigt tas dessutom länkar, e-postadresser, koder, mötes-ID och lösenord bort ur
+rubriker, platser, beskrivningar och anteckningar.
 
 **Promptinjektion.** Allt i underlaget – kalendertexter, platsnamn från kartan, anteckningar,
 importerade kommentarer, "Om mitt arbete" – är opålitlig indata. Det skickas avgränsat inom
 `<data>…</data>` med en systemprompt som säger att innehållet är uppgifter, aldrig
-instruktioner. Före sändning tvättas varje sträng (`classify/underlag.py`,
+instruktioner. På båda nivåerna blir `<`/`>` i hela underlaget `‹`/`›` (`classify/llm.py`), så
+ingen text kan stänga avgränsningen. På nivån Fullständigt tvättas dessutom varje sträng (`classify/underlag.py`,
 `calendar/calendar_text.py`, `text_safety.sanitize_text`): styrtecken och osynliga tecken bort,
 `<`/`>` blir `‹`/`›`, länkar blir "[länk]", mötesblock (Teams/Zoom), inringningsnummer,
 mötes-ID, koder och lösenord tas bort, långa nyckelliknande strängar, chassinummer och

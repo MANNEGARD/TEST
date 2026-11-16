@@ -1205,6 +1205,8 @@ def _merge_with_known(db: Session, loc: KnownLocation, *, now: datetime) -> bool
         return False
     if (known.address or "").strip() and address_key(known.address) != address_key(loc.address):
         return False  # olika adresser: bara ett förslag (address_merge_suggestions)
+    if not _may_merge_into(db, loc, known):
+        return False  # platsen har en egen betydelse eller det är oklart vilken adress: bara ett förslag
     address, city = loc.address, loc.city
     places.merge_locations(db, known, loc)
     if not (known.address or "").strip():
@@ -1216,6 +1218,55 @@ def _merge_with_known(db: Session, loc: KnownLocation, *, now: datetime) -> bool
         db, audit.SYSTEM, "location.merged_by_address", "known_location", known.id,
         after={"merged": str(loc.id), "address": known.address}, user_id=known.owner_user_id,
     )
+    return True
+
+
+def _has_own_meaning(db: Session, loc: KnownLocation, known: KnownLocation) -> bool:
+    """Den uppslagna platsen betyder något eget för ägaren: bekräftad som annan typ (t.ex. en
+    kund), har ett företag eller ingår i en egen regel. Den slås aldrig ihop av sig själv."""
+    from app.models import LocationPattern
+
+    if loc.confirmed and loc.type not in (None, LocationType.UNKNOWN, known.type):
+        return True
+    if (loc.company or "").strip():
+        return True
+    rule = db.execute(
+        select(LocationPattern.id).where(
+            LocationPattern.owner_user_id == loc.owner_user_id,
+            LocationPattern.is_manual_rule.is_(True),
+            (LocationPattern.origin_location_id == loc.id) | (LocationPattern.destination_location_id == loc.id),
+        ).limit(1)
+    ).first()
+    return rule is not None
+
+
+def _other_addresses_near(db: Session, loc: KnownLocation, known: KnownLocation) -> bool:
+    """Ligger fler uppslagna platser med andra adresser vid samma bostad/kontor går det inte
+    att veta vilken adress som är bostadens – då blir det bara förslag."""
+    radius = max(float(known.radius_m or 0), FORWARD_MERGE_MIN_M)
+    key = address_key(loc.address)
+    for other in db.execute(
+        select(KnownLocation).where(
+            KnownLocation.owner_user_id == loc.owner_user_id,
+            KnownLocation.id.not_in((loc.id, known.id)),
+            KnownLocation.merged_into_id.is_(None),
+            KnownLocation.coordinate_source == COORDINATE_GEOCODED,
+            KnownLocation.latitude.is_not(None),
+            KnownLocation.longitude.is_not(None),
+        )
+    ).scalars():
+        if address_key(other.address) == key:
+            continue
+        if haversine_m(known.latitude, known.longitude, other.latitude, other.longitude) <= radius:  # type: ignore[arg-type]
+            return True
+    return False
+
+
+def _may_merge_into(db: Session, loc: KnownLocation, known: KnownLocation) -> bool:
+    if _has_own_meaning(db, loc, known):
+        return False
+    if not (known.address or "").strip() and _other_addresses_near(db, loc, known):
+        return False
     return True
 
 
@@ -1232,10 +1283,13 @@ def address_merge_suggestions(db: Session, user_id: uuid.UUID) -> list[dict[str,
         )
     ).scalars():
         known = _merge_candidate(db, loc)
-        if known is None or not (known.address or "").strip() or not (loc.address or "").strip():
+        if known is None or not (loc.address or "").strip():
             continue
-        if address_key(known.address) == address_key(loc.address):
-            continue
+        if not (known.address or "").strip() or address_key(known.address) == address_key(loc.address):
+            # Samma adress eller bostaden saknar adress: slås ihop av sig själv – förslag bara
+            # när platsen inte fick slås ihop (egen betydelse, eller flera adresser vid bostaden).
+            if _may_merge_into(db, loc, known):
+                continue
         out.append({
             "street_key": f"address:{loc.id}",
             "locations": [

@@ -609,7 +609,7 @@ def _extra_signals(ctx: TripContext) -> list[Signal]:
     """Lunchmönstret och bokningar de närmaste dagarna på resmålets ort (1.3.0)."""
     out: list[Signal] = []
     lm = ctx.lunch
-    if lm is not None and lm.status == "complete":
+    if lm is not None and lm.status == "complete" and not lm.at_home:
         hint = f" ({lm.map_hint})" if lm.map_hint else ""
         out.append(
             Signal("lunch_pattern", "Lunchmönster: kort tur från kontoret mitt på dagen" + hint, Category.PRIVATE,

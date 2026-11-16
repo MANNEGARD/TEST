@@ -75,6 +75,10 @@ class VehicleObservation(Base):
     # Bilens snittfart sedan trippmätaren nollställdes (averageSpeedAutomatic) och när
     # statistiken hämtades (bilen ger ingen egen tidsstämpel för den).
     avg_speed_auto: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Snittförbrukningen för samma period som tripMeterAutomatic (averageFuelConsumptionAutomatic
+    # och averageEnergyConsumptionAutomatic, 1.3.0) – trippmätarmetoden i volvo/consumption.py.
+    avg_fuel_consumption_auto: Mapped[float | None] = mapped_column(Float, nullable=True)  # l/100 km
+    avg_energy_consumption_auto: Mapped[float | None] = mapped_column(Float, nullable=True)  # kWh/100 km
     statistics_reported_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
 
     content_hash: Mapped[str] = mapped_column(String(64), index=True)

@@ -9,6 +9,8 @@ Schema:
 * ``calendar_events.attendees``: bokningens deltagare (läses när hela bokningen läses).
 * ``location_patterns.manual_purpose_mode``: om en egen regels fasta text gäller alltid
   eller bara när kalendern inte säger något annat (tom = det senare).
+* ``vehicle_observations.avg_fuel_consumption_auto`` / ``avg_energy_consumption_auto``: bilens
+  snittförbrukning för samma period som den automatiska trippmätaren. Tom för äldre avläsningar.
 
 Data, för varje befintlig användare (övriga nycklar rörs inte):
 
@@ -82,6 +84,9 @@ def upgrade() -> None:
         batch_op.add_column(sa.Column('attendees', _JSON, nullable=True))
     with op.batch_alter_table('location_patterns', schema=None) as batch_op:
         batch_op.add_column(sa.Column('manual_purpose_mode', sa.String(length=20), nullable=True))
+    with op.batch_alter_table('vehicle_observations', schema=None) as batch_op:
+        batch_op.add_column(sa.Column('avg_fuel_consumption_auto', sa.Float(), nullable=True))
+        batch_op.add_column(sa.Column('avg_energy_consumption_auto', sa.Float(), nullable=True))
 
     conn = op.get_bind()
     now = datetime.now(UTC)
@@ -121,6 +126,9 @@ def downgrade() -> None:
         else:
             conn.execute(_settings.delete().where(_settings.c.id == row_id))
 
+    with op.batch_alter_table('vehicle_observations', schema=None) as batch_op:
+        batch_op.drop_column('avg_energy_consumption_auto')
+        batch_op.drop_column('avg_fuel_consumption_auto')
     with op.batch_alter_table('location_patterns', schema=None) as batch_op:
         batch_op.drop_column('manual_purpose_mode')
     with op.batch_alter_table('calendar_events', schema=None) as batch_op:

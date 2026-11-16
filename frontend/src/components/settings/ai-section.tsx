@@ -30,7 +30,7 @@ const FULL_ITEMS = [
 const FULL_NEVER =
   "E-postadresser, koordinater, chassinummer, nycklar, lösenord och kalenderlänken skickas aldrig, och koder och lösenord i bokningar och anteckningar tas bort före sändningen.";
 const MINIMAL_TEXT =
-  "Bara platsens namn och ort, veckodag, klockslag, sträcka, regelmotorns signaler och dina tidigare ärenden. Hemmet och privata platser skickas som ”Hemmet” och ”Privat plats”. Kalenderrubrik, brödtext och gatuadresser styrs av valen nedan.";
+  "Bara platsens namn och ort, veckodag, klockslag, sträcka, regelmotorns signaler och dina tidigare ärenden. Hemmet och privata platser skickas som ”Hemmet” och ”Privat plats”. Kalenderrubrik, brödtext och gatuadresser styrs av valen nedan och skickas då som de står i kalendern, utan att koder eller länkar tas bort.";
 
 /** Underlagsnivån: två val under varandra (det fullständiga har en lista och behöver bredden). */
 function LevelChoice({ value, onChange, defaultLevel }: { value: ContextLevel; onChange: (v: ContextLevel) => void; defaultLevel: unknown }) {

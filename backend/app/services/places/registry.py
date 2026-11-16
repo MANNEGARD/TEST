@@ -214,12 +214,13 @@ def recount_visits(db: Session, user_id: uuid.UUID) -> None:
 
 def learn_coordinates(db: Session, loc: KnownLocation, lat: float | None, lon: float | None, source: str) -> bool:
     """Sparar koordinater på en plats som saknar dem (t.ex. när en API-position
-    kan kopplas till en importerad adress). Skriver aldrig över användarens val."""
+    kan kopplas till en importerad adress). Skriver aldrig över användarens val. En ungefärlig
+    position som bara är uppslagen ur adressen (``geocoded``) ersätts av bilens exakta."""
     if not valid_coordinates(lat, lon):
         return False
     if loc.latitude is not None and loc.coordinate_source == "user":
         return False
-    if loc.latitude is None:
+    if loc.latitude is None or (loc.coordinate_source == "geocoded" and source == "api"):
         loc.latitude, loc.longitude, loc.coordinate_source = lat, lon, source
         db.flush()
         return True

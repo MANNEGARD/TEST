@@ -439,6 +439,29 @@ def unsupported_words(text: str, corpus: set[str]) -> list[str]:
     return missing
 
 
+def _ascii_fold(text: str) -> str:
+    import unicodedata
+
+    return "".join(c for c in unicodedata.normalize("NFKD", fold(text)) if not unicodedata.combining(c))
+
+
+def domain_guesses(text: str, corpus: set[str], domain_heads: set[str] | None) -> list[str]:
+    """Ord som är, eller börjar med, första ledet i en e-postdomän i underlaget men inte står
+    ordagrant i en rubrik, plats eller beskrivning: ett företagsnamn gissat ur domänen (3.F.1)."""
+    if not domain_heads:
+        return []
+    heads = {_ascii_fold(h) for h in domain_heads if len(h) >= 4}
+    out: list[str] = []
+    for tok in textnorm.tokens(text):
+        key = fold(tok)
+        if key in corpus:
+            continue
+        plain = _ascii_fold(tok).replace("-", "")
+        if any(plain == h or plain.startswith(h) for h in heads):
+            out.append(tok)
+    return out
+
+
 # Ärendetyper som AI bara får ange när samma typ har stöd i underlaget.
 _GATED_TYPES = frozenset(
     {
@@ -528,6 +551,7 @@ def validate_generated(
     rules: RuleResult | None = None,
     rule_proposal: PurposeProposal | None = None,
     extra_texts: list[str] | None = None,
+    domain_heads: set[str] | None = None,
 ) -> tuple[bool, list[str]]:
     """Godkänner ett AI-genererat syfte endast om
 
@@ -548,6 +572,7 @@ def validate_generated(
     corpus = grounding_corpus(ctx, extra_texts)
     corpus |= {fold(w) for w in textnorm.GENERIC_WORDS}
     missing = unsupported_words(cleaned, corpus)
+    missing += [w for w in domain_guesses(cleaned, corpus, domain_heads) if w not in missing]
     missing += unsupported_types(cleaned, ctx, rules, rule_proposal)
     return (not missing), missing
 
@@ -573,6 +598,7 @@ def check_generated(
     rules: RuleResult | None = None,
     rule_proposal: PurposeProposal | None = None,
     extra_texts: list[str] | None = None,
+    domain_heads: set[str] | None = None,
 ) -> GeneratedCheck:
     """Formen (en rad, ≤ 80 tecken, inga länkar eller ``<>{}``) och namnen avvisar; en ärendetyp
     utan stöd eller en text som bara är ett allmänt ord behålls men får ``supported=False``."""
@@ -587,6 +613,7 @@ def check_generated(
     corpus = grounding_corpus(ctx, extra_texts)
     corpus |= {fold(w) for w in textnorm.GENERIC_WORDS}
     missing = unsupported_words(cleaned, corpus)
+    missing += [w for w in domain_guesses(cleaned, corpus, domain_heads) if w not in missing]
     if missing:
         return GeneratedCheck(False, False, ["namn utan stöd i underlaget"], names=missing)
     types = unsupported_types(cleaned, ctx, rules, rule_proposal)

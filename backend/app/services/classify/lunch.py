@@ -7,9 +7,12 @@ Hela mönstret krävs – aldrig klockslaget ensamt (docs/ai-klassificering.md):
   när körtiden är känd, ``max_drive_minutes``),
 * stoppet varar mellan ``min_stop_minutes`` och ``max_stop_minutes`` på samma ställe,
 * återresan är lika kort tillbaka till SAMMA kontor, och allt ligger inom lunchfönstret,
-* stället är inte en bekräftad kund, arbetsplats, hem eller hotell, har inget företag, ingen
+* stället är inte en bekräftad kund, arbetsplats eller hotell, har inget företag, ingen
   egen regel och ingen tidigare tjänsteresa som ägaren eller importen har avgjort, och kartan
   säger inte kontor/industri/lager; ingen kalenderbokning stämmer med resorna.
+* Lunch hemma (stället är den bekräftade bostaden) känns igen som eget fall (``at_home``):
+  regeln gör då inget privat av sig själv, men autopiloten låter inte regel K (hem ↔ kontor
+  är tjänst) godkänna turen – ägaren får en fråga när återresan är klar.
 
 Modulen läser bara – autopiloten (regel L), regelmotorn (signalen ``lunch_pattern``) och
 notiserna (ingen fråga medan ägaren äter) använder ``match`` och ``awaiting_return``.
@@ -46,6 +49,10 @@ class LunchMatch:
     stop_low: float | None
     stop_high: float | None
     map_hint: Literal["restaurang", "kafé", "butik"] | None
+    # Lunch hemma: samma mönster med bostaden som ställe. Gör aldrig resorna privata av sig
+    # själv – med "hem ↔ kontor är tjänst" påslaget blir det en fråga i stället för två
+    # automatiska tjänsteresor (regel K), annars avgör de vanliga reglerna.
+    at_home: bool = False
 
     def related_to(self, trip_id: uuid.UUID) -> uuid.UUID | None:
         """Den andra resan i mönstret."""
@@ -221,8 +228,12 @@ def _office(db: Session, loc_id: uuid.UUID | None, user_id: uuid.UUID, day: date
     return sig.employer_office(loc, ids, with_periods)
 
 
+def _home(place: KnownLocation | None) -> bool:
+    return place is not None and place.confirmed and place.type == LocationType.HOME
+
+
 def _outbound(db: Session, u: LogicalTrip, *, user_id: uuid.UUID, cfg: dict[str, Any]) -> KnownLocation | None:
-    """Är ``u`` en utresa U (kontor → ställe X)? Returnerar X."""
+    """Är ``u`` en utresa U (kontor → ställe X)? Returnerar X (bostaden räknas, se ``at_home``)."""
     if not _single(u) or not _free(u) or u.start_location_id is None or u.end_location_id is None:
         return None
     if u.start_location_id == u.end_location_id:
@@ -238,7 +249,7 @@ def _outbound(db: Session, u: LogicalTrip, *, user_id: uuid.UUID, cfg: dict[str,
     if (_hhmm(start, cfg) or "") < cfg["window_start"] or (_hhmm(u.ended_at, cfg) or "") >= cfg["window_end"]:
         return None
     place = db.get(KnownLocation, u.end_location_id)
-    if not _place_ok(db, u.start_location_id, place, user_id) or _calendar(db, u, cfg):
+    if not (_home(place) or _place_ok(db, u.start_location_id, place, user_id)) or _calendar(db, u, cfg):
         return None
     return place
 
@@ -270,6 +281,22 @@ def _return_stop(db: Session, u: LogicalTrip, r: LogicalTrip, *, cfg: dict[str, 
     return gap.minutes_low, gap.minutes_high
 
 
+def return_deadline(trip: LogicalTrip, cfg: dict[str, Any]) -> datetime:
+    """När regeln slutar vänta på återresan efter utresan ``trip``."""
+    return trip.ended_at + timedelta(  # type: ignore[operator]
+        minutes=float(cfg["max_stop_minutes"]) + float(cfg["max_drive_minutes"])
+    ) + RETURN_SLACK
+
+
+def awaiting_until(db: Session, trip: LogicalTrip, *, user_id: uuid.UUID, now: datetime | None = None) -> datetime | None:
+    """När väntan på återresan tar slut, eller None när regeln inte väntar."""
+    cfg = config(db, user_id)
+    m = match(db, trip, user_id=user_id, cfg=cfg, now=now)
+    if m is None or m.status != "awaiting_return":
+        return None
+    return return_deadline(trip, cfg)
+
+
 def match(
     db: Session, trip: LogicalTrip, *, user_id: uuid.UUID, cfg: dict[str, Any] | None = None,
     now: datetime | None = None,
@@ -286,14 +313,12 @@ def match(
             stop = _return_stop(db, trip, nxt, cfg=cfg)
             if stop is not None:
                 return LunchMatch("complete", trip.id, nxt.id, trip.start_location_id, place.id,  # type: ignore[arg-type]
-                                  stop[0], stop[1], _map_hint(place))
+                                  stop[0], stop[1], _map_hint(place), _home(place))
             return None
-        deadline = trip.ended_at + timedelta(  # type: ignore[operator]
-            minutes=float(cfg["max_stop_minutes"]) + float(cfg["max_drive_minutes"])
-        ) + RETURN_SLACK
+        deadline = return_deadline(trip, cfg)
         if now <= deadline:
             return LunchMatch("awaiting_return", trip.id, None, trip.start_location_id, place.id,  # type: ignore[arg-type]
-                              None, None, _map_hint(place))
+                              None, None, _map_hint(place), _home(place))
         return None
     prev = _neighbour(db, trip, after=False)
     if prev is None:
@@ -305,7 +330,7 @@ def match(
     if stop is None:
         return None
     return LunchMatch("complete", prev.id, trip.id, prev.start_location_id, place.id,  # type: ignore[arg-type]
-                      stop[0], stop[1], _map_hint(place))
+                      stop[0], stop[1], _map_hint(place), _home(place))
 
 
 def awaiting_return(db: Session, trip: LogicalTrip, *, user_id: uuid.UUID, now: datetime | None = None) -> bool:
@@ -326,4 +351,4 @@ def reason(m: LunchMatch) -> str:
     return "Lunch" + (f" ({m.map_hint})" if m.map_hint else "")
 
 
-__all__ = ["LunchMatch", "RETURN_SLACK", "awaiting_return", "config", "match", "office_ready", "reason", "stop_text"]
+__all__ = ["LunchMatch", "RETURN_SLACK", "awaiting_return", "awaiting_until", "config", "match", "office_ready", "reason", "return_deadline", "stop_text"]

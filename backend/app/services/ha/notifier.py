@@ -451,9 +451,15 @@ def enqueue_for_changes(
             continue
         if since is not None and is_live_since(db, trip, since):
             continue
+        trip_send_after = send_after
+        lunch_until = _lunch_wait_until(db, trip, user_id, now)
+        if lunch_until is not None and lunch_until > trip_send_after:
+            # Lunchregeln väntar på återresan: ingen fråga om utresan medan ägaren äter
+            # (även i manuellt läge). Frågan skickas först när väntan är över.
+            trip_send_after = lunch_until
         asked = False
         if kinds.get("classify", True) and (ReviewKind.CATEGORY in new_kinds or ReviewKind.TAX_UNCERTAIN in new_kinds):
-            req = create_classify_question(db, user_id=user_id, trip=trip, cfg=cfg, now=now, send_after=send_after)
+            req = create_classify_question(db, user_id=user_id, trip=trip, cfg=cfg, now=now, send_after=trip_send_after)
             if req is not None:
                 created.append(req)
                 asked = True
@@ -464,7 +470,7 @@ def enqueue_for_changes(
             and trip.category == Category.WORK
             and ReviewKind.CATEGORY not in new_kinds
         ):
-            req = create_purpose_question(db, user_id=user_id, trip=trip, cfg=cfg, now=now, send_after=send_after)
+            req = create_purpose_question(db, user_id=user_id, trip=trip, cfg=cfg, now=now, send_after=trip_send_after)
             if req is not None:
                 created.append(req)
     db.flush()
@@ -1184,6 +1190,16 @@ def _waiting_for_address(db: Session, trip: LogicalTrip, now: datetime) -> bool:
     if dest is None or dest.geocode_status != "pending":
         return False
     return dest.created_at is not None and now - dest.created_at < WAIT_FOR_ADDRESS
+
+
+def _lunch_wait_until(db: Session, trip: LogicalTrip, user_id: uuid.UUID, now: datetime) -> datetime | None:
+    from app.services.classify import lunch
+
+    try:
+        return lunch.awaiting_until(db, trip, user_id=user_id, now=now)
+    except Exception:  # lunchregeln får aldrig stoppa frågorna
+        logger.exception("Kunde inte pröva lunchregeln")
+        return None
 
 
 def _waiting_for_lunch(db: Session, trip: LogicalTrip, user_id: uuid.UUID, now: datetime) -> bool:

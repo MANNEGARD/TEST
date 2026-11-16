@@ -145,6 +145,10 @@ Lunchregeln*. Regeln kräver att minst ett kontor finns som bekräftad plats –
 varning där. Den är påslagen från början och gäller även resor som väntar på svar när
 uppdateringen installeras. I läget *Jag godkänner allt själv* blir lunchresorna förslag på Privat.
 
+Åker du hem och sedan tillbaka till samma kontor enligt mönstret görs resorna inte privata av
+sig själva. Har du valt att resor mellan hemmet och kontoren är tjänsteresor godkänns de inte
+heller automatiskt som tjänst – du får en fråga när du är tillbaka på kontoret.
+
 ### Platsantagandet
 
 OpenStreetMap säger ofta vad en plats är. DriveLog delar in platsen i tre arter:
@@ -629,9 +633,10 @@ Hela ändringsloggen finns på tilläggets sida i Home Assistant.
 
 Under *Mer → Bränsle & energi* visas bensin och el. Förbrukning räknas som uppmätt när den
 kommer per resa ur den importerade körjournalen. För resor från bilen räknar DriveLog fram
-förbrukningen ur bilens egna avläsningar – trippmätaren och snittförbrukningen, annars
-skillnaden i tanken eller batteriet med tankning och laddning borträknade. De värdena är
-uppskattade och står med ≈ på resan. Räcker inte bilens uppgifter står det "–". Här kan du också
+förbrukningen ur bilens egna avläsningar – den automatiska trippmätaren och snittförbrukningen
+för samma period, annars skillnaden i tanken; en tankning under resan gör värdet okänt.
+Batteriets nivå används inte än. De värdena är uppskattade och står med ≈ på resan. Räcker inte
+bilens uppgifter, eller är de för grova för att lita på, står det "–". Här kan du också
 föra in tankningar och laddningar.
 
 ### Felsökningsfil

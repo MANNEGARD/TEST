@@ -185,6 +185,11 @@ def test_arbetsflodet_ar_giltigt():
             assert j["permissions"] == {"contents": "write"}
             assert "default_branch" in j["if"] and "github.event_name == 'push'" in j["if"]
             assert j["needs"] == "erbjud" and j["continue-on-error"] is True
+            # bara när körningen publicerade en ny avbild (inte vid varje incheckning)
+            assert "needs.erbjud.outputs.publicerad == 'true'" in j["if"]
+            assert jobb["erbjud"]["outputs"]["publicerad"] == "${{ needs.publicera.outputs.publicerad }}"
+            assert jobb["publicera"]["outputs"]["publicerad"] == "${{ steps.finns.outputs.finns == 'false' }}"
+            assert any(st.get("if") == "failure()" and "::warning::" in st.get("run", "") for st in j["steps"])
         else:
             assert j.get("permissions", {}) in ({}, {"contents": "read"})
     for j in jobb.values():

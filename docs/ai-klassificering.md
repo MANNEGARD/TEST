@@ -172,6 +172,12 @@ signalen. Du får ingen fråga om utresan medan regeln väntar på återresan; k
 lunchresorna förslag på Privat. Gränserna ändras under *Inställningar → Lunchregeln*.
 Regeln kräver att minst ett kontor finns som bekräftad plats.
 
+**Lunch hemma.** Går turen från kontoret hem och tillbaka till samma kontor enligt mönstret
+gör regeln inte resorna privata av sig själv. Har du valt att resor mellan hemmet och kontoren
+är tjänsteresor (regel K) godkänns de inte heller automatiskt som tjänst: DriveLog väntar på
+återresan och ställer sedan en fråga (*Kort tur hem mitt på dagen – lunch hemma eller
+tjänst?*). Utan det valet gäller de vanliga reglerna.
+
 ## Skattemässig bedömning
 
 Att en resa är arbetsrelaterad betyder inte automatiskt att den är en tjänsteresa.
@@ -272,7 +278,11 @@ gäller först när du godkänt dem.
 | Regelmotorns signaler | Hemadress (visas som "Hemmet") |
 | Kalenderrubrik, tid och plats för matchade bokningar (kan stängas av) | Privata platsers namn ("Privat plats") |
 | Tidigare bekräftade syften för samma resa | Gatuadresser (om inte uttryckligen påslaget) |
-| | Kalenderns brödtext (om inte uttryckligen påslaget) |
+| | Kalenderns brödtext (om inte uttryckligen påslaget; då de första 300 tecknen) |
+
+På nivån Minimalt skickas rubrik och brödtext som de står i kalendern: koder, länkar,
+e-postadresser eller lösenord som någon har skrivit där tas inte bort. Vill du att de tas bort,
+välj Fullständigt underlag eller stäng av rubrik och brödtext.
 
 ## Koppla in en leverantör
 

@@ -40,17 +40,25 @@ _BLOCK_START = re.compile(
 )
 # Enskilda rader som alltid tas bort.
 _LINE_DROP = re.compile(
-    r"(mötes-?id|meeting id|konferens-?id|lösenord|password|passcode|lösenkod|\bkod\s*:|\bpin\s*[:=]|"
-    r"dial-?in|ring in|ringa in|telefonkonferens|phone conference|tap to join)",
+    r"(mötes-?id|meeting id|konferens-?id|conference id|access code|åtkomstkod|lösenord|password|passcode|"
+    r"lösenkod|\bkod\s*:|\bpin\s*[:=]|dial-?in|ring in|ringa in|telefonkonferens|phone conference|"
+    r"join by phone|tap to join)",
     re.IGNORECASE,
 )
 _PHONE_LINE = re.compile(r"^\s*(tel[.:]?\s*)?\+\d[\d\s,#*()-]{5,}")
-_LINK = re.compile(r"(https?://|www\.)\S+", re.IGNORECASE)
+# Länkar: med schema eller www., och mötesvärdar även utan (meet.google.com/abc-defg-hij).
+MEETING_HOSTS = r"(?:meet\.google\.com|(?:[\w-]+\.)?zoom\.us|teams\.microsoft\.com|teams\.live\.com|(?:[\w-]+\.)?webex\.com)"
+_LINK = re.compile(r"(https?://|www\.)\S+|\b" + MEETING_HOSTS + r"(?:/\S*)?", re.IGNORECASE)
 _MAILTO = re.compile(r"\bmailto:\S+", re.IGNORECASE)
 _EMAIL = re.compile(r"\b[\w.+-]+@[\w-]+(\.[\w-]+)+\b")
 # Signaturen och allt efter den kapas.
 _SIGNATURE = re.compile(r"^(--\s*|med vänliga hälsningar|vänliga hälsningar|mvh\b|best regards|kind regards)",
                         re.IGNORECASE)
+# En e-postdomän: bokstäver (även å/ä/ö), siffror, punkt och bindestreck, och en toppdomän.
+# Allt annat (mellanslag, < >, citattecken …) är inte en domän och följer aldrig med.
+_DOMAIN_RE = re.compile(r"^(?=.{4,253}$)[^\W_](?:[\w-]*[^\W_])?(?:\.[^\W_](?:[\w-]*[^\W_])?)*\.[a-z]{2,24}$")
+# Samma form som inställningen calendar.work_domain godtar (bara a–z).
+WORK_DOMAIN_RE = re.compile(r"^[a-z0-9.-]+\.[a-z]{2,}$")
 _ONLINE_HINTS = ("teams.microsoft", "microsoft teams", "zoom.us", "join zoom", "webex", "meet.google",
                  "anslut till mötet", "skype")
 
@@ -105,11 +113,16 @@ def looks_online(*texts: str | None) -> bool:
     return any(h in folded for h in _ONLINE_HINTS)
 
 
+def valid_domain(domain: str | None) -> bool:
+    return bool(domain) and _DOMAIN_RE.match(domain) is not None  # type: ignore[arg-type]
+
+
 def domain_of(email: str | None) -> str | None:
+    """Domänen i en e-postadress, eller None när det efter @ inte är en domän."""
     if not email or "@" not in email:
         return None
     domain = email.rsplit("@", 1)[1].strip().lower().rstrip(".")
-    return domain or None
+    return domain if valid_domain(domain) else None
 
 
 def is_generic(domain: str | None) -> bool:
@@ -129,8 +142,8 @@ def parse_person(value: Any, params: dict[str, Any] | None = None) -> dict[str, 
     raw = str(value or "").strip()
     email = raw[7:] if raw.lower().startswith("mailto:") else raw
     email = email.strip().lower()
-    if "@" not in email:
-        email = ""
+    if "@" not in email or domain_of(email) is None or any(c.isspace() for c in email):
+        email = ""  # inte en e-postadress: bara namnet används
     name = None
     if params:
         cn = params.get("CN")
@@ -275,11 +288,13 @@ def learn_owner(events: list[dict[str, Any]]) -> tuple[str | None, str | None]:
             domain = organizers.most_common(1)[0][0]
         elif everyone:
             domain = everyone.most_common(1)[0][0]
+    if domain is not None and not WORK_DOMAIN_RE.match(domain):
+        domain = None  # t.ex. en domän med å/ä/ö: ägaren fyller i den själv
     return self_email, domain
 
 
 __all__ = [
-    "BODY_SEND_LIMIT", "BODY_STORE_LIMIT", "GENERIC_DOMAINS", "clean_body", "domain_matches", "domain_of",
+    "BODY_SEND_LIMIT", "BODY_STORE_LIMIT", "GENERIC_DOMAINS", "MEETING_HOSTS", "WORK_DOMAIN_RE", "clean_body", "domain_matches", "domain_of",
     "external_domains", "is_generic", "learn_owner", "looks_online", "parse_person", "participants",
-    "same_domain", "store_body",
+    "same_domain", "store_body", "valid_domain",
 ]

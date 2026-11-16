@@ -46,7 +46,11 @@ const EXTRA_KIND_LABELS: Record<string, string> = {
   company: "Företag",
   alert: "Larm",
   monthly: "Månadsskifte",
+  release: "Ny version",
 };
+
+/** Notiser som bara berättar något (inga svar): länkarna visas i stället för svarsknappar. */
+const INFORMATIONAL_KINDS = new Set(["digest", "weekly", "daily", "alert", "monthly", "release"]);
 
 /** Klassningsfrågan i självgående läge har ärendet i samma svar. */
 function isSelfDrivingClassify(q: Question): boolean {
@@ -379,8 +383,7 @@ export function QuickQuestionView({ publicId }: { publicId: string }) {
   }
 
   const data = query.data;
-  const informational =
-    data.kind === "digest" || data.kind === "weekly" || data.kind === "daily" || data.kind === "alert" || data.kind === "monthly";
+  const informational = INFORMATIONAL_KINDS.has(data.kind);
   const open = data.answerable && !informational && data.status !== "answered";
   const pending = respond.isPending ? (respond.variables?.action ?? null) : null;
 

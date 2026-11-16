@@ -42,7 +42,7 @@ _HASH_FIELDS = (
     "fuel_liters", "fuel_reported_at", "battery_percent", "battery_reported_at", "electric_range_km",
     "fuel_range_km", "charging_status", "engine_running", "engine_reported_at", "avg_fuel_consumption",
     "avg_energy_consumption", "avg_speed", "trip_meter_auto_km", "trip_meter_manual_km",
-    "avg_speed_auto", "statistics_reported_at",
+    "avg_speed_auto", "statistics_reported_at", "avg_fuel_consumption_auto", "avg_energy_consumption_auto",
 )
 _REPORTED_FIELDS = (
     "odometer_reported_at", "position_reported_at", "fuel_reported_at", "battery_reported_at", "engine_reported_at",
@@ -190,6 +190,12 @@ def parse_results(results: dict[str, ApiResult]) -> dict[str, Any]:
         # statistiken (för starttiden, byggkontraktet D.1).
         value, unit, speed_ts = vc.cv_field(r.data, "averageSpeedAutomatic")
         f["avg_speed_auto"] = _to_kmh(value, unit)
+        # Snittförbrukningen för samma period som tripMeterAutomatic (trippmätarmetoden).
+        # averageFuelConsumption hör till den manuella trippmätaren och blandas inte in.
+        f["avg_fuel_consumption_auto"] = vc.parse_number(vc.cv_field(r.data, "averageFuelConsumptionAutomatic")[0])
+        f["avg_energy_consumption_auto"] = vc.parse_number(
+            vc.cv_field(r.data, "averageEnergyConsumptionAutomatic")[0]
+        )
         f["statistics_reported_at"] = trip_ts or speed_ts
         value, unit, _ = vc.cv_field(r.data, "tripMeterManual")
         f["trip_meter_manual_km"] = vc.to_km(value, unit)

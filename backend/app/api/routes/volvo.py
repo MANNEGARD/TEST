@@ -461,6 +461,7 @@ _DIAG_OBS_FIELDS = (
     "fuel_reported_at", "battery_percent", "battery_reported_at", "electric_range_km", "fuel_range_km",
     "charging_status", "engine_running", "engine_reported_at", "avg_fuel_consumption", "avg_energy_consumption",
     "avg_speed", "avg_speed_auto", "trip_meter_auto_km", "trip_meter_manual_km", "statistics_reported_at",
+    "avg_fuel_consumption_auto", "avg_energy_consumption_auto",
 )
 _DIAG_TRIP_FIELDS = (
     "started_at", "ended_at", "start_time_quality", "end_time_quality", "distance_km", "odometer_start",

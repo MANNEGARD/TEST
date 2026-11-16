@@ -830,9 +830,12 @@ def learn_owner(db: Session, user_id: uuid.UUID, conn: IntegrationConnection, ev
     cal = settings_svc.get_section(db, user_id, "calendar")
     if cal.get("work_domain") or cal.get("work_domain_source") == "user":
         return
-    settings_svc.update_section(
-        db, user_id, "calendar", {"work_domain": domain, "work_domain_source": "auto"}, allow_read_only=True
-    )
+    try:
+        settings_svc.update_section(
+            db, user_id, "calendar", {"work_domain": domain, "work_domain_source": "auto"}, allow_read_only=True
+        )
+    except settings_svc.SettingsError:
+        return  # en gissning som inställningen inte godtar får aldrig stoppa synken
 
 
 def self_email(db: Session, user_id: uuid.UUID) -> str | None:

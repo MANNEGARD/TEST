@@ -132,6 +132,7 @@ class DemoClient:
             data = {
                 "data": {
                     "averageFuelConsumption": {"value": 5.4, "unit": "l/100km", "timestamp": ts},
+                    "averageFuelConsumptionAutomatic": {"value": 5.4, "unit": "l/100km", "timestamp": ts},
                     "averageSpeed": {"value": 62, "unit": "km/h", "timestamp": ts},
                     "tripMeterAutomatic": {"value": s.get("trip_meter", 0.0), "unit": "km", "timestamp": ts},
                     "averageSpeedAutomatic": {"value": s.get("avg_speed", 0.0), "unit": "km/h", "timestamp": ts},

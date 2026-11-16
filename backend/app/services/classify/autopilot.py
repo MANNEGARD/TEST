@@ -96,6 +96,7 @@ _RULE_SOURCES = frozenset({
     ApprovalSource.LUNCH,
 })
 LUNCH_WAIT_TEXT = "Lunch? Väntar på återresan"
+LUNCH_HOME_TEXT = "Kort tur hem mitt på dagen – lunch hemma eller tjänst?"
 EVENING_TEXT = "Kvällsärende under tjänsteresa"
 EVENING_MAX_KM = 15.0
 
@@ -519,6 +520,12 @@ def _home_office_rule(
         return None
     if any(s.direction == Category.PRIVATE for s in rules.signals):
         return None
+    lm = getattr(ctx, "lunch", None)
+    if lm is not None and lm.at_home and lm.status == "complete":
+        # Kontoret → hemmet → samma kontor i lunchfönstret: kan vara lunch hemma (privat).
+        # Ingen automatisk tjänst och ingen automatisk privat – ägaren avgör.
+        return AutoDecision("ask", reason=LUNCH_HOME_TEXT,
+                            candidates=tuple(purpose_candidates(db, trip, user_id=user_id)))
     outbound = _is_home(ctx.origin)
     office = ctx.destination if outbound else ctx.origin
     city = sanitize_text((office.city if office is not None else None) or None) or ""
@@ -533,10 +540,9 @@ def _home_office_rule(
     if proposal is not None and is_fixed(proposal):
         purpose = sanitize_text(proposal.text)  # ägarens regel eller historik för rutten
     if purpose is None:
-        current = _current_purpose(db, trip)
-        based = (current.based_on or {}) if current is not None else {}
-        if current is not None and current.source == DecisionSource.AI and based.get("supported") is True:
-            purpose = sanitize_text(current.text)
+        # AI:ns ärende bara med stöd och när det fortfarande klarar namnkontrollen mot resans
+        # egna uppgifter (inte hela underlaget med dagens alla bokningar).
+        purpose = _ai_purpose(trip, ctx, rules)
     if purpose is None:
         purpose = f"Resa till kontoret i {where}" if outbound else f"Hemresa från kontoret i {where}"
     return AutoDecision("approve", category=Category.WORK, purpose=purpose, source=ApprovalSource.HOME_OFFICE,
@@ -548,7 +554,7 @@ def _lunch_rule(ctx: Any) -> AutoDecision | None:
     from app.services.classify import lunch
 
     m = getattr(ctx, "lunch", None)
-    if m is None or m.status != "complete":
+    if m is None or m.status != "complete" or m.at_home:
         return None
     return AutoDecision("approve", category=Category.PRIVATE, source=ApprovalSource.LUNCH, reason=lunch.reason(m),
                         related_trip_id=m.related_to(ctx.trip.id))
@@ -731,8 +737,9 @@ def _calendar_purpose(db: Session, trip: LogicalTrip, ctx: Any, rules: Any) -> t
     based = (current.based_on or {}) if current is not None else {}
     if (
         current is not None and current.source == DecisionSource.AI and based.get("calendar") == "strong"
-        and current.text and not based.get("fallback")
+        and based.get("supported") is True and current.text and not based.get("fallback")
     ):
+        # Bara ett AI-ärende med stöd (3.E steg 1a); annars bokningens eget förslag (steg 1b).
         text = sanitize_text(current.text)
         if text:
             return text, tuple(str(i) for i in based.get("calendar_event_ids") or [])
@@ -852,7 +859,11 @@ def decide(db: Session, trip: LogicalTrip, *, user_id: uuid.UUID, ctx: Any, rule
         multi = blocked == MULTI_TRIP_TEXT
         cands = () if multi else tuple(purpose_candidates(db, trip, user_id=user_id))
         return AutoDecision("ask", reason=blocked, candidates=cands)
+    from app.services.classify import signals as sig
+
     lunch_match = getattr(ctx, "lunch", None)
+    if lunch_match is not None and lunch_match.at_home and not sig.home_office(ctx):
+        lunch_match = None  # lunch hemma spelar bara roll när regel K annars skulle godkänna
     if lunch_match is not None and lunch_match.status == "awaiting_return":
         # Ingen fråga om utresan medan ägaren äter: beslutet tas när återresan är klar.
         return AutoDecision("wait", reason=LUNCH_WAIT_TEXT)
@@ -1025,6 +1036,21 @@ def run_vehicle(db: Session, *, user_id: uuid.UUID, vehicle: Vehicle, actor: aud
             out[d.outcome] = out.get(d.outcome, 0) + 1
     db.flush()
     return out
+
+
+def run_trip(db: Session, *, user_id: uuid.UUID, trip: LogicalTrip, actor: audit.Actor) -> AutoDecision | None:
+    """decide + apply för en enda resa (AI-knappen). Övriga resor räknas om i bakgrunden
+    (``recompute.request``) – inget i anropet går igenom hela fordonet."""
+    if not is_active(db, user_id):
+        return None
+    cfg = config(db, user_id)
+    if not eligible(trip, active_since=cfg["active_since"]):
+        return None
+    d = decide(db, trip, user_id=user_id, ctx=None, rules=None, cfg=cfg)
+    if apply(db, trip, d, actor=actor) and d.outcome == "approve" and d.source == ApprovalSource.LUNCH:
+        _cancel_questions(db, trip.id)
+    db.flush()
+    return d
 
 
 def _cancel_questions(db: Session, trip_id: uuid.UUID) -> None:

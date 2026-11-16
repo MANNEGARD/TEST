@@ -202,15 +202,20 @@ Resedetekteringen (`detection.process_vehicle`) är en tillståndsmaskin:
   privat). Larmet "Hämtningen från Volvo fungerar inte" (efter 6 timmar) påminner om samma sak.
 * **Bränsle och el per resa** (1.3.0, `services/volvo/consumption.py`) räknas fram ur bilens
   egna avläsningar och märks som uppskattade (`estimated`, "≈" i appen):
-  1. *Trippmätare × snitt:* avläsningen före och efter resan, trippmätaren har inte nollställts
-     emellan och har ökat ungefär lika mycket som resan är lång (±2 km eller 15 %).
-     Förbrukningen är `(snitt_efter × tripp_efter − snitt_före × tripp_före) / 100` – så får två
-     resor i samma trippmätarperiod var sin del.
+  1. *Trippmätare × snitt:* avläsningen före och efter resan, trippmätaren
+     (`tripMeterAutomatic`) har inte nollställts emellan och har ökat ungefär lika mycket som
+     resan är lång (±2 km eller 15 %). Snittet är `averageFuelConsumptionAutomatic` resp.
+     `averageEnergyConsumptionAutomatic` – samma period som trippmätaren; `averageFuelConsumption`
+     hör till förarens manuella trippmätare och används inte här. Förbrukningen är
+     `(snitt_efter × tripp_efter − snitt_före × tripp_före) / 100` – så får två resor i samma
+     trippmätarperiod var sin del. Snitten har en decimal: kan avrundningen flytta värdet mer än
+     25 % (lång trippmätare, kort resa) lämnas värdet åt nästa metod.
   2. *Nollställd trippmätare* (efter ca 4 timmars stillestånd): trippmätaren efter resan ≈
      resans längd → `snitt × tripp / 100`.
   3. *Nivåskillnad i tanken* när trippmätaren inte räcker. En ökning på mer än 1 l mellan två
-     avläsningar under resan är en tankning, och då lämnas värdet okänt. Batteriets nivå används
-     inte, eftersom den användbara kapaciteten inte är känd.
+     avläsningar under resan är en tankning, och då lämnas värdet okänt. Finns ingen avläsning
+     under resan syns inte en tankning: då krävs minst 5 l/100 km, annars okänt. Batteriets nivå
+     används inte, eftersom den användbara kapaciteten inte är känd.
   Orimliga värden (negativa, mer än 100 l, mer än 60 l eller 60 kWh per 100 km) kastas. Räcker
   inget lämnas värdet okänt (`unknown`, "–"). Bara resor som DriveLog har skapat ur bilens
   avläsningar de senaste 14 dygnen räknas; importerade resor och värden som redan finns rörs
@@ -275,9 +280,10 @@ Följande är byggt enligt dokumentationen men **inte prövat mot en riktig bil*
   på den behövs verkliga avläsningsserier från bilen (minst 20 resor med känd starttid, där
   snittfarten och trippmätaren före och efter resan jämförs med den kända starttiden) och ett
   test som visar att felet är högst 5 minuter. Felsökningsfilen innehåller just de avläsningarna.
-* Förbrukningens metoder mot en riktig bil: att `averageFuelConsumption` och
-  `averageEnergyConsumption` avser trippmätarens sträcka, när trippmätaren nollställs, och hur
-  ofta statistiken uppdateras. Uppskattningen är prövad på påhittade avläsningar och demobilen.
+* Förbrukningens metoder mot en riktig bil: att `averageFuelConsumptionAutomatic` och
+  `averageEnergyConsumptionAutomatic` finns för bilen och avser `tripMeterAutomatic`s sträcka,
+  snittens upplösning, när trippmätaren nollställs och hur ofta statistiken uppdateras. Saknar
+  bilen de automatiska snitten används bara nivåskillnaden i tanken. Uppskattningen är prövad på påhittade avläsningar och demobilen.
 
 ## 9. Demoläge
 

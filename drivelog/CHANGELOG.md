@@ -74,10 +74,11 @@
   stängs av under *Inställningar → Lunchregeln*; den kräver att minst ett kontor finns som
   bekräftad plats.
 - **Bensin och el per resa.** Resor från bilen visade tidigare "–" för bensin och el. Nu räknas
-  förbrukningen fram ur bilens egna avläsningar – i första hand trippmätaren och
-  snittförbrukningen, annars skillnaden i tanken eller batteriet (tankning och laddning räknas
-  bort). Värdena är uppskattade och står med ≈ på resan. Räcker inte bilens uppgifter står det
-  fortfarande "–"; inget hittas på.
+  förbrukningen fram ur bilens egna avläsningar – i första hand den automatiska trippmätaren och
+  snittförbrukningen för samma period, annars skillnaden i tanken; en tankning under resan gör
+  värdet okänt. Batteriets nivå används inte än. Värdena är uppskattade och står med ≈ på resan.
+  Räcker inte bilens uppgifter, eller är de för grova (avrundade snitt på en lång trippmätare),
+  står det fortfarande "–"; inget hittas på.
 - **Felsökningsfil för bilen.** Under *Integrationer → Volvo* laddar *Ladda ner felsökningsfil* ner
   bilens avläsningar och hämtningar de senaste 14 dygnen och de resor som byggdes av dem – utan
   chassinummer, registreringsnummer, positioner och adresser – att skicka till den som hjälper

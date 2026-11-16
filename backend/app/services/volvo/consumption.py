@@ -1,20 +1,26 @@
 """Bensin- och elförbrukning per resa ur bilens egna avläsningar (DEL 7, 1.3.0).
 
 Volvos API ger ingen förbrukning per resa, men observationerna sparar bilens trippstatistik
-(``trip_meter_auto_km`` och snittförbrukningen ``avg_fuel_consumption`` l/100 km resp.
-``avg_energy_consumption`` kWh/100 km över trippmätarens sträcka) och nivåerna i tanken och
-batteriet. Förbrukningen räknas fram så här, i ordning:
+(den automatiska trippmätaren ``trip_meter_auto_km`` och snittförbrukningen för SAMMA period,
+``avg_fuel_consumption_auto`` l/100 km resp. ``avg_energy_consumption_auto`` kWh/100 km ur
+averageFuelConsumptionAutomatic/averageEnergyConsumptionAutomatic) och nivåerna i tanken och
+batteriet. Snitten utan "Automatic" hör till förarens manuella trippmätare och används aldrig
+här. Förbrukningen räknas fram så här, i ordning:
 
 1. **Trippmätare × snitt.** Avläsningen före och efter resan, trippmätaren har inte nollställts
    emellan och har ökat ungefär lika mycket som resan är lång (±max(2 km, 15 %)): förbrukningen
    är snittets förändring viktad med sträckan, ``(snitt_efter × tripp_efter − snitt_före ×
-   tripp_före) / 100``. Det stämmer även när flera resor delar samma trippmätarperiod.
+   tripp_före) / 100``. Det stämmer även när flera resor delar samma trippmätarperiod. Snitten
+   är avrundade (0,1): felet blir upp till ``0,05 × (tripp_före + tripp_efter) / 100``. Är det
+   mer än 25 % av värdet avstår metoden (nästa metod prövas).
 1b. **Nollställd trippmätare** (tripp_efter < tripp_före, t.ex. efter ca 4 h stillestånd) och
    tripp_efter ≈ resans sträcka: resan började på en nollställd mätare, ``snitt × tripp / 100``.
 2. **Nivåskillnad** (bara bränsle; batteriet bara när den användbara kapaciteten är känd, vilket
    den inte är i dag): nettot i tanken före och efter. En ökning på mer än 1 l mellan två
    avläsningar under resan är en tankning och då går nettot inte att avgöra; en oförändrad nivå
-   ger inget värde (upplösningen eller eldrift), aldrig 0 l.
+   ger inget värde (upplösningen eller eldrift), aldrig 0 l. Finns ingen avläsning under resan
+   (bara läget före och efter) syns inte en tankning alls: då krävs minst 5 l/100 km, annars
+   lämnas värdet okänt.
 
 Orimliga värden (negativa, mer än tanken rymmer, mer än 60 l eller 60 kWh per 100 km) kastas.
 Värdet märks ``estimated`` ("Uppskattad ur bilens egna avläsningar"); räcker underlaget inte
@@ -49,6 +55,9 @@ MAX_PER_100 = 60.0  # l/100 km och kWh/100 km
 MAX_TANK_L = 100.0
 REFUEL_STEP_L = 1.0
 NO_TRIP_KM = 0.05
+AVG_RESOLUTION = 0.1  # bilens snitt har en decimal
+MAX_ROUNDING_SHARE = 0.25  # avrundningsfelet får vara högst en fjärdedel av värdet
+MIN_LEVEL_PER_100 = 5.0  # l/100 km när bara läget före och efter finns (en tankning syns inte)
 
 
 @dataclass(frozen=True)
@@ -60,8 +69,8 @@ class Reading:
     last_seen_at: datetime
     fuel_liters: float | None = None
     battery_percent: float | None = None
-    avg_fuel_consumption: float | None = None
-    avg_energy_consumption: float | None = None
+    avg_fuel_consumption_auto: float | None = None
+    avg_energy_consumption_auto: float | None = None
     trip_meter_auto_km: float | None = None
 
 
@@ -79,8 +88,8 @@ def reading(obs: VehicleObservation | Reading) -> Reading:
     return Reading(
         id=str(obs.id), fetched_at=obs.fetched_at, last_seen_at=obs.last_seen_at or obs.fetched_at,
         fuel_liters=obs.fuel_liters, battery_percent=obs.battery_percent,
-        avg_fuel_consumption=obs.avg_fuel_consumption, avg_energy_consumption=obs.avg_energy_consumption,
-        trip_meter_auto_km=obs.trip_meter_auto_km,
+        avg_fuel_consumption_auto=obs.avg_fuel_consumption_auto,
+        avg_energy_consumption_auto=obs.avg_energy_consumption_auto, trip_meter_auto_km=obs.trip_meter_auto_km,
     )
 
 
@@ -98,6 +107,14 @@ def _plausible(value: float | None, distance_km: float, *, cap: float | None) ->
     return round(value, 2)
 
 
+def _precise(value: float, *trip_kms: float) -> float | None:
+    """Värdet, eller None när snittens avrundning kan flytta det mer än en fjärdedel."""
+    margin = sum(AVG_RESOLUTION / 2 * km / 100 for km in trip_kms)
+    if value <= 0 or margin > MAX_ROUNDING_SHARE * value:
+        return None
+    return value
+
+
 def _by_trip_meter(before: Reading, after: Reading, distance_km: float, field: str) -> tuple[float | None, str | None]:
     tb, ta = before.trip_meter_auto_km, after.trip_meter_auto_km
     avg_a = getattr(after, field)
@@ -108,13 +125,18 @@ def _by_trip_meter(before: Reading, after: Reading, distance_km: float, field: s
         if abs((ta - tb) - distance_km) > tol:
             return None, None
         if tb <= NO_TRIP_KM:
-            return avg_a * ta / 100, "trip_meter"
+            value = avg_a * ta / 100
+            return (value, "trip_meter") if value <= 0 or _precise(value, ta) is not None else (None, None)
         avg_b = getattr(before, field)
         if avg_b is None:
             return None, None
-        return (avg_a * ta - avg_b * tb) / 100, "trip_meter"
+        value = (avg_a * ta - avg_b * tb) / 100
+        if value > 0 and _precise(value, ta, tb) is None:
+            return None, None
+        return value, "trip_meter"
     if abs(ta - distance_km) <= tol:
-        return avg_a * ta / 100, "trip_meter_reset"
+        value = avg_a * ta / 100
+        return (value, "trip_meter_reset") if value <= 0 or _precise(value, ta) is not None else (None, None)
     return None, None
 
 
@@ -162,10 +184,10 @@ def estimate_for_raw(
 
     b, a = last_with(pre, "trip_meter_auto_km"), first_after_with("trip_meter_auto_km")
     if b is not None and a is not None:
-        value, method = _by_trip_meter(b, a, distance, "avg_fuel_consumption")
+        value, method = _by_trip_meter(b, a, distance, "avg_fuel_consumption_auto")
         fuel = _plausible(value, distance, cap=cap)
         fuel_method = method if fuel is not None else None
-        value, method = _by_trip_meter(b, a, distance, "avg_energy_consumption")
+        value, method = _by_trip_meter(b, a, distance, "avg_energy_consumption_auto")
         energy = _plausible(value, distance, cap=None)
         energy_method = method if energy is not None else None
 
@@ -175,7 +197,10 @@ def estimate_for_raw(
             series = [fb.fuel_liters] + [
                 r.fuel_liters for r in post if r.fuel_liters is not None and r.fetched_at <= fa.fetched_at
             ]
-            net = _by_level([float(v) for v in series if v is not None], 1.0)
+            values = [float(v) for v in series if v is not None]
+            net = _by_level(values, 1.0)
+            if net is not None and len(values) < 3 and net / distance * 100 < MIN_LEVEL_PER_100:
+                net = None  # bara före och efter: en tankning under resan syns inte, för lite att lita på
             # Oförändrad nivå säger inget (avläsningens upplösning, eller eldrift): okänt, inte 0 l.
             fuel = _plausible(net, distance, cap=cap) if net is not None and net > 0 else None
             fuel_method = "level" if fuel is not None else None
@@ -222,7 +247,7 @@ def _readings(db: Session, vehicle_id: uuid.UUID, start: datetime, end: datetime
     cols = (
         VehicleObservation.id, VehicleObservation.fetched_at, VehicleObservation.last_seen_at,
         VehicleObservation.fuel_liters, VehicleObservation.battery_percent,
-        VehicleObservation.avg_fuel_consumption, VehicleObservation.avg_energy_consumption,
+        VehicleObservation.avg_fuel_consumption_auto, VehicleObservation.avg_energy_consumption_auto,
         VehicleObservation.trip_meter_auto_km,
     )
     out: list[Reading] = []
@@ -237,7 +262,7 @@ def _readings(db: Session, vehicle_id: uuid.UUID, start: datetime, end: datetime
     ):
         out.append(Reading(
             id=str(row[0]), fetched_at=row[1], last_seen_at=row[2] or row[1], fuel_liters=row[3],
-            battery_percent=row[4], avg_fuel_consumption=row[5], avg_energy_consumption=row[6],
+            battery_percent=row[4], avg_fuel_consumption_auto=row[5], avg_energy_consumption_auto=row[6],
             trip_meter_auto_km=row[7],
         ))
     return out

@@ -649,16 +649,21 @@ def run_for(
         record.state = MonthCloseState.WAITING
         if notify_waiting:
             _notify_waiting(db, record, status, now)
+    elif status.state == "stale" and record.rows_fingerprint == facts.fingerprint:
+        # Ändringen är ångrad: filen stämmer igen, månaden är klar som förut (ingen ny notis).
+        record.state = MonthCloseState.EXPORTED
+        audit.record(db, audit.Actor("system", "month_close"), "month_close.unchanged", "month_close", record.id,
+                     after={"month": status.month, "reason": "rows_restored"}, user_id=user_id)
+        status.state = "exported"
     elif status.state == "stale":
-        changed = record.rows_fingerprint != facts.fingerprint
         # Ägarens tryck (force) på en ändrad månad skapar den nya filen direkt (F5).
-        direct = force and changed and not real_blockers
+        direct = force and not real_blockers
         if record.state != MonthCloseState.STALE and not direct:
             # Första gången ändringen syns: månaden markeras, nästa kontroll skapar filen.
             record.state = MonthCloseState.STALE
             audit.record(db, audit.Actor("system", "month_close"), "month_close.stale", "month_close", record.id,
                          after={"month": status.month, "reason": "rows_changed"}, user_id=user_id)
-        elif changed and not real_blockers and facts.rows:
+        elif not real_blockers and facts.rows:
             old = db.get(ExportJob, record.export_id) if record.export_id else None
             job = _create_export(db, user_id=user_id, vehicle=vehicle, facts=facts, now=now)
             if old is not None:
@@ -671,7 +676,7 @@ def run_for(
                                            "previous_export_id": str(old.id) if old else None}, user_id=user_id)
             _set_export(status, job, facts)
             _notify_ready(db, record, status, job, now, update=old is not None)
-        elif changed and not real_blockers:
+        elif not real_blockers:
             # Inga tjänsteresor kvar: den gamla filen återkallas (länken ger 410) och
             # månaden blir tom. En återkallad fil pekar på sig själv i superseded_by_id.
             old = db.get(ExportJob, record.export_id) if record.export_id else None

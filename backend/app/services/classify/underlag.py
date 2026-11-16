@@ -50,11 +50,12 @@ _REDACTED = "[borttaget]"
 _COORD_RE = re.compile(r"-?\d{1,3}[.,]\d{4,}")
 _VIN_RE = re.compile(r"\b(?=[A-HJ-NPR-Z0-9]*\d)(?=[A-HJ-NPR-Z0-9]*[A-HJ-NPR-Z])[A-HJ-NPR-Z0-9]{17}\b", re.IGNORECASE)
 _LONG_TOKEN_RE = re.compile(r"\S{32,}")
-_LINK_RE = re.compile(r"(https?://|www\.)\S+", re.IGNORECASE)
+_LINK_RE = re.compile(r"(https?://|www\.)\S+|\b" + calendar_text.MEETING_HOSTS + r"(?:/\S*)?", re.IGNORECASE)
 _EMAIL_RE = re.compile(r"\b[\w.+-]+@[\w-]+(?:\.[\w-]+)+\b")
 # Koder och lösenord i fritext: resten av raden efter nyckelordet tas bort.
 _SECRET_RE = re.compile(
-    r"(?i)\b(\w*kod|lösenord|password|passcode|pin|mötes-?id|meeting\s+id|konferens-?id)\b(\s*[:=]|\s+(?=\d)).*$"
+    r"(?i)\b(\w*kod|lösenord|password|passcode|pin|mötes-?id|meeting\s+id|konferens-?id|conference\s+id|"
+    r"access\s+code)\b(\s*[:=]|\s+(?=\d)).*$"
 )
 
 LIMITS = {
@@ -264,12 +265,12 @@ def _event(
                    "basis": m.geo_basis, "conflicts_with_vehicle_data": bool(m.is_conflict)}
     return {
         **base,
-        "subject": _clean(ev.subject, "subject"),
-        "location": _clean(ev.location_name or ev.location_address, "location"),
+        "subject": _clean(ev.subject, "subject", free_text=True),
+        "location": _clean(ev.location_name or ev.location_address, "location", free_text=True),
         "city": _clean(ev.location_city),
         "body": _clean(body, "body", free_text=True) if body else None,
         "participants": [
-            {"name": _clean(p["name"], "participant"), "relation": p["relation"], "company_domain": p["company_domain"]}
+            {"name": _clean(p["name"], "participant"), "relation": p["relation"], "company_domain": _clean(p["company_domain"])}
             for p in calendar_text.participants(ev.attendees, work_domain=work_domain, self_email=self_email)
         ],
         "marked_private": False,
@@ -343,13 +344,16 @@ def _lunch_doc(db: Session, ctx: sig.TripContext) -> dict[str, Any] | None:
         return None
     office = db.get(KnownLocation, m.office_id)
     place = db.get(KnownLocation, m.place_id)
-    return {
+    doc: dict[str, Any] = {
         "status": m.status,
         "office": _clean(office.name if office else None),
         "place": _clean((place.name or place.address) if place else None),
         "stop_minutes": lunch.stop_text(m),
         "map_type": m.map_hint,
     }
+    if m.at_home:
+        doc["at_home"] = True  # lunch hemma: kan vara privat, ägaren avgör
+    return doc
 
 
 def _owner_style(db: Session, user_id: uuid.UUID, abbreviations: dict[str, str]) -> dict[str, Any]:
@@ -519,6 +523,28 @@ def build_full_document(
              if t and len(t.strip()) >= 3]
     pattern = re.compile("|".join(re.escape(t.strip()) for t in terms), re.IGNORECASE) if terms else None
     return _redact_terms(doc, pattern)
+
+
+def document_domains(doc: dict[str, Any]) -> set[str]:
+    """Första ledet i varje extern e-postdomän i underlaget (``kundbolaget.example`` →
+    ``kundbolaget``): ett ord som bara kan komma därifrån godtas inte i ärendet."""
+    out: set[str] = set()
+
+    def walk(value: Any, key: str | None = None) -> None:
+        if key == "company_domain" and isinstance(value, str) and value:
+            first = value.lower().removeprefix("www.").split(".", 1)[0].replace("-", "")
+            if first:
+                out.add(first)
+            return
+        if isinstance(value, dict):
+            for k, v in value.items():
+                walk(v, k)
+        elif isinstance(value, list):
+            for v in value:
+                walk(v, key)
+
+    walk(doc)
+    return out
 
 
 def document_texts(doc: dict[str, Any]) -> list[str]:

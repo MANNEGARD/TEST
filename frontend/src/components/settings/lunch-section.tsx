@@ -169,6 +169,13 @@ export function LunchSection({ data }: { data: SettingsPayload }) {
                 <Check className="mt-0.5 size-3.5 shrink-0 text-fg-subtle" aria-hidden />
                 <span>Klockslaget ensamt gör aldrig en resa privat – hela mönstret krävs.</span>
               </li>
+              <li className="flex gap-2">
+                <Check className="mt-0.5 size-3.5 shrink-0 text-fg-subtle" aria-hidden />
+                <span data-testid="lunch-home">
+                  Åker du hem och sedan tillbaka till samma kontor enligt mönstret görs resorna inte privata av sig själva. Har du valt att resor mellan hemmet och
+                  kontoren är tjänsteresor godkänns de inte heller automatiskt som tjänst – du får en fråga när du är tillbaka på kontoret.
+                </span>
+              </li>
               {manual ? (
                 <li className="flex gap-2">
                   <UtensilsCrossed className="mt-0.5 size-3.5 shrink-0 text-fg-subtle" aria-hidden />

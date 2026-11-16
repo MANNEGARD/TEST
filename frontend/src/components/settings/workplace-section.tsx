@@ -223,7 +223,7 @@ export function WorkplaceSection({ data }: { data: SettingsPayload }) {
             path="automation.home_office_is_work"
             id="auto-home-office"
             label="Resor mellan hemmet och våra kontor är tjänsteresor och godkänns automatiskt"
-            hint="Gäller alla platser som är markerade som kontor eller ordinarie arbetsplats. Skatteverkets huvudregel är att resor mellan bostaden och det ordinarie tjänstestället är privata – att räkna dem som tjänsteresor är ditt val och ditt ansvar gentemot arbetsgivaren."
+            hint="Gäller alla platser som är markerade som kontor eller ordinarie arbetsplats. Skatteverkets huvudregel är att resor mellan bostaden och det ordinarie tjänstestället är privata – att räkna dem som tjänsteresor är ditt val och ditt ansvar gentemot arbetsgivaren. En kort tur hem och tillbaka till samma kontor i lunchfönstret (se Lunchregeln) godkänns inte automatiskt – då får du en fråga."
           />
           <BoolRow
             form={form}

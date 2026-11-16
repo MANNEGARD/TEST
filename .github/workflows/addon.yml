@@ -715,6 +715,9 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      # "true" bara när den här körningen faktiskt publicerade en ny avbild (VERSION höjd).
+      publicerad: ${{ steps.finns.outputs.finns == 'false' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
@@ -800,6 +803,8 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: write
+    outputs:
+      publicerad: ${{ needs.publicera.outputs.publicerad }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
@@ -849,8 +854,12 @@ jobs:
     # en uppdatering bara när en ny utgåva finns. Körs först när versionen erbjuds i Home
     # Assistant. En misslyckad utgåva stoppar aldrig avbilden, erbjudandet eller uppdateringen
     # på servern, och en befintlig tagg eller utgåva skrivs aldrig över (.github/scripts/utgava.py).
+    # Bara när körningen publicerade en ny avbild: en incheckning utan höjd VERSION får aldrig
+    # skapa en utgåva för den gällande versionen på en commit som inte var dess utgivning.
     needs: erbjud
-    if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    if: >-
+      github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+      && needs.erbjud.outputs.publicerad == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     continue-on-error: true
@@ -868,3 +877,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 .github/scripts/utgava.py --skapa "$RUNNER_TEMP/notes.md"
+
+      - name: Säg till när utgåvan inte kunde skapas
+        # Jobbet får misslyckas utan att körningen blir röd; varningen syns i körningens sammanfattning.
+        if: failure()
+        run: echo "::warning::GitHub-utgåvan kunde inte skapas – HACS erbjuder inte den nya versionen förrän den finns. Kör jobbet utgava igen."
