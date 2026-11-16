@@ -283,7 +283,7 @@ def test_notes(db, user, vehicle, trips):
     est.start_time_quality = raw.start_time_quality = TimeQuality.ESTIMATED
     unknown = work(trips, at=DAY + timedelta(days=1), start_known=False)
     noaddr = work(trips, at=DAY + timedelta(days=2))
-    noaddr.end_address = None
+    noaddr.end_address, noaddr.end_location_id = None, None  # underlagets cell blir tom
     missed = work(trips, at=DAY + timedelta(days=3))
     missed.quality_flags = ["possible_missed_trips"]
     rule = work(trips, at=DAY + timedelta(days=4))

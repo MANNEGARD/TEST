@@ -579,6 +579,7 @@ def test_quality_remarks_only_concern_reported_business_trips(db, user, vehicle,
     api.start_time_quality = raw.start_time_quality = "bounded"
     api.end_time_quality = raw.end_time_quality = "estimated"
     api.end_address = raw.end_address = None
+    api.end_location_id = None  # underlagets cell blir tom
     api.quality_flags = ["possible_missed_trips"]
     db.flush()
     codes = by_code(run(db, vehicle))
