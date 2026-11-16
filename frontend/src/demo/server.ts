@@ -1479,6 +1479,9 @@ on("DELETE", "/vehicles/:id/odometer/:id", ({ m }) => {
   return ok204;
 });
 
+// Bränsle: demobilen har inte tankat under perioden.
+on("POST", "/energy/detect-refuels", () => ({ created: 0, items: [] }));
+
 // Ångra (lärande-feedback)
 on("GET", "/learning/feedback", ({ query }) => feedbackList(query));
 on("POST", "/learning/feedback/:id/undo", ({ m }) => undoFeedback(m[1]));
@@ -1610,6 +1613,49 @@ on("PATCH", "/settings/:id", ({ m, body }) => patchSettings(m[1], body));
 // Integrationer
 on("GET", "/integrations/home-assistant", () => clone(S().ha));
 on("GET", "/integrations/volvo/status", () => clone(S().volvo));
+// Synka och testa: svarar som en frisk anslutning (inga nya resor sedan sist).
+on("POST", "/integrations/volvo/sync", () => {
+  const now = nowIso();
+  S().volvo.last_sync_at = now;
+  persist();
+  return {
+    vehicle_id: S().vehicleId,
+    result: { status: "ok", new_trips: 0, message: "Inga nya resor sedan sist." },
+    last_observation_at: S().volvo.last_observation_at ?? null,
+    at: now,
+  };
+});
+on("POST", "/integrations/home-assistant/test", () => {
+  const ha = S().ha;
+  ha.last_success_at = nowIso();
+  persist();
+  return {
+    ok: true,
+    status: "connected",
+    message: `Anslutningen fungerar. Home Assistant ${ha.ha_version ?? ""} svarar.`.replace("  ", " "),
+    devices: [ha.notify_service].filter(Boolean),
+    ha_version: ha.ha_version ?? null,
+    location_name: ha.location_name ?? null,
+  };
+});
+on("POST", "/integrations/home-assistant/test-notification", () => {
+  const s = S();
+  const now = nowIso();
+  const pid = `test${Date.now().toString(16)}`;
+  s.inbox.unshift({
+    public_id: pid,
+    kind: "test",
+    title: "DriveLog",
+    message: "Testnotis: notiserna fungerar.",
+    sent_at: now,
+    actions: [],
+    ha_payload: { title: "DriveLog", message: "Testnotis: notiserna fungerar.", data: { tag: `drivelog-${pid}`, group: "drivelog" } },
+  });
+  s.ha.last_test_sent_at = now;
+  s.ha.last_test_confirmed_at = now;
+  persist();
+  return { public_id: pid, channel: s.ha.channel ?? "notify", delivered: true, queued: false, demo: false, message: "Testnotisen är skickad till telefonen." };
+});
 
 // Export och månadsskiftet
 on("GET", "/exports", () => clone(S().exports));
