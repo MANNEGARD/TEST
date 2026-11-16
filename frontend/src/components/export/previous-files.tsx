@@ -18,8 +18,27 @@ function jobTitle(job: ExportJob): string {
   return job.summary.period_label ?? job.params.label ?? job.summary.label ?? "Körjournal";
 }
 
+/**
+ * Skapades filen innan perioden var slut ("Skapa underlaget nu")? `params.end` är periodens
+ * exklusiva slut (backend, ISO-tid) eller sista dagen (yyyy-MM-dd, räknas till dagens slut).
+ */
+function createdBeforePeriodEnd(job: ExportJob): boolean {
+  const end = job.params.end;
+  if (!end) return false;
+  const endMs = end.length === 10 ? new Date(`${end}T00:00:00`).getTime() + 86_400_000 : new Date(end).getTime();
+  const created = new Date(job.created_at).getTime();
+  return Number.isFinite(endMs) && Number.isFinite(created) && created < endMs;
+}
+
 function jobMeta(job: ExportJob): string {
-  const parts = [job.origin === "month_close" ? `Automatiskt skapad ${formatDateTime(job.created_at)}` : `Skapad ${formatDateTime(job.created_at)}`];
+  const when = formatDateTime(job.created_at);
+  const created =
+    job.origin !== "month_close"
+      ? `Skapad ${when}`
+      : createdBeforePeriodEnd(job)
+        ? `Skapad i förväg ${when}, innan månaden var slut`
+        : `Automatiskt skapad ${when}`;
+  const parts = [created];
   if (typeof job.summary.trips === "number") parts.push(plural(job.summary.trips, "resa", "resor"));
   if (typeof job.summary.km === "number") parts.push(formatKm(job.summary.km));
   if (job.params.layout === "detailed") parts.push("detaljerad");
