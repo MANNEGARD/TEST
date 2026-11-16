@@ -20,7 +20,7 @@ användare och importerade filer skrivs som ren text (skydd mot formula injectio
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -59,11 +59,11 @@ PRIVATE_STOP = "Privat stopp"
 # bryts på två rader, desto färre sidor blir underlaget. Mätarställningens två kolumner
 # delar därför en gemensam rubrik ("Mätarställning" över "start" och "slut").
 COLUMNS: list[tuple[str, str, float]] = [
-    ("date", "Datum", 10),
+    ("date", "Datum", 12),  # Excel visar ##### när datumet inte får plats
     ("time", "Tid", 14.5),  # rymmer "ca 12:31–12:46" på en rad
-    ("from", "Från", 25.5),
-    ("to", "Till", 26.5),
-    ("purpose", "Ärende", 31),
+    ("from", "Från", 25),
+    ("to", "Till", 26),
+    ("purpose", "Ärende", 30),
     ("odometer_start", "Mätarställning start", 9),
     ("odometer_end", "Mätarställning slut", 9),
     ("km", "Km", 7.5),
@@ -471,8 +471,12 @@ def build_journal(
     employer_name: str = "",
     rate_per_mil: float = 0.0,
     show_amount: bool = True,
+    show_via: bool = True,
 ) -> SimpleJournal:
-    """Väljer ut periodens redovisade tjänsteresor, sorterade på starttid."""
+    """Väljer ut periodens redovisade tjänsteresor, sorterade på starttid.
+
+    ``show_via`` falskt utelämnar mellanstoppen ("via …") under målet (inställningen export.show_via).
+    """
     reported = [t for t in trips if common.is_reported(t)]
     # Stabil sortering: resor utan känd tid (ovanligt) behåller sin plats sist.
     reported.sort(key=lambda t: (_row_time(t) is None, _row_time(t) or datetime.min.replace(tzinfo=tz)))
@@ -484,6 +488,8 @@ def build_journal(
 
     locs = place_text.load_locations(object_session(reported[0]) if reported else None, reported)
     rows = [build_row(t, tz, private_ids if t.source in LIVE_SOURCES else frozenset(), locs) for t in reported]
+    if not show_via:
+        rows = [replace(r, via=()) for r in rows]
     return SimpleJournal(
         vehicle=vehicle,
         tz=tz,
@@ -541,12 +547,17 @@ def wrapped_lines(text: str, width: float) -> int:
     return max(lines, 1)
 
 
+WRAP_MARGIN = 0.88
+
+
 def row_height(row: SimpleRow) -> float:
     lines = max(
         wrapped_lines(row.time, WIDTH["time"]),  # "(+1)" efter en resa över midnatt får en egen rad
-        wrapped_lines(row.from_address, WIDTH["from"]),
-        wrapped_lines(row.to_text, WIDTH["to"]),
-        wrapped_lines(row.purpose, WIDTH["purpose"]),
+        # Excel bryter löpande text något tidigare än uppskattningen; hellre en rad för mycket än
+        # en avklippt adress eller ett avklippt ärende.
+        wrapped_lines(row.from_address, WIDTH["from"] * WRAP_MARGIN),
+        wrapped_lines(row.to_text, WIDTH["to"] * WRAP_MARGIN),
+        wrapped_lines(row.purpose, WIDTH["purpose"] * WRAP_MARGIN),
     )
     return LINE_PT * lines + ROW_PAD_PT
 

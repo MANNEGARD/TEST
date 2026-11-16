@@ -3,6 +3,18 @@
 > Från 1.0.2 visar Home Assistant **Uppdatera** först när den nya versionen är färdigbyggd och
 > går att hämta – det går bra att trycka direkt.
 
+## 1.2.3
+
+Rättningar i Excel-underlaget.
+
+- **Datumet syns i Excel.** Datumkolumnen var för smal, så Excel visade `#####` i stället för
+  datumet.
+- **Hela ärendet och hela adressen syns.** En text som bröts på fler rader i Excel än DriveLog
+  räknade med blev avklippt. Raderna får nu den höjd som behövs.
+- **Mellanstopp (via) går att stänga av.** Under *Inställningar → Milersättning och export*
+  väljer du om underlaget ska visa stoppen på vägen ("via …") under målet eller bara start och
+  mål. Från början är det påslaget, som förut.
+
 ## 1.2.2
 
 - **Inga fler "Motstridiga mätarställningar" av avrundning.** Bilen och Volvos körjournal anger

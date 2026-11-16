@@ -43,7 +43,7 @@ AUTOMATION_MODES = (MODE_SELF_DRIVING, MODE_MANUAL)
 DEFAULT_OFFICE_HOURS: dict[str, Any] = {"days": [0, 1, 2, 3, 4], "start": "07:00", "end": "18:00"}
 
 # Inställningar som bara appen själv sätter (inte via API:t).
-READ_ONLY: frozenset[tuple[str, str]] = frozenset({("automation", "active_since")})
+READ_ONLY: frozenset[tuple[str, str]] = frozenset({("automation", "active_since"), ("system", "last_version")})
 
 # Skatteverkets schablonbelopp för tjänsteresor med egen bil, inkomståren 2025 och 2026.
 DEFAULT_RATE_PER_MIL = 25.0
@@ -91,7 +91,8 @@ DEFAULTS: dict[str, dict[str, Any]] = {
     },
     "notifications": {
         "enabled": True,
-        "kinds": {"classify": True, "purpose": True, "merge": True, "weekly": True, "daily": False},
+        # release: en notis när DriveLog har startat med en ny version (services/release.py).
+        "kinds": {"classify": True, "purpose": True, "merge": True, "weekly": True, "daily": False, "release": True},
         "quiet_start": "21:00",
         "quiet_end": "07:00",
         "max_per_day": 6,
@@ -101,7 +102,7 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "max_reminders": 1,
         "expire_after_hours": 48,
         "snooze_minutes": 120,
-        # Okända platser visas ändå bara som "namn eller gata utan nummer, ort".
+        # Notiserna visar hela adressen för platser utan namn; på = inga platser på låsskärmen.
         "hide_locations_on_lock_screen": False,
         "weekly_day": 6,  # 0 = måndag … 6 = söndag
         "weekly_time": "18:00",
@@ -147,10 +148,16 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "layout": LAYOUT_SIMPLE,  # simple (enkelt underlag) | detailed (fullständig arbetsbok)
         "rate_per_mil": DEFAULT_RATE_PER_MIL,  # milersättning i kronor per mil
         "show_amount": True,  # visa beräknat ersättningsbelopp
+        "show_via": True,  # visa mellanstopp ("via …") under målet i underlaget
     },
     "costs": {
         "fuel_price_per_liter": None,
         "electricity_price_per_kwh": None,
+    },
+    "system": {
+        # Versionen som DriveLog senast startade med för användaren (services/release.py).
+        # Sätts bara av appen; tom = ny användare eller installation (ingen notis).
+        "last_version": "",
     },
     "abbreviations": {
         # Egna förkortningar som förekommer i kommentarer → fullständig ort/plats.
@@ -489,3 +496,8 @@ def reimbursement_settings(db: Session, user_id: uuid.UUID) -> tuple[float, bool
     if isinstance(rate, bool) or not isinstance(rate, (int, float)) or not (0 <= rate <= 1000):
         rate = DEFAULT_RATE_PER_MIL
     return float(rate), bool(export.get("show_amount", True))
+
+
+def export_show_via(db: Session, user_id: uuid.UUID) -> bool:
+    """Ska underlaget visa mellanstoppen ("via …") under målet?"""
+    return bool(get_section(db, user_id, "export").get("show_via", True))

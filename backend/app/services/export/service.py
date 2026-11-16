@@ -112,6 +112,7 @@ def build_simple_journal(
         employer_name=general.get("employer_name") or "",
         rate_per_mil=rate,
         show_amount=show_amount,
+        show_via=settings_svc.export_show_via(db, user_id),
     )
     return journal, trips
 

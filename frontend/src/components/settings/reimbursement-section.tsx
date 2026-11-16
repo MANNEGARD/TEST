@@ -13,6 +13,7 @@ import { useSectionSave, useSettingsForm, type FieldSpecs } from "./use-settings
 const FIELDS: FieldSpecs = {
   "export.rate_per_mil": { type: "number", name: "Ersättningen per mil", min: 0, max: 1000 },
   "export.show_amount": { type: "bool" },
+  "export.show_via": { type: "bool" },
   "export.layout": { type: "choice", options: ["simple", "detailed"] },
   "general.journal_scope": { type: "choice", options: ["business_only", "complete"] },
   "export.include_private_addresses": { type: "bool" },
@@ -57,6 +58,15 @@ export function ReimbursementSection({ data }: { data: SettingsPayload }) {
           label="Visa belopp i kronor"
           hint="Räknar ut ersättningen (mil × ersättning per mil) på översikten och i exporten. Stäng av om du bara vill redovisa antal mil."
         />
+        {form.has("export.show_via") ? (
+          <BoolRow
+            form={form}
+            path="export.show_via"
+            id="exp-via"
+            label="Visa mellanstopp (via) i underlaget"
+            hint="En resa som slagits samman av flera delsträckor visar stoppen på vägen som ”via …” under målet. Stäng av om underlaget bara ska visa start och mål."
+          />
+        ) : null}
         {form.has("export.layout") ? (
           <ChoiceCards
             legend="Exportens utseende"
