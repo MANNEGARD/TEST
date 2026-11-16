@@ -3,7 +3,7 @@
 
 import type { Site } from "./sites.ts";
 
-const ASSET_VERSION = "1";
+const ASSET_VERSION = "4";
 
 function esc(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
@@ -31,14 +31,6 @@ ${body}
 </body>
 </html>`;
 }
-
-const ICONS: Record<Site["icon"], string> = {
-  car: '<path d="M5 17h14M6.5 17v2M17.5 17v2M4 13l1.6-4.6A2 2 0 0 1 7.5 7h9a2 2 0 0 1 1.9 1.4L20 13M4 13h16v4H4z"/><circle cx="7.5" cy="15" r=".6"/><circle cx="16.5" cy="15" r=".6"/>',
-  home: '<path d="M4 11l8-6 8 6M6 9.5V19h12V9.5M10 19v-5h4v5"/>',
-  chip: '<rect x="7" y="7" width="10" height="10" rx="1.5"/><path d="M10 3v4M14 3v4M10 17v4M14 17v4M3 10h4M3 14h4M17 10h4M17 14h4"/>',
-  code: '<path d="M8.5 8L4.5 12l4 4M15.5 8l4 4-4 4M13.5 5.5l-3 13"/>',
-  eye: '<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/>',
-};
 
 const LOCK =
   '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>';
@@ -68,6 +60,11 @@ export function loginPage(): string {
         <span>Engångskod <small>från din autentiseringsapp</small></span>
         <input id="code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code"
                maxlength="7" required placeholder="000 000" spellcheck="false">
+      </label>
+      <label class="check">
+        <input id="remember" name="remember" type="checkbox">
+        <span class="check-box" aria-hidden="true"></span>
+        <span>Håll mig inloggad <small>på den här enheten</small></span>
       </label>
       <p id="login-error" class="alert" role="alert" aria-live="assertive" hidden></p>
       <button id="login-submit" class="btn" type="submit">
@@ -144,13 +141,13 @@ export function setupPage(): string {
   );
 }
 
-export function portalPage(sites: Site[], expiresAt: number): string {
+export function portalPage(sites: Site[], expiresAt: number, remember = false): string {
   const cards = sites
     .map((s) => {
       const host = new URL(s.url).host;
       return `<li>
       <a class="site" href="${esc(s.url)}" rel="noopener noreferrer" data-site="${esc(s.id)}">
-        <span class="site-icon"><svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[s.icon]}</svg></span>
+        <span class="site-icon"><img src="${esc(s.logo)}" alt="" width="56" height="56" decoding="async"></span>
         <span class="site-text">
           <span class="site-name">${esc(s.name)}</span>
           <span class="site-desc">${esc(s.description)}</span>
@@ -167,7 +164,7 @@ export function portalPage(sites: Site[], expiresAt: number): string {
     "SMGD · Portal",
     "page-portal",
     `<header class="topbar">
-  <img class="logo-small" src="/smgd-logo.svg" alt="SMGD" width="180" height="60">
+  <img class="wordmark" src="/smgd-wordmark.svg" alt="SMGD" width="331" height="43">
   <button id="logout" class="btn btn-ghost" type="button">Logga ut</button>
 </header>
 <main class="portal">
@@ -178,7 +175,7 @@ export function portalPage(sites: Site[], expiresAt: number): string {
   <ul class="sites">
 ${cards}
   </ul>
-  <p class="footnote" id="session-info" data-expires="${expiresAt}">Sessionen är aktiv.</p>
+  <p class="footnote" id="session-info" data-expires="${expiresAt}" data-remember="${remember ? "1" : "0"}">${remember ? "Du förblir inloggad på den här enheten" : "Sessionen är aktiv."}</p>
 </main>`,
     "portal.js",
   );

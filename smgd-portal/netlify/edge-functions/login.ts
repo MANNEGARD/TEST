@@ -62,10 +62,12 @@ export default async (request: Request, context: Context) => {
 
   let password = "";
   let code = "";
+  let remember = false;
   try {
     const body = JSON.parse(raw);
     password = typeof body.password === "string" ? body.password : "";
     code = typeof body.code === "string" ? body.code.replace(/\s/g, "") : "";
+    remember = body.remember === true;
   } catch {
     return json({ error: "Ogiltig begäran." }, 400);
   }
@@ -86,9 +88,9 @@ export default async (request: Request, context: Context) => {
 
   await clearFailures(context.ip);
 
-  const { token, session } = await createSessionToken(cfg.sessionSecret, cfg.sessionVersion);
-  console.log(`Lyckad inloggning från ${context.ip}`);
-  return json({ ok: true, expiresAt: session.exp }, 200, { "Set-Cookie": sessionCookie(token) });
+  const { token, session } = await createSessionToken(cfg.sessionSecret, cfg.sessionVersion, remember);
+  console.log(`Lyckad inloggning från ${context.ip}${remember ? " (håll mig inloggad)" : ""}`);
+  return json({ ok: true, expiresAt: session.exp }, 200, { "Set-Cookie": sessionCookie(token, session) });
 };
 
 export const config: Config = {

@@ -15,7 +15,9 @@
   // När sessionen går ut
   const info = document.getElementById("session-info");
   const expires = Number(info.dataset.expires) * 1000;
-  if (expires) {
+  if (info.dataset.remember === "1") {
+    // Inloggningen förnyas av servern vid varje besök – ingen utloggningstimer.
+  } else if (expires) {
     const time = new Date(expires).toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" });
     info.textContent = "Inloggad till kl. " + time;
     const ms = expires - Date.now();

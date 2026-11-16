@@ -1,12 +1,12 @@
 // Subdomänerna som visas i portalen efter inloggning. Lägg till, ta bort eller ändra här.
-// `icon` är namnet på en ikon i pages.ts.
+// `logo` är en bild i public/logos/. Kortets accentfärg sätts i portal.css (.site[data-site="…"]).
 
 export interface Site {
   id: string;
   name: string;
   url: string;
   description: string;
-  icon: "code" | "car" | "home" | "eye" | "chip";
+  logo: string;
 }
 
 export const SITES: Site[] = [
@@ -15,27 +15,27 @@ export const SITES: Site[] = [
     name: "DriveLog",
     url: "https://drivelog.smgd.se",
     description: "Körjournal och milersättning",
-    icon: "car",
+    logo: "/logos/drivelog.svg",
   },
   {
     id: "ha",
     name: "Home Assistant",
     url: "https://ha.smgd.se",
     description: "Hemautomation",
-    icon: "home",
+    logo: "/logos/ha.png",
   },
   {
     id: "vci",
     name: "VCI Config",
     url: "https://vci.smgd.se",
     description: "Konfiguration av VCI",
-    icon: "chip",
+    logo: "/logos/vci.svg",
   },
   {
     id: "dev",
     name: "Developer Lab",
     url: "https://dev.smgd.se",
     description: "Utveckling och experiment",
-    icon: "code",
+    logo: "/logos/dev.svg",
   },
 ];

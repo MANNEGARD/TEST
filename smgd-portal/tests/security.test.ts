@@ -101,3 +101,15 @@ test("konfiguration: saknade hemligheter ger null (stängt läge)", () => {
   env.set("PORTAL_SESSION_SECRET", SECRET);
   assert.notEqual(readAuthConfig(), null);
 });
+
+test("håll mig inloggad: 400 dagar och beständig kaka, annars sessionskaka", async () => {
+  const { sessionCookie } = await import("../netlify/edge-functions/lib/security.ts");
+  const kort = await createSessionToken(SECRET, "1");
+  const lang = await createSessionToken(SECRET, "1", true);
+  assert.equal(kort.session.exp - kort.session.iat, 12 * 3600);
+  assert.equal(lang.session.exp - lang.session.iat, 400 * 24 * 3600);
+  assert.doesNotMatch(sessionCookie(kort.token, kort.session), /Max-Age/);
+  assert.match(sessionCookie(lang.token, lang.session), /Max-Age=34560000/);
+  assert.match(sessionCookie(lang.token, lang.session), /HttpOnly; Secure; SameSite=Lax/);
+  assert.notEqual(await readSessionToken(lang.token, SECRET, "1"), null);
+});

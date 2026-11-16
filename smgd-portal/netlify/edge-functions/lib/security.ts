@@ -4,7 +4,11 @@
 const enc = new TextEncoder();
 
 export const SESSION_COOKIE = "__Host-smgd_session";
-export const SESSION_TTL_SECONDS = 12 * 60 * 60; // 12 timmar, därefter krävs ny inloggning
+export const SESSION_TTL_SECONDS = 12 * 60 * 60; // vanlig inloggning: 12 timmar
+// "Håll mig inloggad": 400 dagar (webbläsarnas tak för kakor) och förnyas vid varje besök,
+// så i praktiken loggas man aldrig ut så länge sidan används minst en gång per år.
+export const REMEMBER_TTL_SECONDS = 400 * 24 * 60 * 60;
+export const REMEMBER_RENEW_AFTER_SECONDS = 24 * 60 * 60; // förnya högst en gång per dygn
 
 // ---------- Hjälpfunktioner ----------
 
@@ -157,15 +161,21 @@ export interface Session {
   exp: number; // går ut (unix-sekunder)
   ver: string; // sessionsversion – byt PORTAL_SESSION_VERSION för att logga ut alla
   jti: string; // slumpat id
+  rem?: boolean; // "Håll mig inloggad"
 }
 
-export async function createSessionToken(secret: string, version: string): Promise<{ token: string; session: Session }> {
+export async function createSessionToken(
+  secret: string,
+  version: string,
+  remember = false,
+): Promise<{ token: string; session: Session }> {
   const now = Math.floor(Date.now() / 1000);
   const session: Session = {
     iat: now,
-    exp: now + SESSION_TTL_SECONDS,
+    exp: now + (remember ? REMEMBER_TTL_SECONDS : SESSION_TTL_SECONDS),
     ver: version,
     jti: b64urlEncode(crypto.getRandomValues(new Uint8Array(12))),
+    ...(remember ? { rem: true } : {}),
   };
   const payload = b64urlEncode(enc.encode(JSON.stringify(session)));
   const sig = b64urlEncode(await hmac("SHA-256", b64Decode(secret), enc.encode(`v1.${payload}`)));
@@ -213,8 +223,13 @@ export function readAuthConfig(): AuthConfig | null {
   return { passwordHash, totpSecret, sessionSecret, sessionVersion };
 }
 
-export function sessionCookie(token: string): string {
-  return `${SESSION_COOKIE}=${token}; Path=/; Max-Age=${SESSION_TTL_SECONDS}; HttpOnly; Secure; SameSite=Lax`;
+/**
+ * Utan "Håll mig inloggad" blir kakan en sessionskaka (försvinner när webbläsaren stängs),
+ * och token går ändå ut efter 12 h. Med valet sparas kakan i 400 dagar och förnyas löpande.
+ */
+export function sessionCookie(token: string, session: Session): string {
+  const maxAge = session.rem ? `; Max-Age=${session.exp - Math.floor(Date.now() / 1000)}` : "";
+  return `${SESSION_COOKIE}=${token}; Path=/${maxAge}; HttpOnly; Secure; SameSite=Lax`;
 }
 
 export function clearSessionCookie(): string {

@@ -5,6 +5,9 @@ import type { Config, Context } from "@netlify/edge-functions";
 import { loginPage, portalPage } from "./lib/pages.ts";
 import {
   clearSessionCookie,
+  createSessionToken,
+  REMEMBER_RENEW_AFTER_SECONDS,
+  sessionCookie,
   isSameOrigin,
   json,
   readSessionToken,
@@ -50,7 +53,16 @@ export default async (request: Request, context: Context) => {
     return new Response("Metoden stöds inte.", { status: 405, headers: securityHeaders({ Allow: "GET, HEAD" }) });
   }
 
-  if (session) return html(portalPage(SITES, session.exp));
+  if (session && cfg) {
+    // "Håll mig inloggad": skjut fram utgångstiden vid besök, så att inloggningen aldrig tar slut.
+    if (session.rem && Date.now() / 1000 - session.iat > REMEMBER_RENEW_AFTER_SECONDS) {
+      const renewed = await createSessionToken(cfg.sessionSecret, cfg.sessionVersion, true);
+      const res = html(portalPage(SITES, renewed.session.exp, true));
+      res.headers.append("Set-Cookie", sessionCookie(renewed.token, renewed.session));
+      return res;
+    }
+    return html(portalPage(SITES, session.exp, session.rem === true));
+  }
 
   // Ogiltig eller utgången kaka: rensa den och visa inloggningen.
   const res = html(loginPage());

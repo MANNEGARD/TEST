@@ -102,7 +102,7 @@ export default async (request: Request, context: Context) => {
 
     console.log(`Inloggningen installerades från ${context.ip}`);
     const { token, session } = await createSessionToken(sessionSecret, Netlify.env.get("PORTAL_SESSION_VERSION") ?? "1");
-    return json({ ok: true, expiresAt: session.exp }, 200, { "Set-Cookie": sessionCookie(token) });
+    return json({ ok: true, expiresAt: session.exp }, 200, { "Set-Cookie": sessionCookie(token, session) });
   }
 
   return notFound();

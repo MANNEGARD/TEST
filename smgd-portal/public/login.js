@@ -4,6 +4,21 @@
   const form = document.getElementById("login-form");
   const password = document.getElementById("password");
   const code = document.getElementById("code");
+  const remember = document.getElementById("remember");
+
+  // Kom ihåg valet av kryssrutan (bara valet – inget annat sparas i webbläsaren).
+  try {
+    remember.checked = localStorage.getItem("smgd-remember") === "1";
+  } catch (_) {
+    /* privat läge */
+  }
+  remember.addEventListener("change", function () {
+    try {
+      localStorage.setItem("smgd-remember", remember.checked ? "1" : "0");
+    } catch (_) {
+      /* privat läge */
+    }
+  });
   const error = document.getElementById("login-error");
   const submit = document.getElementById("login-submit");
   const card = form.closest(".card");
@@ -52,7 +67,7 @@
         headers: { "Content-Type": "application/json" },
         credentials: "same-origin",
         cache: "no-store",
-        body: JSON.stringify({ password: password.value, code: digits }),
+        body: JSON.stringify({ password: password.value, code: digits, remember: remember.checked }),
       });
 
       if (res.ok) {
