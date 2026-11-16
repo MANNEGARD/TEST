@@ -24,7 +24,7 @@
  */
 import { createRequire } from "node:module";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -60,6 +60,8 @@ const EXPECTED = [
   { status: 400, url: /\/api\/v1\/integrations\/microsoft\/ics$/ },
   // Granskning: "Godkänn förslag" på ett förslag som hunnit ändras avvisas (avsnittet Granskning).
   { status: 409, url: /\/api\/v1\/trips\/[^/]+\/approve$/ },
+  // Företagsloggan: en fil som inte är en bild avvisas med klartextfel (avsnittet Notiser och logga).
+  { status: 400, url: /\/api\/v1\/settings\/logo$/ },
 ];
 /** Kartbildsanrop som testet besvarat lokalt: { url, referer }. */
 const tileRequests = [];
@@ -848,6 +850,48 @@ print(json.dumps({"sheets": wb.sheetnames, "rows": rows, "km": round(km, 2), "to
       if (!(await page.locator("#auto-home-office").count())) fail("tjänsteställe", "valet hem ↔ kontor saknas");
     });
 
+    await section("version", async () => {
+      step("Versionen: längst ned i sidomenyn och under Inställningar → Om DriveLog (GET /about)");
+      const about = await api(page, "GET", "/about");
+      if (!about.version) fail("version", "GET /about saknar version");
+      await page.goto(`${BASE}/journal`);
+      const link = page.getByTestId("version-link").locator("visible=true").first();
+      await link.waitFor({ timeout: 15000 });
+      if ((await link.innerText()).trim() !== `DriveLog ${about.version}`) fail("version", `sidomenyn visar "${await link.innerText()}"`);
+      await page.goto(`${BASE}/settings?sektion=om`);
+      await page.getByTestId("about-card").waitFor({ timeout: 15000 });
+      if ((await page.getByTestId("about-version").innerText()).trim() !== about.version) fail("version", "Om DriveLog visar en annan version");
+      const items = about.whats_new?.items ?? [];
+      if (items.length && (await page.getByTestId("about-whats-new").locator("li").count()) !== items.length) fail("version", "nyheterna visas inte");
+      await shot(page, "about-light");
+    });
+
+    await section("notiser och logga", async () => {
+      step("Inställningar → Notiser: notisen om ny version; Milersättning och export: företagsloggan");
+      await page.goto(`${BASE}/settings?sektion=notiser`);
+      await page.locator("#ntf-release").waitFor({ timeout: 15000 });
+      if ((await page.locator("#ntf-release").getAttribute("aria-checked")) !== "true") fail("notiser", "notisen om ny version är inte påslagen som standard");
+      // Ingen Home Assistant ansluten i testet: texten om vad som krävs ska synas.
+      await page
+        .getByTestId("ntf-release-no-ha")
+        .waitFor({ timeout: 15000 })
+        .catch(() => fail("notiser", "texten om Home Assistant-integrationen saknas"));
+      await page.goto(`${BASE}/settings?sektion=ersattning`);
+      const card = page.getByTestId("export-logo");
+      await card.getByTestId("export-logo-upload").waitFor({ timeout: 15000 });
+      const input = page.getByTestId("export-logo-input");
+      await input.setInputFiles({ name: "logga.png", mimeType: "image/png", buffer: Buffer.from("<html>inte en bild</html>") });
+      await card.getByTestId("export-logo-error").waitFor({ timeout: 15000 });
+      await input.setInputFiles({ name: "logga.png", mimeType: "image/png", buffer: PNG });
+      await card.getByTestId("export-logo-preview").waitFor({ timeout: 15000 });
+      if (!(await card.getByTestId("export-logo-preview").evaluate((img) => img.complete && img.naturalWidth > 0))) fail("logga", "loggan visas inte");
+      await card.getByRole("button", { name: "Ta bort företagsloggan" }).click();
+      await card.getByRole("button", { name: "Ja, ta bort loggan" }).click();
+      await card.getByTestId("export-logo-upload").waitFor({ timeout: 15000 });
+      const logo = (await api(page, "GET", "/settings")).settings.export.logo;
+      if (logo && Object.keys(logo).length) fail("logga", "loggan finns kvar i inställningarna efter Ta bort");
+    });
+
     await section("AI-genomgång", async () => {
       step("AI-genomgång: planen och en resa i taget (utan leverantör körs bara reglerna)");
       const vehicles = await api(page, "GET", "/vehicles");
@@ -1096,6 +1140,26 @@ print(json.dumps({"sheets": wb.sheetnames, "rows": rows, "km": round(km, 2), "to
         const trip = list.items.find((t) => t.ended_at);
         if (!trip) fail("karta", "ingen demoresa med position att visa på kartan");
         else await checkTileReferer(page, "karta", trip.id);
+      });
+      await section("felsökningsfil", async () => {
+        step("Integrationer → Volvo: Ladda ner felsökningsfil (utan VIN, regnr, positioner och adresser)");
+        await page.goto(`${BASE}/integrations`);
+        await page.getByTestId("configure-volvo").click();
+        const btn = sheet.getByTestId("volvo-diagnostics");
+        await btn.waitFor({ timeout: 15000 });
+        const download = page.waitForEvent("download", { timeout: 30000 });
+        download.catch(() => {});
+        await btn.click();
+        const dl = await download;
+        if (await dl.failure()) fail("felsökningsfil", `nedladdningen misslyckades: ${await dl.failure()}`);
+        if (!/^drivelog-felsokning-\d{4}-\d{2}-\d{2}\.json$/.test(dl.suggestedFilename())) fail("felsökningsfil", `filnamnet blev ${dl.suggestedFilename()}`);
+        const text = readFileSync(await dl.path(), "utf8");
+        const file = JSON.parse(text);
+        for (const key of ["generated_at", "app_version", "days", "observations", "sync_runs", "trips"]) if (!(key in file)) fail("felsökningsfil", `nyckeln ${key} saknas`);
+        if (/"(latitude|longitude|heading|vin|registration_number|address)"/i.test(text)) fail("felsökningsfil", "filen innehåller positioner, VIN, regnr eller adresser");
+        await expectText(page, "Felsökningsfilen är nedladdad.", "felsökningsfil");
+        await page.keyboard.press("Escape");
+        await sheet.waitFor({ state: "hidden" });
       });
       await page.goto(`${BASE}/integrations`);
       await page.getByTestId("card-volvo").waitFor({ timeout: 15000 });

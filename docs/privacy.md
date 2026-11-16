@@ -11,6 +11,8 @@ owner is the one responsible for the data in their installation.
   reported position.
 * The trip journal built from that data: trips, places, purposes and exports.
 * The owner's login (e-mail address and a hashed password) and the settings they choose.
+* Only if the owner uploads one: a company logo (PNG or JPEG) that is placed in the exported
+  trip journal.
 * Only if the owner connects a calendar: entries from their own calendar, used to suggest the
   purpose of a trip. For each entry: subject, time, location, free/busy status and whether it
   is marked private. From version 1.3.0 the whole entry is read by default – the description
@@ -65,6 +67,19 @@ Nothing is sold, and nothing is used for advertising or profiling.
     links are replaced. The provider processes the data under its own terms; DriveLog keeps
     nothing at the provider.
 * Notifications are sent to the owner's own Home Assistant when the owner has connected it.
+  From version 1.3.0 the questions about new trips show the full street address with house
+  number (postcode removed) for places without a confirmed name, and the owner's home with its
+  address; private places are shown with their name or address. The texts pass through the
+  owner's Home Assistant to the owner's phone. The owner can hide all places on the lock screen
+  ("Dölj platser på låsskärmen"). Alerts, month notices and the notice about a new version
+  never contain places. A notice that DriveLog has been updated contains only the version
+  numbers and the main news from the change log.
+* A diagnostics file ("felsökningsfil") with the vehicle's recent readings, fetch results and
+  trips is created only when the owner downloads it, and leaves the server only if the owner
+  sends it on. It contains no VIN, registration number, positions, addresses, place names,
+  raw Volvo data, error texts or secrets.
+* Fuel and energy use per trip is calculated on the server from the vehicle's own readings;
+  nothing extra is fetched or sent for it.
 
 ## Retention and deletion
 

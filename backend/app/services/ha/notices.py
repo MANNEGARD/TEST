@@ -1,8 +1,8 @@
-"""Notiser som inte är frågor: antagande, månadsskiftet och larm (byggkontraktet C.4).
+"""Notiser som inte är frågor: antagande, månadsskiftet, larm och ny version.
 
 Ingen av dem räknas som en fråga i leveranspolicyn (högst en fråga åt gången), men tysta
-timmar gäller. Texterna innehåller aldrig gatuadresser. Larm och månadsnotiser innehåller
-aldrig platser, VIN eller belopp per resa.
+timmar gäller. Texterna innehåller inga gatuadresser (antagandet visar bara ärendet). Larm,
+månadsnotiser och notisen om en ny version innehåller aldrig platser, VIN eller belopp per resa.
 """
 
 from __future__ import annotations

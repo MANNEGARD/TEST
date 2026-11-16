@@ -28,6 +28,7 @@ import app.models  # noqa: F401 - säkerställer komplett metadata
 from app import __version__
 from app.config import get_config
 from app.db import SQLITE_BUSY_TIMEOUT_SECONDS, Base, UTCDateTime, sqlite_file_path
+from app.services.export import logo
 
 FORMAT_VERSION = 1
 _NAME = re.compile(r"^drivelog-backup-\d{8}T\d{6}Z(-[a-z0-9]{6})?\.zip$")
@@ -82,6 +83,13 @@ def create_backup(db: Session, *, include_files: bool = True) -> Path:
             for f in sorted(cfg.uploads_dir.iterdir()):
                 if f.is_file():
                     zf.write(f, f"files/imports/{f.name}")
+                    files += 1
+        branding = cfg.data_dir / logo.DIR_NAME
+        if include_files and branding.exists():
+            # Företagsloggan (1.3.0) följer med i kopian.
+            for f in sorted(branding.iterdir()):
+                if f.is_file() and logo.FILE_RE.fullmatch(f.name):
+                    zf.write(f, f"files/branding/{f.name}")
                     files += 1
         zf.writestr(
             "manifest.json",
@@ -180,6 +188,14 @@ def restore_backup(db: Session, path: Path, *, force: bool = False) -> dict[str,
                 name = Path(member).name
                 if re.fullmatch(r"[0-9a-f]{64}\.(xlsx|csv|txt|bin)", name):  # endast förväntade filnamn
                     target = cfg.uploads_dir / name
+                    target.write_bytes(zf.read(member))
+                    target.chmod(0o600)
+            elif member.startswith("files/branding/") and not member.endswith("/"):
+                name = Path(member).name
+                if logo.FILE_RE.fullmatch(name):  # endast förväntade filnamn
+                    folder = cfg.data_dir / logo.DIR_NAME
+                    folder.mkdir(parents=True, exist_ok=True)
+                    target = folder / name
                     target.write_bytes(zf.read(member))
                     target.chmod(0o600)
     db.flush()

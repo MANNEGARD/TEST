@@ -902,7 +902,7 @@ function applyV130Drift(s: DemoState): void {
   set.notifications = { ...set.notifications, kinds: { release: true, ...(set.notifications?.kinds ?? {}) } };
   def.notifications = { ...def.notifications, kinds: { ...(def.notifications?.kinds ?? {}), release: true } };
   set.export = { show_logo: true, ...set.export };
-  def.export = { ...def.export, show_logo: true };
+  def.export = { ...def.export, show_logo: true, logo: {} };
 
   // Ungefär 0,65 l/10 km – bara på resor från bilen som saknar värde (som consumption.py).
   const fromCar = Object.values(s.trips)
@@ -932,7 +932,10 @@ function settingsOut(): Json {
   const s = S();
   const office = (l: Json) => l.confirmed && !l.merged_into_id && (l.type === "regular_workplace" || l.type === "office");
   const ready = s.locations.some(office) || (s.workplaces ?? []).some((w: Json) => w.kind === "location" && w.location_id);
-  return { ...clone(s.settings), status: { lunch_office_ready: ready } };
+  const out = clone(s.settings);
+  // Loggan finns bara i minnet (sparas aldrig i webbläsarens lagring).
+  out.settings.export = { ...out.settings.export, logo: logoMetaOut() };
+  return { ...out, status: { lunch_office_ready: ready } };
 }
 
 /** Resor som AI-genomgången får bedöma (byggkontraktet 6.D, tilläggets 3.I). */
@@ -2136,37 +2139,56 @@ function diagnosticsFile(days: number): Json {
   };
 }
 
-let demoLogo: Json | null = null;
+let demoLogo: { meta: Json; blob: Blob; src: string } | null = null;
 
+/** Som LogoOut i routes/logo.py. */
 function logoOut(): Json {
-  return demoLogo ? clone(demoLogo) : { has_logo: false, content_type: null, width: null, height: null, size_bytes: null, uploaded_at: null, url: null };
+  const m = demoLogo?.meta;
+  return {
+    has_logo: !!m,
+    content_type: m?.content_type ?? null,
+    width: m?.width ?? null,
+    height: m?.height ?? null,
+    size_bytes: m?.size_bytes ?? null,
+    uploaded_at: m?.uploaded_at ?? null,
+    show_in_export: S().settings.settings.export?.show_logo !== false,
+  };
+}
+
+/** Loggans uppgifter som GET /settings visar dem under export.logo (demo_src bara i demot). */
+function logoMetaOut(): Json {
+  return demoLogo ? { ...clone(demoLogo.meta), demo_src: demoLogo.src } : {};
 }
 
 /** Som servern: bara PNG eller JPEG, kontrollerat på filens innehåll, högst 1 MB. */
 async function uploadLogo(raw: BodyInit | null | undefined): Promise<Json> {
   const file = raw instanceof FormData ? raw.get("file") : null;
-  if (!(file instanceof Blob)) throw new HttpError(400, "Välj en bild att ladda upp.", "no_file");
-  if (file.size > 1024 * 1024) throw new HttpError(413, "Bilden är för stor. Välj en bild på högst 1 MB.", "logo_too_large");
+  if (!(file instanceof Blob)) throw new HttpError(400, "Välj en bild att ladda upp.", "invalid_logo");
+  if (file.size > 1024 * 1024) throw new HttpError(400, "Loggan får vara högst 1 MB.", "invalid_logo");
   const head = new Uint8Array(await file.slice(0, 8).arrayBuffer());
   const png = head[0] === 0x89 && head[1] === 0x50 && head[2] === 0x4e && head[3] === 0x47;
   const jpeg = head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff;
-  if (!png && !jpeg) throw new HttpError(400, "Filen är inte en PNG- eller JPEG-bild.", "logo_invalid");
+  if (!png && !jpeg) throw new HttpError(400, "Loggan måste vara en PNG- eller JPEG-bild.", "invalid_logo");
   const type = png ? "image/png" : "image/jpeg";
-  let width: number | null = null;
-  let height: number | null = null;
+  let width: number;
+  let height: number;
   try {
     const bmp = await createImageBitmap(file);
     width = bmp.width;
     height = bmp.height;
     bmp.close();
   } catch {
-    throw new HttpError(400, "Bilden gick inte att läsa. Spara om den som PNG eller JPEG och försök igen.", "logo_invalid");
+    throw new HttpError(400, "Bilden gick inte att läsa. Spara om den som PNG eller JPEG och försök igen.", "invalid_logo");
   }
   const bytes = new Uint8Array(await file.arrayBuffer());
   let bin = "";
   for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-  demoLogo = { has_logo: true, content_type: type, width, height, size_bytes: file.size, uploaded_at: nowIso(), url: `data:${type};base64,${btoa(bin)}` };
-  return clone(demoLogo);
+  demoLogo = {
+    meta: { content_type: type, width, height, size_bytes: file.size, uploaded_at: nowIso() },
+    blob: new Blob([bytes], { type }),
+    src: `data:${type};base64,${btoa(bin)}`,
+  };
+  return logoOut();
 }
 
 // ----------------------------------------------------------------------------- router
@@ -2480,15 +2502,17 @@ const diagnostics = ({ query }: Ctx) => {
   });
 };
 on("GET", "/volvo/diagnostics", diagnostics);
-on("GET", "/integrations/volvo/diagnostics", diagnostics);
 
-// Företagsloggan i underlaget (1.3.0): demot visar funktionen men sparar ingenting – loggan
-// finns bara i minnet tills sidan laddas om.
-on("GET", "/settings/export-logo", () => logoOut());
-on("POST", "/settings/export-logo", ({ raw }) => uploadLogo(raw));
-on("DELETE", "/settings/export-logo", () => {
+// Företagsloggan i underlaget (1.3.0, routes/logo.py): demot visar funktionen men sparar ingenting –
+// loggan finns bara i minnet tills sidan laddas om.
+on("GET", "/settings/logo", () => {
+  if (!demoLogo) throw notFound("Loggan");
+  return new Response(demoLogo.blob, { status: 200, headers: { "content-type": demoLogo.meta.content_type } });
+});
+on("POST", "/settings/logo", ({ raw }) => uploadLogo(raw));
+on("DELETE", "/settings/logo", () => {
   demoLogo = null;
-  return ok204;
+  return logoOut();
 });
 
 // Export och månadsskiftet

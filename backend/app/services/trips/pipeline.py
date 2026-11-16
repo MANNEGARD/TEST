@@ -185,6 +185,10 @@ def after_trips_changed(
     # Resor från bilen med okänd starttid får en uppskattning ur sträckan före allt annat,
     # så att flaggor, klassning och frågor ser den (start_time.fill_from_distance).
     out["start_estimated"] = start_time.fill_from_distance(db, vehicle.id)
+    # Förbrukningen för nya resor från bilen ur bilens egna avläsningar (1.3.0, märkt uppskattad).
+    from app.services.volvo import consumption
+
+    out["consumption_estimated"] = consumption.fill_vehicle(db, vehicle.id)
 
     by_category = merge.uses_category_rules(merge_cfg)
     merge_result: dict[str, Any] = {"auto_merged": 0, "questions": []}

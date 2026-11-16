@@ -6,12 +6,10 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ConfirmInline } from "@/components/ui/confirm-inline";
-import { ErrorState } from "@/components/ui/error-state";
-import { Skeleton } from "@/components/ui/skeleton";
 import { errorMessage } from "@/lib/api";
 import { formatDate, formatNumber } from "@/lib/format";
-import { useExportLogo, useRemoveExportLogo, useUploadExportLogo } from "@/lib/queries/export-logo";
-import { EXPORT_LOGO_MAX_BYTES, type ExportLogo, type SettingsPayload } from "@/lib/settings-page-types";
+import { logoImageSrc, logoMeta, useRemoveExportLogo, useUploadExportLogo } from "@/lib/queries/export-logo";
+import { EXPORT_LOGO_MAX_BYTES, type ExportLogoMeta, type SettingsPayload } from "@/lib/settings-page-types";
 import { useReportDirty } from "./dirty-context";
 import { Advanced, BoolRow, ChoiceCards, FormCard, NumberRow, SectionIntro, SettingsSaveBar } from "./form-parts";
 import { useSectionSave, useSettingsForm, type FieldSpecs } from "./use-settings-form";
@@ -152,7 +150,7 @@ export function ReimbursementSection({ data }: { data: SettingsPayload }) {
         <SettingsSaveBar form={form} save={save} />
       </FormCard>
 
-      <LogoCard showLogo={form.has("export.show_logo") ? form.bool("export.show_logo") : true} />
+      <LogoCard data={data} showLogo={form.has("export.show_logo") ? form.bool("export.show_logo") : true} />
     </section>
   );
 }
@@ -161,12 +159,13 @@ export function ReimbursementSection({ data }: { data: SettingsPayload }) {
 
 const LOGO_TYPES = ["image/png", "image/jpeg"];
 
-function sizeText(bytes: number | null): string | null {
+function sizeText(bytes: number | null | undefined): string | null {
   if (bytes == null) return null;
+  if (bytes < 1024) return `${bytes} byte`;
   return bytes < 1024 * 100 ? `${formatNumber(bytes / 1024, 0)} kB` : `${formatNumber(bytes / (1024 * 1024), 1, 1)} MB`;
 }
 
-function logoFacts(logo: ExportLogo): string {
+function logoFacts(logo: ExportLogoMeta): string {
   return [
     logo.content_type === "image/jpeg" ? "JPEG" : logo.content_type === "image/png" ? "PNG" : null,
     logo.width && logo.height ? `${logo.width} × ${logo.height} px` : null,
@@ -182,13 +181,14 @@ function logoFacts(logo: ExportLogo): string {
  * Webbläsaren kontrollerar bara filtyp och storlek för ett snabbt besked – servern kontrollerar
  * filens innehåll och mått.
  */
-function LogoCard({ showLogo }: { showLogo: boolean }) {
-  const logo = useExportLogo();
+function LogoCard({ data, showLogo }: { data: SettingsPayload; showLogo: boolean }) {
   const upload = useUploadExportLogo();
   const remove = useRemoveExportLogo();
   const input = React.useRef<HTMLInputElement>(null);
   const [problem, setProblem] = React.useState<string | null>(null);
-  const info = logo.data;
+  const info = logoMeta(data);
+  const src = info ? logoImageSrc(info) : null;
+  const [broken, setBroken] = React.useState<string | null>(null);
 
   const pick = () => {
     setProblem(null);
@@ -209,7 +209,7 @@ function LogoCard({ showLogo }: { showLogo: boolean }) {
     upload.mutate(file, {
       onSuccess: () => {
         setProblem(null);
-        toast.success(info?.has_logo ? "Loggan är bytt." : "Loggan är uppladdad.");
+        toast.success(info ? "Loggan är bytt." : "Loggan är uppladdad.");
       },
       onError: (err) => setProblem(errorMessage(err)),
     });
@@ -237,20 +237,22 @@ function LogoCard({ showLogo }: { showLogo: boolean }) {
         />
 
         <div className="mt-4">
-          {logo.isError && !info ? (
-            <ErrorState error={logo.error} onRetry={() => logo.refetch()} title="Det gick inte att hämta loggan" />
-          ) : !info ? (
-            <div role="status" aria-label="Laddar loggan" className="flex items-center gap-4">
-              <Skeleton className="h-16 w-40" />
-              <Skeleton className="h-9 w-32" />
-              <span className="sr-only">Laddar…</span>
-            </div>
-          ) : info.has_logo && info.url ? (
+          {info && src ? (
             <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
               {/* Vit bakgrund som i Excel, även i mörkt tema – så syns loggan som den blir i filen. */}
               <div className="flex h-20 w-full max-w-60 shrink-0 items-center justify-center rounded-md border border-border bg-white p-2">
-                {/* eslint-disable-next-line @next/next/no-img-element -- bilden kommer från servern (eller demots minne), inte från next/image */}
-                <img src={info.url} alt="Uppladdad företagslogga" className="max-h-full max-w-full object-contain" data-testid="export-logo-preview" />
+                {broken === src ? (
+                  <span className="text-center text-xs text-fg-muted">Bilden kunde inte visas</span>
+                ) : (
+                  // eslint-disable-next-line @next/next/no-img-element -- bilden kommer från servern (eller demots minne), inte från next/image
+                  <img
+                    src={src}
+                    alt="Uppladdad företagslogga"
+                    className="max-h-full max-w-full object-contain"
+                    data-testid="export-logo-preview"
+                    onError={() => setBroken(src)}
+                  />
+                )}
               </div>
               <div className="min-w-0 flex-1 space-y-2">
                 <p className="text-xs text-fg-muted num">{logoFacts(info)}</p>

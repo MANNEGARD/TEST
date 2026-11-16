@@ -131,19 +131,29 @@ export interface DeleteHistoryResult {
 // ----------------------------------------------------------------------------- företagslogga (1.3.0)
 
 /**
- * Företagsloggan i underlagets sidhuvud (GET/POST/DELETE /settings/export-logo). Bara PNG eller
- * JPEG; servern kontrollerar filens innehåll, storlek och mått. `url` är adressen till bilden
- * (bara för den inloggade ägaren) – demot svarar med en data-adress som aldrig sparas.
+ * Loggans uppgifter som de står i GET /settings under `export.logo` (skrivskyddad; `{}` = ingen logga).
+ * Själva bilden hämtas från GET /settings/logo (bara för den inloggade ägaren). `demo_src` finns bara i
+ * demot, där loggan aldrig når någon server och visas ur minnet.
  */
-export interface ExportLogo {
+export interface ExportLogoMeta {
+  content_type?: "image/png" | "image/jpeg" | null;
+  width?: number | null;
+  height?: number | null;
+  size_bytes?: number | null;
+  uploaded_at?: string | null;
+  demo_src?: string;
+}
+
+/** routes/logo.py → LogoOut (svaret på POST och DELETE /settings/logo). */
+export interface LogoOut {
   has_logo: boolean;
-  content_type: "image/png" | "image/jpeg" | null;
+  content_type: string | null;
   width: number | null;
   height: number | null;
   size_bytes: number | null;
   uploaded_at: string | null;
-  url: string | null;
+  show_in_export: boolean;
 }
 
-/** Tak för loggans filstorlek (samma som servern). */
+/** Tak för loggans filstorlek (samma som servern, services/export/logo.py MAX_BYTES). */
 export const EXPORT_LOGO_MAX_BYTES = 1024 * 1024;

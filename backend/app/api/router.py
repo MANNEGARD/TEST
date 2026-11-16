@@ -16,6 +16,7 @@ from app.api.routes import (
     integrations,
     learning,
     locations,
+    logo,
     merging,
     month_close,
     notifications,
@@ -47,7 +48,9 @@ for module in (
     ha,
     integrations,
     volvo,
+    logo,
     settings,
     about,
 ):
     api_router.include_router(module.router)
+api_router.include_router(volvo.diagnostics_router)

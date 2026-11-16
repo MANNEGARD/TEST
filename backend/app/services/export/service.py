@@ -391,7 +391,9 @@ def create_export(
             checks = checks_mod.run_checks(
                 db, vehicle=vehicle, start=period.start, end=period.end, tz=tz, trip_ids=ids, now=now
             )
-            simple_mod.write_workbook(path, journal)
+            from app.services.export import logo as logo_mod
+
+            simple_mod.write_workbook(path, journal, logo=logo_mod.for_export(db, user_id))
             summary = simple_summary(journal)
             job.rows_fingerprint = rows_fingerprint(journal)
         else:

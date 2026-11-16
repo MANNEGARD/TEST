@@ -830,8 +830,8 @@ try {
     await link.first().waitFor({ timeout: 8000 });
     if ((await link.first().innerText()).trim() !== "DriveLog demo") fail(`sidomenyn visar "${await link.first().innerText()}"`);
     await link.first().click();
+    // Klientnavigering: Nexts ruttutropare (role="alert") får sidans titel, så settled() används inte här.
     await page.waitForURL(/\/settings\/?\?sektion=om/, { timeout: 8000 });
-    await settled(page, "Om DriveLog");
     await page.getByTestId("about-card").waitFor({ timeout: 8000 });
     if ((await page.getByTestId("about-version").innerText()).trim() !== "DriveLog demo") fail("Om DriveLog visar inte demots version");
     if (!(await page.getByText("Hela ändringsloggen finns på tilläggets sida i Home Assistant.").count())) fail("Om DriveLog saknar raden om ändringsloggen");
@@ -902,7 +902,7 @@ try {
     await card.getByTestId("export-logo-error").waitFor({ timeout: 8000 });
     // Rätt namn och typ men fel innehåll: servern (demot) kontrollerar filens innehåll.
     await input.setInputFiles({ name: "logga.png", mimeType: "image/png", buffer: Buffer.from("<html>inte en bild</html>") });
-    await expectText(page, "Filen är inte en PNG- eller JPEG-bild.");
+    await expectText(page, "Loggan måste vara en PNG- eller JPEG-bild.");
     await input.setInputFiles({ name: "logga.png", mimeType: "image/png", buffer: PNG });
     await card.getByTestId("export-logo-preview").waitFor({ timeout: 8000 });
     await expectText(page, "Loggan är uppladdad.");
@@ -911,7 +911,8 @@ try {
     await card.getByRole("button", { name: "Ta bort företagsloggan" }).click();
     await card.getByRole("button", { name: "Ja, ta bort loggan" }).click();
     await card.getByTestId("export-logo-upload").waitFor({ timeout: 8000 });
-    if ((await api(page, "GET", "/settings/export-logo")).has_logo) fail("loggan finns kvar efter Ta bort");
+    const logo = (await api(page, "GET", "/settings")).settings.export.logo;
+    if (logo && Object.keys(logo).length) fail("loggan finns kvar efter Ta bort");
   });
 
   await section("återställ", async () => {
@@ -1009,7 +1010,7 @@ try {
     await p.screenshot({ path: path.join(SHOTS, "mobil-anvandarmeny-version.png") });
     await mv.click();
     await p.waitForURL(/sektion=om/, { timeout: 8000 });
-    await settled(p, "mobil: Om DriveLog");
+    await p.getByTestId("about-card").waitFor({ timeout: 8000 });
     const q = questions.find((n) => n.kind === "classify");
     await visit(p, `/m/q/${q.public_id}/`, "mobil-snabbfraga");
     await p.getByRole("button", { name: "Privat", exact: true }).first().click();

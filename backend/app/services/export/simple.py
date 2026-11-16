@@ -626,12 +626,40 @@ def _footer_text(value: str) -> str:
     return value.replace("&", "&&")
 
 
-def write_workbook(path: Path, journal: SimpleJournal) -> dict[str, Any]:
+LOGO_MAX_HEIGHT_PX = int(TITLE_PT * 4 / 3)  # titelradens höjd
+LOGO_MAX_WIDTH_PX = 180
+LOGO_MARGIN_PX = 4
+
+
+def _column_px(width: float) -> int:
+    """Kolumnbredd i tecken → bildpunkter, som Excel och xlsxwriter räknar (Calibri 11)."""
+    return int(width * 7 + 0.5) + 5 if width >= 1 else int(width * 12 + 0.5)
+
+
+def logo_placement(width: int, height: int) -> dict[str, Any]:
+    """Skala och läge för loggan: uppe till höger i titelraden, proportionerna behålls och den
+    ryms inom titelraden och tabellens bredd (påverkar varken tabellen eller utskriften)."""
+    scale = min(LOGO_MAX_HEIGHT_PX / height, LOGO_MAX_WIDTH_PX / width, 1.0)
+    shown_w = width * scale
+    table_px = sum(_column_px(w) for _, _, w in COLUMNS)
+    return {
+        "x_scale": scale, "y_scale": scale,
+        "x_offset": max(0, int(table_px - shown_w - LOGO_MARGIN_PX)),
+        "y_offset": max(0, int((LOGO_MAX_HEIGHT_PX - height * scale) / 2)),
+        "object_position": 3,  # flyttas och storleksändras inte med cellerna
+        "decorative": True,
+    }
+
+
+def write_workbook(path: Path, journal: SimpleJournal, *, logo: Any | None = None) -> dict[str, Any]:
     """Skriver den enkla körjournalen till ``path`` och returnerar summorna samt bladets radlägen.
+
+    ``logo`` (``export.logo.Logo``) är företagsloggan uppe till höger, eller None.
 
     Bladets uppställning:
 
-    * rad 1: titel, därefter högst två rader i två spalter: period och förare, arbetsgivare och bil
+    * rad 1: titel (och loggan till höger), därefter högst två rader i två spalter: period och
+      förare, arbetsgivare och bil
     * tabellen med en rad per tjänsteresa
     * summering direkt under tabellen: antal resor och km, mil och (valfritt) ersättning
     * en förklarande rad om att endast tjänsteresor redovisas
@@ -698,6 +726,8 @@ def write_workbook(path: Path, journal: SimpleJournal) -> dict[str, Any]:
     # --- sidhuvud ---------------------------------------------------------------------------
     ws.write_string(0, 0, safe_text(journal.title), fmt_title)
     ws.set_row(0, TITLE_PT)
+    if logo is not None:
+        ws.insert_image(0, 0, str(logo.path), logo_placement(logo.width, logo.height))
     info = [("Period", journal.period_label), ("Förare", journal.driver_name)]
     if journal.employer_name:
         info.append(("Arbetsgivare", journal.employer_name))  # raden utelämnas när arbetsgivare saknas

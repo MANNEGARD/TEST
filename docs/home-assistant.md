@@ -40,6 +40,27 @@ inloggad på telefonen, och att DriveLog kan nås från Home Assistant.
 Hittar HACS inte repot – till exempel för att det är privat – använder du den manuella vägen
 nedan. Den ger exakt samma resultat.
 
+### Versioner och uppdateringar i HACS (från 1.3.0)
+
+- Varje DriveLog-version blir en **GitHub-utgåva** (*release*) med namnet `v1.3.0`. HACS visar
+  då versionen som **1.2.3 → 1.3.0** i stället för en kod som `97aa56f`, och erbjuder en
+  uppdatering **bara när en ny version är utgiven** – inte vid varje ändring i repot
+  (`hide_default_branch` i `hacs.json`).
+- Integrationen har samma versionsnummer som tillägget. Utgåvans text är versionens avsnitt ur
+  ändringsloggen. Har integrationen inte ändrats står det *Ingen ändring i Home
+  Assistant-integrationen – uppdateringen kan vänta.*
+- En uppdatering av integrationen kräver **en omstart av Home Assistant**. Uppdateringen av själva
+  DriveLog (tillägget eller servern) gör det inte – den kan du ta direkt.
+- Efter den första utgåvan kan HACS fortfarande visa en kod i stället för ett versionsnummer.
+  Välj då **⋮ → Ladda om** (*Redownload*/*Update information*) på SMGD DriveLog i HACS.
+
+### Logga
+
+Integrationen har DriveLogs mätarikon (`custom_components/smgd_drivelog/brand/`: `icon.png`,
+`icon@2x.png`, `logo.png`, `logo@2x.png`). Home Assistant visar den från version **2026.3**;
+äldre versioner visar en platshållare. Inget behöver göras i Home Assistants publika
+brands-arkiv.
+
 ### Manuellt
 
 1. Kopiera katalogen `custom_components/smgd_drivelog/` från repot till
@@ -165,12 +186,13 @@ från 1.1.0) ser notiserna ut så här:
 
 | Typ | Exempel | Knappar |
 | --- | --- | --- |
-| Ny resa | *Ny resa · tis 08:10–08:55 · Hemmet → Exempelgatan, Exempelstad · 2,3 mil. Tjänst eller privat?* | Tjänst: &lt;förslag&gt;, Alltid: &lt;förslag&gt;, Tjänst – skriv ärende (textsvar), Privat, Alltid privat här, Senare |
+| Ny resa | *Ny resa · tis 08:10–08:55 · Hemvägen 1, Hemby → Exempelgatan 12, Exempelstad · 2,3 mil. Tjänst eller privat?* | Tjänst: &lt;förslag&gt;, Alltid: &lt;förslag&gt;, Tjänst – skriv ärende (textsvar), Privat, Alltid privat här, Senare |
 | Vilket ärende? | *Exempel AB, Exempelstad, 2,3 mil* | Två förslag, Alltid: &lt;förslag&gt;, Skriv ärende (textsvar), Privat, Senare |
-| Vilket företag var det? | *tis 10:15 · Industrivägen, Exempelstad · 2,3 mil* | Skriv företagets namn (textsvar), Privat, Senare |
+| Vilket företag var det? | *tis 10:15 · Industrivägen 4, Exempelstad · 2,3 mil* | Skriv företagets namn (textsvar), Privat, Senare |
 | Antaget | *Antaget: Kundbesök Exempel AB · tis 2,3 mil · Räknas som tjänst i morgon 14:05 om du inte säger emot* | Stämmer, Fel – privat, Annat ärende (textsvar) |
 | Larm | *DriveLog: Kalendern synkas inte* | Öppna |
 | Månaden | *Oktober klart* (siffror, inga platser) eller *Oktober väntar* (vad som väntar) | Öppna underlaget, Se antagna |
+| Ny version | *DriveLog är uppdaterad till 1.3.0* – *Från 1.2.3. Nytt: …* (de tre första nyheterna) | Öppna (Inställningar → Om DriveLog) |
 
 - Kategori och ärende besvaras i **samma tryck**. Det kommer **en fråga åt gången**; nästa
   skickas när den förra är besvarad eller undanlagd. Ingen samlingsnotis och ingen
@@ -182,7 +204,10 @@ från 1.1.0) ser notiserna ut så här:
   ingen snabbknapp för Tjänst.
 - Påminnelse efter 24 timmar. Efter 48 timmar läggs frågan undan och finns kvar i webben.
   Vid månadsskiftet ställs månadens undanlagda frågor om en gång.
-- Antaganden, larm och månadsnotiser räknas inte som frågor. Ett antagande får notis bara
+- **Ny version:** när DriveLog har startat med en ny version kommer en notis med de viktigaste
+  nyheterna – en gång per version, aldrig vid en vanlig omstart och inte vid en helt ny
+  installation. Stängs av under *Inställningar → Notiser* (*Notis när DriveLog har uppdaterats*).
+- Antaganden, larm, månadsnotiser och notisen om en ny version räknas inte som frågor. Ett antagande får notis bara
   första gången per plats. Ett larm skickas en gång per fel (högst två per dygn), och ingen
   notis skickas när felet är borta. Månadsnotiser kommer högst en gång per dygn.
 - *Öppna underlaget* hämtar filen utan inloggning. Länken gäller i 7 dagar och för högst
@@ -258,16 +283,19 @@ notiser. Användbart efter att DriveLog varit nere.
 
 ## Sekretess
 
-- Notistexter innehåller aldrig husnummer. Hemmet visas som *Hemmet*, platser
-  du markerat som privata som *Privat plats*, bekräftade platser med sitt namn och
-  obekräftade platser bara som *företagsnamn, ort* eller *gata utan husnummer, ort*.
-  Hela adressen syns först i `/m/q` efter inloggning.
+- Från 1.3.0 visar frågorna i självgående läge **hela adressen med husnummer** (utan
+  postnummer) för platser utan bekräftat namn, till exempel *Exempelgatan 12, Exempelstad* eller
+  *Exempel AB, Exempelgatan 12, Exempelstad* när kartan har ett namn. Bostaden visas med sin
+  adress (annars *Hemmet*), privata platser med sitt namn eller sin adress och bekräftade
+  platser med sitt namn. Texterna går via Home Assistant till telefonen och kan synas i Home
+  Assistants historik. Notiserna i läget *Jag godkänner allt själv* visar som förut bara orten.
 - Med **Dölj platser på låsskärmen** innehåller notistexten inga platser alls, bara dag
   och mil. Knapparna med ett föreslaget ärende heter då bara *Tjänst: föreslaget ärende*
   eller *Föreslaget ärende 1*, eftersom ärendet ofta innehåller platsens namn. Trycker du
   på knappen sparas det riktiga ärendet, och i `/m/q` ser du vad det är. Från 1.1.0 är inställningen **av** som standard om du aldrig har ändrat den
   (tidigare på). Har du själv satt den gäller ditt val.
-- Larm och månadsnotiser innehåller aldrig platser, VIN eller belopp per resa.
+- Larm, månadsnotiser och notisen om en ny version innehåller aldrig platser, VIN eller belopp
+  per resa.
 - iOS har inget sätt att via notisens innehåll dölja den på låsskärmen. Ställ in
   **Inställningar → Notiser → Home Assistant → Visa förhandsvisningar: När olåst**
   på iPhone. På Android: dölj känsligt innehåll på låsskärmen i systemets
@@ -315,3 +343,7 @@ riktig installation och telefon:
   riktig Home Assistant 2024.11+.
 - Leverans till Android-enheter (formatet är detsamma men texter och knappar
   kan visas annorlunda).
+- Att HACS visar versionsnumret (t.ex. *1.3.0*) efter den första utgåvan och döljer
+  standardgrenen, och att loggan syns – det kräver en riktig HACS och Home Assistant 2026.3
+  eller senare. Bildmåtten följer brands-arkivets konvention (Home Assistant anger inga mått för
+  den lokala mappen).

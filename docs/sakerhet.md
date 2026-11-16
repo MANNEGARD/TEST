@@ -53,6 +53,16 @@ användares resor, platser, importer och exporter ger 404.
 - Originalfiler lagras under ett slumpat namn (filens hash) utanför webbroten, med
   filrättigheter 600, och nås bara via ett autentiserat anrop. De kan raderas per import.
 
+### Företagsloggan (1.3.0)
+
+- Bara PNG och JPEG. Typen avgörs av filens innehåll (filens första byte och bildens mått), inte
+  av filnamnet eller den typ webbläsaren anger; SVG, HTML och allt annat avvisas, så att ingen
+  aktiv kod kan laddas upp som "bild". Högst 1 MB och 4000 × 4000 bildpunkter.
+- Filen sparas under datakatalogen (`branding/`) med ett eget slumpat namn och rättigheterna 600,
+  ersätts vid ny uppladdning och raderas när du tar bort loggan. Den lämnas bara ut till den
+  inloggade ägaren (`GET /api/v1/settings/logo`) och följer med i säkerhetskopian.
+- Ingen bildbehandling görs på servern; Excel-biblioteket lägger in bilden som den är.
+
 ## Export
 
 Användartext som börjar med `=`, `+`, `-`, `@`, tabb eller radbrytning skrivs som ren text
@@ -79,6 +89,16 @@ Månadsnotisen i självgående läge har en länk som hämtar underlaget utan in
   eller genom att radera exporten. Byt aldrig `DRIVELOG_SECRET_KEY`
   för att stänga länkar – krypteringsnyckeln kan vara härledd ur den.
 
+### Felsökningsfilen för Volvo (1.3.0)
+
+*Ladda ner felsökningsfil* under *Integrationer → Volvo* ger en JSON-fil med bilens avläsningar
+(mätarställning, bränsle, batteri, trippmätare, snittvärden, motorstatus med tidsstämplar),
+hämtningarnas utfall och de resor som byggdes av dem, för de senaste 14 dygnen. Filen innehåller
+**inte** chassinummer (VIN), registreringsnummer, positioner, adresser, platsnamn, Volvos rådata,
+feltexter (bara felens nycklar och HTTP-koder) eller nycklar och tokens; databasens id ersätts
+av löpnummer. Den skapas bara när du hämtar den och lämnar servern först när du själv skickar den
+vidare.
+
 ## Vad lämnar servern?
 
 | Mottagare | Vad | När |
@@ -86,7 +106,7 @@ Månadsnotisen i självgående läge har en länk som hämtar underlaget utan in
 | Volvo Cars API | Anrop för din bils mätarställning, position, nivåer | När Volvo är anslutet |
 | Microsoft Graph | Läsning av valda kalendrar | När Outlook är anslutet |
 | Kalenderlänk (ICS) | Hämtar kalenderfilen (GET) | När en länk är sparad, var 30:e minut och vid Synka nu |
-| Home Assistant (din egen) | Notistexter | När notiser är påslagna |
+| Home Assistant (din egen) | Notistexter – från 1.3.0 med hela adressen för platser utan bekräftat namn och bostadens adress (se *Notiser*) | När notiser är påslagna |
 | AI-leverantör | Underlag för en resa – fullständigt (standard från 1.3.0) eller minimalt, se nedan | Endast om en leverantör är ansluten: när reglerna inte räcker, när ärendet saknas, när en kalenderbokning stämmer med resan, och vid AI-genomgången |
 | Kartplattor | Vilket kartområde du tittar på, och sidans ursprung som Referer (t.ex. `https://drivelog.example/`, aldrig sökvägen) | När en karta visas (kan stängas av eller pekas mot egen plattserver) |
 | Geokodare (standard OpenStreetMap Nominatim) | Platsens position (sex decimaler) där bilen stannat på en okänd plats, och bostadens position en gång (1.3.0) | När geokodningen är på (standard från 1.1.0) och hemmet finns som plats med koordinat |
@@ -198,13 +218,17 @@ själv; AI ensam ger aldrig automatisk klassning.
 
 ### Notiser
 
-Notiser innehåller aldrig husnummer. Hemmet visas som "Hemmet" och privata platser som
-"Privat plats". Obekräftade platser visas bara som "företagsnamn, ort" eller "gata utan
-husnummer, ort"; hela adressen syns först i webben efter inloggning. Med *Dölj platser på
-låsskärmen* är notistexten helt utan platser, bara dag och mil, och knapparna visar
+Från 1.3.0 väljer DriveLog precision före integritet i frågorna i självgående läge (ägarens
+val): platser utan bekräftat namn visas med **hela adressen och husnumret** (postnumret tas
+bort), med kartans namn först när det finns ("Exempel AB, Exempelgatan 12, Exempelstad").
+**Bostaden visas med sin adress** (annars "Hemmet") och privata platser med sitt namn eller sin
+adress. Bekräftade platser visas med sitt namn. Texterna går via Home Assistant till telefonen:
+den som kommer åt Home Assistants historik, loggar eller en Home Assistant-token kan alltså se
+adresserna. Notiserna i läget *Jag godkänner allt själv* visar som förut bara orten. Med *Dölj
+platser på låsskärmen* är notistexten helt utan platser, bara dag och mil, och knapparna visar
 bara "föreslaget ärende" i stället för ärendet (som ofta innehåller platsens namn). Från 1.1.0 är den
-inställningen av som standard om du aldrig har ändrat den. Larm och månadsnotiser innehåller
-aldrig platser, VIN eller belopp per resa. Textsvar från telefonen tvättas och får vara
+inställningen av som standard om du aldrig har ändrat den. Larm, månadsnotiser och notisen om en
+ny version innehåller aldrig platser, VIN eller belopp per resa. Textsvar från telefonen tvättas och får vara
 1–200 tecken. iOS har ingen inställning i notisen för detta – välj dessutom *Visa
 förhandsvisningar: När olåst* för Home Assistant-appen i iPhone-inställningarna.
 

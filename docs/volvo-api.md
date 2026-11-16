@@ -15,7 +15,7 @@ kommandon till bilen (lås, klimat m.m.).
 | Inloggning | OAuth 2.0 authorization code + PKCE (S256) med Volvo ID |
 | Resejournal i API:t | **Finns inte** – resor rekonstrueras ur mätarställning och position |
 | Position | Uppdateras först **när en resa avslutats** – ingen live-position |
-| Förbrukning per resa | **Finns inte** – bara tanknivå/batterinivå och bilens snittvärden |
+| Förbrukning per resa | **Finns inte i API:t** – DriveLog räknar fram en uppskattning ur trippmätaren, bilens snittförbrukning och tanknivån (1.3.0) |
 | Gränser | 100 anrop/minut per Volvo ID och klient, 10 000 anrop/dygn per API |
 | Behörighetens livslängd | Max ca 3 månader – därefter måste du logga in igen |
 | Viktigt datum | Gamla Volvo ID-servern (`volvoid.eu.volvocars.com`) slutar fungera **2027-01-31** |
@@ -200,7 +200,26 @@ Resedetekteringen (`detection.process_vehicle`) är en tillståndsmaskin:
   Lösningen är att importera Volvos körjournal för dagen: de importerade originalresorna
   ersätter den rekonstruerade resan utan dubbletter (eller dela upp kilometrarna i tjänst och
   privat). Larmet "Hämtningen från Volvo fungerar inte" (efter 6 timmar) påminner om samma sak.
-* Bränsle/energi per resa är **okänt** (`unknown`).
+* **Bränsle och el per resa** (1.3.0, `services/volvo/consumption.py`) räknas fram ur bilens
+  egna avläsningar och märks som uppskattade (`estimated`, "≈" i appen):
+  1. *Trippmätare × snitt:* avläsningen före och efter resan, trippmätaren har inte nollställts
+     emellan och har ökat ungefär lika mycket som resan är lång (±2 km eller 15 %).
+     Förbrukningen är `(snitt_efter × tripp_efter − snitt_före × tripp_före) / 100` – så får två
+     resor i samma trippmätarperiod var sin del.
+  2. *Nollställd trippmätare* (efter ca 4 timmars stillestånd): trippmätaren efter resan ≈
+     resans längd → `snitt × tripp / 100`.
+  3. *Nivåskillnad i tanken* när trippmätaren inte räcker. En ökning på mer än 1 l mellan två
+     avläsningar under resan är en tankning, och då lämnas värdet okänt. Batteriets nivå används
+     inte, eftersom den användbara kapaciteten inte är känd.
+  Orimliga värden (negativa, mer än 100 l, mer än 60 l eller 60 kWh per 100 km) kastas. Räcker
+  inget lämnas värdet okänt (`unknown`, "–"). Bara resor som DriveLog har skapat ur bilens
+  avläsningar de senaste 14 dygnen räknas; importerade resor och värden som redan finns rörs
+  aldrig, och inte heller resor i en månad vars underlag redan är skapat.
+* **Felsökningsfil** (1.3.0): *Ladda ner felsökningsfil* under *Integrationer → Volvo*
+  (`GET /api/v1/volvo/diagnostics?days=14`, 1–31 dygn) ger bilens avläsningar, hämtningarnas
+  utfall (status och HTTP-kod) och de resor som byggdes av dem som JSON – utan VIN,
+  registreringsnummer, positioner, adresser, platsnamn, rådata, feltexter och nycklar. Id:n
+  är löpnummer (`obs-1`, `trip-1`). Filen är till för den som hjälper dig felsöka.
 * **Platsen:** ligger stoppet vid en känd plats används den. Annars skapas en ny obekräftad
   plats (radie 75 m) vars adress slås upp i OpenStreetMap i bakgrunden – aldrig under själva
   detekteringen. Se [Användning → Adresser](anvandning.md#adresser).
@@ -224,8 +243,9 @@ blir granskningsärenden.
   färden; annars är den okänd.
 * **Ingen resejournal** i de publika API:erna. Volvo-appens körjournal kan bara fås via
   export/import.
-* **Ingen förbrukning per resa** – endast tanknivå, batterinivå och bilens löpande snitt.
-  Tankningar och laddningar mellan hämtningar gör nivåskillnader opålitliga.
+* **Ingen förbrukning per resa i API:t.** DriveLog uppskattar den ur trippmätaren och bilens
+  snitt (se ovan). Tankningar och laddningar mellan hämtningar gör nivåskillnader opålitliga,
+  och elförbrukningen kan bara räknas när bilen rapporterar ett elsnitt.
 * Korta resor (< 1 km) kan missas p.g.a. mätarställningens heltalsupplösning.
 * Två resor tätt efter varandra utan ny positionsrapport kan se ut som en enda resa
   (flaggas som möjliga missade resor).
@@ -251,7 +271,13 @@ Följande är byggt enligt dokumentationen men **inte prövat mot en riktig bil*
   samt om `Retry-After` skickas vid 429.
 * Tidsstämplarnas noggrannhet (bilens klocka kontra serverns).
 * Om `averageSpeedAutomatic` räknas över förfluten tid och om `tripMeterAutomatic` nollställs
-  vid resans start. Därför är starttid ur trippmätaren avstängd i 1.1.0.
+  vid resans start. Därför är starttid ur trippmätaren fortfarande avstängd i 1.3.0. För att slå
+  på den behövs verkliga avläsningsserier från bilen (minst 20 resor med känd starttid, där
+  snittfarten och trippmätaren före och efter resan jämförs med den kända starttiden) och ett
+  test som visar att felet är högst 5 minuter. Felsökningsfilen innehåller just de avläsningarna.
+* Förbrukningens metoder mot en riktig bil: att `averageFuelConsumption` och
+  `averageEnergyConsumption` avser trippmätarens sträcka, när trippmätaren nollställs, och hur
+  ofta statistiken uppdateras. Uppskattningen är prövad på påhittade avläsningar och demobilen.
 
 ## 9. Demoläge
 

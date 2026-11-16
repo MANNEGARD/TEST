@@ -150,8 +150,9 @@ def test_classify_payload_with_suggestion(db, user, trips, sd, monkeypatch):
     assert req.actions[2]["text_input"] is True
     assert req.title == "Ny resa"
     assert req.message.endswith("Tjänst eller privat?")
-    assert "Hemmet → Drottninggatan, Örebro" in req.message and "4,2 mil" in req.message
-    assert "12" not in req.message.split("·")[1]  # aldrig husnummer för en obekräftad plats
+    # 1.3.0: bostaden med sin adress och hela adressen för en obekräftad plats (utan postnummer).
+    assert "Hemvägen 1, Hemby → Drottninggatan 12, Örebro" in req.message and "4,2 mil" in req.message
+    assert "702 10" not in req.message
     assert req.logical_trip_id == trip.id and req.dedupe_key == f"classify:{trip.id}"
 
 
@@ -184,7 +185,7 @@ def test_lock_screen_hides_places_but_detail_keeps_them(db, user, trips, sd, mon
     notifier.ensure_open_questions(db, NOW)
     (req,) = questions(db)
     assert req.message == "tis 15/9 · 4,2 mil. Tjänst eller privat?"
-    assert "Hemmet" in req.context["detail_message"]
+    assert "Hemvägen 1, Hemby" in req.context["detail_message"]
 
 
 def test_purpose_payload(db, user, trips, sd, monkeypatch):
@@ -195,7 +196,7 @@ def test_purpose_payload(db, user, trips, sd, monkeypatch):
     check_payload(req)
     assert req.kind == NotificationKind.PURPOSE and req.title == "Vilket ärende?"
     assert keys(req) == ["PURPOSE0", "PURPOSE1", "PURPOSEA0", "PURPOSETEXT", "PRIVATE", "LATER"]
-    assert req.message == "Drottninggatan, Örebro, 4,2 mil"
+    assert req.message == "Drottninggatan 12, Örebro, 4,2 mil"
     assert req.dedupe_key == f"purpose:{trip.id}"
 
 
@@ -681,7 +682,8 @@ def test_other_errors_still_count_attempts(db, user, trips, monkeypatch):
 # ----------------------------------------------------------------------------- platsetiketter
 
 
-def test_place_label_never_shows_house_number():
+def test_place_label_shows_whole_address_but_never_postcode():
+    """1.3.0 (precision 3): hela adressen för platser utan bekräftat namn, se test_v130_notisadress."""
     from app.services.ha.messages import place_label
 
     home_loc = M.KnownLocation(type="home", name="Hemvägen 1", address=HOME, confirmed=True)
@@ -691,14 +693,14 @@ def test_place_label_never_shows_house_number():
     street = M.KnownLocation(type="unknown", name="Lagergatan 7, 553 03 Jönköping",
                              address="Lagergatan 7, 553 03 Jönköping", confirmed=False)
     confirmed = M.KnownLocation(type="customer", name="Acme AB", address=OREBRO, confirmed=True)
-    assert place_label(home_loc, HOME) == "Hemmet"
-    assert place_label(private, JONKOPING) == "Privat plats"
-    assert place_label(poi, poi.address) == "Dagab, Jönköping"
-    assert place_label(street, street.address) == "Lagergatan, Jönköping"
+    assert place_label(home_loc, HOME) == "Hemvägen 1, Hemby"
+    assert place_label(private, JONKOPING) == "Förskolan"
+    assert place_label(poi, poi.address) == "Dagab, Lagergatan 7, Jönköping"
+    assert place_label(street, street.address) == "Lagergatan 7, Jönköping"
     assert place_label(confirmed, OREBRO) == "Acme AB"
-    assert place_label(None, OREBRO) == "Drottninggatan, Örebro"
-    for label in ("Dagab, Jönköping", "Lagergatan, Jönköping", "Drottninggatan, Örebro"):
-        assert not re.search(r"\d", label)
+    assert place_label(None, OREBRO) == "Drottninggatan 12, Örebro"
+    for label in ("Hemvägen 1, Hemby", "Dagab, Lagergatan 7, Jönköping", "Drottninggatan 12, Örebro"):
+        assert not re.search(r"\d{3} ?\d{2}", label)  # aldrig postnummer
 
 
 # ----------------------------------------------------------------------------- /m/month

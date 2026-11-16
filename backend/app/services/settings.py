@@ -47,7 +47,7 @@ DEFAULT_OFFICE_HOURS: dict[str, Any] = {"days": [0, 1, 2, 3, 4], "start": "07:00
 READ_ONLY: frozenset[tuple[str, str]] = frozenset(
     {
         ("automation", "active_since"), ("system", "last_version"), ("merge", "category_rules_since"),
-        ("calendar", "work_domain_source"),
+        ("calendar", "work_domain_source"), ("export", "logo"),
     }
 )
 
@@ -199,6 +199,10 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "rate_per_mil": DEFAULT_RATE_PER_MIL,  # milersättning i kronor per mil
         "show_amount": True,  # visa beräknat ersättningsbelopp
         "show_via": True,  # visa mellanstopp ("via …") under målet i underlaget
+        # Företagsloggan (1.3.0): "Visa loggan i underlaget" och uppgifterna om den uppladdade
+        # loggan ({} = ingen). ``logo`` sätts bara av uppladdningen (services/export/logo.py).
+        "show_logo": True,
+        "logo": {},
     },
     "costs": {
         "fuel_price_per_liter": None,

@@ -7,12 +7,14 @@ returneras aldrig – svaren visar bara *om* de finns.
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
+from datetime import datetime, timedelta
 from typing import Any
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -447,3 +449,151 @@ def demo_disable(principal: WebPrincipalDep, db: DbDep) -> dict[str, Any]:
     out = _status(db, principal)
     out["removed"] = removed
     return out
+
+
+# ----------------------------------------------------------------------- felsökningsfil
+
+# Felsökningsfilen ligger under /volvo (inte /integrations/volvo) enligt tilläggskontraktet 4.A.
+diagnostics_router = APIRouter(prefix="/volvo", tags=["Volvo"])
+
+_DIAG_OBS_FIELDS = (
+    "fetched_at", "last_seen_at", "seen_count", "odometer_km", "odometer_reported_at", "fuel_liters",
+    "fuel_reported_at", "battery_percent", "battery_reported_at", "electric_range_km", "fuel_range_km",
+    "charging_status", "engine_running", "engine_reported_at", "avg_fuel_consumption", "avg_energy_consumption",
+    "avg_speed", "avg_speed_auto", "trip_meter_auto_km", "trip_meter_manual_km", "statistics_reported_at",
+)
+_DIAG_TRIP_FIELDS = (
+    "started_at", "ended_at", "start_time_quality", "end_time_quality", "distance_km", "odometer_start",
+    "odometer_end", "fuel_liters", "fuel_quality", "energy_kwh", "energy_quality",
+)
+_SAFE_CODE = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_-.")
+
+
+def _diag_value(value: Any) -> Any:
+    """Tidpunkter som ISO-text och tal avrundade till högst tre decimaler."""
+    if isinstance(value, datetime):
+        return value.isoformat(timespec="seconds")
+    if isinstance(value, float):
+        return round(value, 3)
+    return value
+
+
+def _safe_key(value: Any) -> str | None:
+    """Bara korta koder (endpoint- och felnycklar), aldrig fri text."""
+    text = str(value or "").strip().lower()
+    return text if text and len(text) <= 60 and set(text) <= _SAFE_CODE else None
+
+
+def _diag_vehicle(db: DbDep, principal: Principal, vehicle_id: uuid.UUID | None) -> Vehicle:
+    if vehicle_id is not None:
+        return get_vehicle(db, principal, vehicle_id)
+    conn = _conn(db, principal, create=False)
+    if conn is not None:
+        linked = db.execute(
+            select(Vehicle)
+            .where(Vehicle.volvo_connection_id == conn.id, Vehicle.is_demo.is_(False))
+            .order_by(Vehicle.created_at)
+            .limit(1)
+        ).scalar_one_or_none()
+        if linked is not None:
+            return linked
+        if demo.is_enabled(conn):
+            demo_car = vehicles.demo_vehicle(db, principal.user.id, create=False)
+            if demo_car is not None:
+                return demo_car
+    return vehicles.default_vehicle(db, principal.user.id)
+
+
+def build_diagnostics(db: DbDep, vehicle: Vehicle, *, days: int, now: Any) -> dict[str, Any]:
+    """Bilens avläsningar, hämtningarna och resorna som byggdes av dem – utan VIN,
+    registreringsnummer, positioner, adresser, platsnamn, rådata, feltexter och nycklar.
+    Databasens id ersätts av löpnummer (obs-1, trip-1)."""
+    from app import __version__
+    from app.models import RawTrip
+    from app.models.enums import TripSource
+
+    since = now - timedelta(days=days)
+    observations = list(
+        db.execute(
+            select(VehicleObservation)
+            .where(VehicleObservation.vehicle_id == vehicle.id, VehicleObservation.last_seen_at >= since)
+            .order_by(VehicleObservation.fetched_at)
+        ).scalars()
+    )
+    obs_ids: dict[str, str] = {}
+    obs_out: list[dict[str, Any]] = []
+    for n, obs in enumerate(observations, start=1):
+        label = f"obs-{n}"
+        obs_ids[str(obs.id)] = label
+        row = {"id": label, **{f: _diag_value(getattr(obs, f)) for f in _DIAG_OBS_FIELDS}}
+        row["errors_keys"] = sorted(k for k in (_safe_key(k) for k in (obs.errors or {})) if k)
+        obs_out.append(row)
+
+    runs: list[dict[str, Any]] = []
+    if vehicle.volvo_connection_id is not None:
+        kind = IntegrationSyncRun.kind.like("demo%") if vehicle.is_demo else IntegrationSyncRun.kind.not_like("demo%")
+        for run in db.execute(
+            select(IntegrationSyncRun)
+            .where(IntegrationSyncRun.connection_id == vehicle.volvo_connection_id, IntegrationSyncRun.started_at >= since,
+                   kind)
+            .order_by(IntegrationSyncRun.started_at)
+        ).scalars():
+            stats = run.stats if isinstance(run.stats, dict) else {}
+            runs.append({
+                "started_at": _diag_value(run.started_at),
+                "finished_at": _diag_value(run.finished_at),
+                "status": _safe_key(run.status),
+                "error_code": f"http_{run.http_status}" if run.http_status else None,
+                "observation": _safe_key(stats.get("observation")),
+                "new_trips": stats.get("new_trips") if isinstance(stats.get("new_trips"), int) else None,
+            })
+
+    trips_out: list[dict[str, Any]] = []
+    raws = db.execute(
+        select(RawTrip)
+        .where(RawTrip.vehicle_id == vehicle.id, RawTrip.source.in_((TripSource.VOLVO_API, TripSource.DEMO)),
+               RawTrip.ended_at >= since)
+        .order_by(RawTrip.ended_at)
+    ).scalars()
+    for n, raw in enumerate(raws, start=1):
+        trips_out.append({
+            "id": f"trip-{n}",
+            **{f: _diag_value(getattr(raw, f)) for f in _DIAG_TRIP_FIELDS},
+            "voided": raw.voided_at is not None,
+            "quality_flags": sorted(k for k in (_safe_key(f) for f in (raw.quality_flags or [])) if k),
+            "observations": [obs_ids.get(i, "äldre") for i in (raw.observation_ids or [])],
+        })
+
+    return {
+        "generated_at": _diag_value(now),
+        "app_version": __version__,
+        "days": days,
+        "vehicle": {"model": vehicle.model or "", "fuel_type": vehicle.fuel_type or "", "demo": bool(vehicle.is_demo)},
+        "observations": obs_out,
+        "sync_runs": runs,
+        "trips": trips_out,
+    }
+
+
+@diagnostics_router.get(
+    "/diagnostics",
+    summary="Felsökningsfil: bilens avläsningar, hämtningar och resor (utan VIN, regnr och positioner)",
+)
+def diagnostics(
+    principal: WebPrincipalDep,
+    db: DbDep,
+    days: int = Query(14, ge=1, le=31),
+    vehicle_id: uuid.UUID | None = None,
+) -> Response:
+    from app.services import settings as settings_svc
+
+    vehicle = _diag_vehicle(db, principal, vehicle_id)
+    now = utcnow()
+    body = build_diagnostics(db, vehicle, days=days, now=now)
+    local_day = now.astimezone(settings_svc.user_timezone(db, principal.user.id)).date().isoformat()
+    filename = f"drivelog-felsokning-{local_day}.json"
+    return Response(
+        content=json.dumps(body, ensure_ascii=False, indent=1),
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"', "Cache-Control": "no-store"},
+    )
