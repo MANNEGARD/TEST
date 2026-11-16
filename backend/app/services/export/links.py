@@ -69,8 +69,14 @@ def _exp_unix(exp: datetime) -> int:
 
 
 def make_token(job: ExportJob, user: User, exp: datetime) -> str | None:
-    """``{id.hex}.{exp}.{sig}``; None när filen saknar sha256 (då finns ingen länk)."""
+    """``{id.hex}.{exp}.{sig}``; None när filen saknar sha256 (då finns ingen länk).
+
+    Ingen länk byggs heller till en export som inte har någon fil (inte klar, raderad eller
+    utan sökväg): den skulle aldrig gå att öppna.
+    """
     if not job.sha256 or job.user_id != user.id:
+        return None
+    if job.status != "done" or job.deleted_at is not None or not job.file_path:
         return None
     exp_unix = _exp_unix(exp)
     sig = _signature(job.id, exp_unix, job.sha256, int(user.link_epoch or 0))

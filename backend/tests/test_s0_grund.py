@@ -327,13 +327,16 @@ def test_stubs_are_neutral(db, user, vehicle, trips, actor):
         geocode.reverse(provider_url="https://geo.example.org", lat_key=577800, lon_key=141600)
     assert "SMGD-DriveLog/" in geocode.USER_AGENT and "@" not in geocode.USER_AGENT
 
+    # S1e: månadsskiftet är byggt. Oktober saknar resor (blir "empty"), och manuellt läge gör inget i run_due.
     status = month_close.evaluate(db, user_id=user.id, vehicle=vehicle, month=date(2026, 10, 1), now=now)
-    assert (status.month, status.state, status.blockers, status.notes, status.export_id) == ("2026-10", "open", [], [], None)
+    assert (status.month, status.state, status.blockers, status.notes, status.export_id) == ("2026-10", "empty", [], [], None)
     assert month_close.run_due(db, now) == {}
-    assert month_close.run_for(db, user_id=user.id, vehicle=vehicle, month=date(2026, 10, 1), now=now).state == "open"
-    assert db.execute(select(M.ExportJob)).first() is None and db.execute(select(M.MonthClose)).first() is None
+    assert month_close.run_for(db, user_id=user.id, vehicle=vehicle, month=date(2026, 10, 1), now=now).state == "empty"
+    assert db.execute(select(M.ExportJob)).first() is None
+    assert db.execute(select(M.MonthClose.state)).scalar_one() == "empty"
 
-    job = M.ExportJob(user_id=user.id, vehicle_id=vehicle.id, status="done", sha256="0" * 64)
+    # S1e: ingen länk utan sha256.
+    job = M.ExportJob(user_id=user.id, vehicle_id=vehicle.id, status="done", sha256=None)
     db.add(job)
     db.flush()
     assert links.make_token(job, user, now) is None and links.make_url(job, user, now) is None
