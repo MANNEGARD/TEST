@@ -13,7 +13,8 @@ batteriet. Förbrukningen räknas fram så här, i ordning:
    tripp_efter ≈ resans sträcka: resan började på en nollställd mätare, ``snitt × tripp / 100``.
 2. **Nivåskillnad** (bara bränsle; batteriet bara när den användbara kapaciteten är känd, vilket
    den inte är i dag): nettot i tanken före och efter. En ökning på mer än 1 l mellan två
-   avläsningar under resan är en tankning och då går nettot inte att avgöra.
+   avläsningar under resan är en tankning och då går nettot inte att avgöra; en oförändrad nivå
+   ger inget värde (upplösningen eller eldrift), aldrig 0 l.
 
 Orimliga värden (negativa, mer än tanken rymmer, mer än 60 l eller 60 kWh per 100 km) kastas.
 Värdet märks ``estimated`` ("Uppskattad ur bilens egna avläsningar"); räcker underlaget inte
@@ -174,7 +175,9 @@ def estimate_for_raw(
             series = [fb.fuel_liters] + [
                 r.fuel_liters for r in post if r.fuel_liters is not None and r.fetched_at <= fa.fetched_at
             ]
-            fuel = _plausible(_by_level([float(v) for v in series if v is not None], 1.0), distance, cap=cap)
+            net = _by_level([float(v) for v in series if v is not None], 1.0)
+            # Oförändrad nivå säger inget (avläsningens upplösning, eller eldrift): okänt, inte 0 l.
+            fuel = _plausible(net, distance, cap=cap) if net is not None and net > 0 else None
             fuel_method = "level" if fuel is not None else None
 
     if energy is None and battery_kwh:

@@ -2480,6 +2480,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/settings/logo": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Företagsloggan (bilden) */
+        get: operations["get_logo_api_v1_settings_logo_get"];
+        put?: never;
+        /** Ladda upp eller byt företagsloggan (PNG eller JPEG, högst 1 MB) */
+        post: operations["upload_logo_api_v1_settings_logo_post"];
+        /** Ta bort företagsloggan */
+        delete: operations["delete_logo_api_v1_settings_logo_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/settings": {
         parameters: {
             query?: never;
@@ -2651,6 +2670,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/about": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** DriveLogs version och nyheterna i den */
+        get: operations["about_api_v1_about_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/volvo/diagnostics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Felsökningsfil: bilens avläsningar, hämtningar och resor (utan VIN, regnr och positioner) */
+        get: operations["diagnostics_api_v1_volvo_diagnostics_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/health": {
         parameters: {
             query?: never;
@@ -2700,6 +2753,12 @@ export interface components {
             model: string;
             /** Api Key */
             api_key?: string | null;
+        };
+        /** AboutOut */
+        AboutOut: {
+            /** Version */
+            version: string;
+            whats_new: components["schemas"]["WhatsNewOut"] | null;
         };
         /** AckFailure */
         AckFailure: {
@@ -2839,6 +2898,14 @@ export interface components {
             files: string[];
             /** Vehicle Id */
             vehicle_id?: string | null;
+        };
+        /** Body_upload_logo_api_v1_settings_logo_post */
+        Body_upload_logo_api_v1_settings_logo_post: {
+            /**
+             * File
+             * @description PNG eller JPEG, högst 1 MB
+             */
+            file: string;
         };
         /** BulkDelete */
         BulkDelete: {
@@ -3659,6 +3726,23 @@ export interface components {
             stats: {
                 [key: string]: unknown;
             };
+        };
+        /** LogoOut */
+        LogoOut: {
+            /** Has Logo */
+            has_logo: boolean;
+            /** Content Type */
+            content_type?: string | null;
+            /** Width */
+            width?: number | null;
+            /** Height */
+            height?: number | null;
+            /** Size Bytes */
+            size_bytes?: number | null;
+            /** Uploaded At */
+            uploaded_at?: string | null;
+            /** Show In Export */
+            show_in_export: boolean;
         };
         /** ManualTrip */
         ManualTrip: {
@@ -4599,6 +4683,13 @@ export interface components {
             capabilities: {
                 [key: string]: unknown;
             };
+        };
+        /** WhatsNewOut */
+        WhatsNewOut: {
+            /** Version */
+            version: string;
+            /** Items */
+            items: string[];
         };
         /** WorkplaceIn */
         WorkplaceIn: {
@@ -9704,6 +9795,77 @@ export interface operations {
             };
         };
     };
+    get_logo_api_v1_settings_logo_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    upload_logo_api_v1_settings_logo_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_upload_logo_api_v1_settings_logo_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LogoOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_logo_api_v1_settings_logo_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LogoOut"];
+                };
+            };
+        };
+    };
     get_settings_api_v1_settings_get: {
         parameters: {
             query?: never;
@@ -10010,6 +10172,58 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    about_api_v1_about_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AboutOut"];
+                };
+            };
+        };
+    };
+    diagnostics_api_v1_volvo_diagnostics_get: {
+        parameters: {
+            query?: {
+                days?: number;
+                vehicle_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
             };
             /** @description Validation Error */
             422: {

@@ -8,7 +8,7 @@ import { qk } from "./keys";
 /**
  * Företagsloggan i underlaget (1.3.0, Inställningar → Milersättning och export). Uppladdning och
  * borttagning gäller direkt – de går inte via inställningarnas Spara. Loggans uppgifter står i
- * GET /settings (`export.logo`), så svaret skrivs in där och inställningarna läses om.
+ * GET /settings (`export.logo`), så inställningarna läses om efter varje ändring.
  */
 const PATH = "/settings/logo";
 
@@ -25,40 +25,19 @@ export function logoMeta(data: SettingsPayload | undefined): ExportLogoMeta | nu
   return meta.uploaded_at || meta.content_type ? meta : null;
 }
 
-function useStoreLogo() {
-  const qc = useQueryClient();
-  return (out: LogoOut) => {
-    const meta: ExportLogoMeta = out.has_logo
-      ? {
-          content_type: out.content_type as ExportLogoMeta["content_type"],
-          width: out.width,
-          height: out.height,
-          size_bytes: out.size_bytes,
-          uploaded_at: out.uploaded_at,
-        }
-      : {};
-    qc.setQueryData<SettingsPayload>(qk.settings, (old) =>
-      old ? { ...old, settings: { ...old.settings, export: { ...old.settings.export, logo: meta } } } : old,
-    );
-  };
-}
-
 export function useUploadExportLogo() {
   const qc = useQueryClient();
-  const store = useStoreLogo();
   return useMutation({
     mutationFn: (file: File) => api.upload<LogoOut>(PATH, [file], { fileField: "file", timeoutMs: 60_000 }),
-    onSuccess: store,
-    onSettled: () => qc.invalidateQueries({ queryKey: qk.settings }),
+    // Knappen snurrar tills inställningarna (med loggans nya uppgifter) är omlästa.
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.settings }),
   });
 }
 
 export function useRemoveExportLogo() {
   const qc = useQueryClient();
-  const store = useStoreLogo();
   return useMutation({
     mutationFn: () => api.del<LogoOut>(PATH),
-    onSuccess: (out) => store(out ?? { has_logo: false, content_type: null, width: null, height: null, size_bytes: null, uploaded_at: null, show_in_export: true }),
     onSettled: () => qc.invalidateQueries({ queryKey: qk.settings }),
   });
 }

@@ -83,6 +83,11 @@ def test_level_difference_when_no_trip_meter():
     assert est.fuel_liters == pytest.approx(2.6) and est.fuel_method == "level"
 
 
+def test_unchanged_tank_level_gives_unknown_not_zero():
+    raw = raw_trip(14, 0, 18)
+    assert estimate(raw, [rd(-5, fuel=45.0)], [rd(19, fuel=45.0)]).fuel_liters is None
+
+
 def test_refuel_during_the_trip_is_kept_out_and_gives_unknown():
     """En tankning mitt i resan: nettot går inte att avgöra → okänt, aldrig ett påhittat värde."""
     raw = raw_trip(40, 0, 60)

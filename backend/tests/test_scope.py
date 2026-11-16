@@ -198,7 +198,7 @@ def test_settings_api_exposes_and_validates_scope(client):
     assert body["defaults"]["tax"]["car_benefit"] is False
     assert body["defaults"]["export"] == {
         "include_private_addresses": False, "include_change_history": True, "layout": "simple",
-        "rate_per_mil": 25.0, "show_amount": True, "show_via": True,
+        "rate_per_mil": 25.0, "show_amount": True, "show_via": True, "show_logo": True, "logo": {},
     }
     assert body["settings"]["general"]["journal_scope"] == "business_only"
 

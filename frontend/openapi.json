@@ -8117,6 +8117,78 @@
     }
    }
   },
+  "/api/v1/settings/logo": {
+   "get": {
+    "tags": [
+     "Settings"
+    ],
+    "summary": "Företagsloggan (bilden)",
+    "operationId": "get_logo_api_v1_settings_logo_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response"
+     }
+    }
+   },
+   "post": {
+    "tags": [
+     "Settings"
+    ],
+    "summary": "Ladda upp eller byt företagsloggan (PNG eller JPEG, högst 1 MB)",
+    "operationId": "upload_logo_api_v1_settings_logo_post",
+    "requestBody": {
+     "content": {
+      "multipart/form-data": {
+       "schema": {
+        "$ref": "#/components/schemas/Body_upload_logo_api_v1_settings_logo_post"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/LogoOut"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   },
+   "delete": {
+    "tags": [
+     "Settings"
+    ],
+    "summary": "Ta bort företagsloggan",
+    "operationId": "delete_logo_api_v1_settings_logo_delete",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/LogoOut"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
   "/api/v1/settings": {
    "get": {
     "tags": [
@@ -8529,6 +8601,87 @@
     }
    }
   },
+  "/api/v1/about": {
+   "get": {
+    "tags": [
+     "Om DriveLog"
+    ],
+    "summary": "DriveLogs version och nyheterna i den",
+    "operationId": "about_api_v1_about_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/AboutOut"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/volvo/diagnostics": {
+   "get": {
+    "tags": [
+     "Volvo"
+    ],
+    "summary": "Felsökningsfil: bilens avläsningar, hämtningar och resor (utan VIN, regnr och positioner)",
+    "operationId": "diagnostics_api_v1_volvo_diagnostics_get",
+    "parameters": [
+     {
+      "name": "days",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "maximum": 31,
+       "minimum": 1,
+       "default": 14,
+       "title": "Days"
+      }
+     },
+     {
+      "name": "vehicle_id",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string",
+         "format": "uuid"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Vehicle Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
   "/api/v1/health": {
    "get": {
     "tags": [
@@ -8611,6 +8764,30 @@
      "provider"
     ],
     "title": "AIConfig"
+   },
+   "AboutOut": {
+    "properties": {
+     "version": {
+      "type": "string",
+      "title": "Version"
+     },
+     "whats_new": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/WhatsNewOut"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     }
+    },
+    "type": "object",
+    "required": [
+     "version",
+     "whats_new"
+    ],
+    "title": "AboutOut"
    },
    "AckFailure": {
     "properties": {
@@ -8960,6 +9137,21 @@
      "files"
     ],
     "title": "Body_preview_api_v1_imports_preview_post"
+   },
+   "Body_upload_logo_api_v1_settings_logo_post": {
+    "properties": {
+     "file": {
+      "type": "string",
+      "contentMediaType": "application/octet-stream",
+      "title": "File",
+      "description": "PNG eller JPEG, högst 1 MB"
+     }
+    },
+    "type": "object",
+    "required": [
+     "file"
+    ],
+    "title": "Body_upload_logo_api_v1_settings_logo_post"
    },
    "BulkDelete": {
     "properties": {
@@ -11640,6 +11832,79 @@
      "created_from"
     ],
     "title": "LocationOut"
+   },
+   "LogoOut": {
+    "properties": {
+     "has_logo": {
+      "type": "boolean",
+      "title": "Has Logo"
+     },
+     "content_type": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Content Type"
+     },
+     "width": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Width"
+     },
+     "height": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Height"
+     },
+     "size_bytes": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Size Bytes"
+     },
+     "uploaded_at": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Uploaded At"
+     },
+     "show_in_export": {
+      "type": "boolean",
+      "title": "Show In Export"
+     }
+    },
+    "type": "object",
+    "required": [
+     "has_logo",
+     "show_in_export"
+    ],
+    "title": "LogoOut"
    },
    "ManualTrip": {
     "properties": {
@@ -14673,6 +14938,27 @@
      "is_default"
     ],
     "title": "VehicleOut"
+   },
+   "WhatsNewOut": {
+    "properties": {
+     "version": {
+      "type": "string",
+      "title": "Version"
+     },
+     "items": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Items"
+     }
+    },
+    "type": "object",
+    "required": [
+     "version",
+     "items"
+    ],
+    "title": "WhatsNewOut"
    },
    "WorkplaceIn": {
     "properties": {
