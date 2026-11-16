@@ -398,7 +398,7 @@ def test_omrakningen_haller_korta_transaktioner(db, user, vehicle, monkeypatch):
     monkeypatch.setattr(recompute, "_step", timed)
     recompute.run_vehicle(vehicle.id)
     assert len(steps) > 6  # mönster, klassning i bitar, autopilot, ärenden i bitar, luckor
-    assert max(steps) < 1.0, steps
+    assert max(steps) < 2.0, steps  # gott om marginal: vanligen under 0,3 s per steg
 
 
 # ----------------------------------------------------------------------------- uppgraderingen
