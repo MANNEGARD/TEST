@@ -314,12 +314,16 @@ export function ReviewView() {
     }
   }, []);
 
-  /** Servern har sparat svaret på ärendet: listan som hämtas härefter avgör om det är kvar. */
+  /** Servern har sparat svaret på ärendet: listan som hämtas härefter avgör om det är kvar
+   *  (t.ex. "Syfte saknas" efter Arbete). */
   const confirm = React.useCallback(
     (item: ReviewItem, also: string[] = []) => {
       answered.current.delete(item.id);
+      const ids = [item.id, ...also];
       const at = Date.now();
-      setSaved((s) => ({ ...s, ...Object.fromEntries([item.id, ...also].map((id) => [id, at])) }));
+      setSaved((s) => ({ ...s, ...Object.fromEntries(ids.map((id) => [id, at])) }));
+      // Kommer ärendet tillbaka hamnar det sist i kön, inte direkt efter det ägaren svarar på nu.
+      setSeen((s) => ({ ...s, order: [...s.order.filter((id) => !ids.includes(id)), ...ids] }));
       void qc.invalidateQueries({ queryKey: qk.review.all });
     },
     [qc],
