@@ -3,7 +3,7 @@
 
 import type { Site } from "./sites.ts";
 
-const ASSET_VERSION = "4";
+const ASSET_VERSION = "5";
 
 function esc(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
@@ -42,7 +42,7 @@ export function loginPage(): string {
     `<main class="stage">
   <div class="brand">
     <h1 class="sr-only">SMGD</h1>
-    <img class="logo" src="/smgd-logo.svg" alt="SMGD – Volvo V90" width="960" height="320">
+    <img class="logo logo-word" src="/smgd-wordmark.svg" alt="SMGD" width="331" height="43">
     <div class="rule" aria-hidden="true"></div>
   </div>
 
@@ -87,7 +87,7 @@ export function setupPage(): string {
     `<main class="stage">
   <div class="brand">
     <h1 class="sr-only">SMGD</h1>
-    <img class="logo logo-sm" src="/smgd-logo.svg" alt="SMGD – Volvo V90" width="960" height="320">
+    <img class="logo logo-word" src="/smgd-wordmark.svg" alt="SMGD" width="331" height="43">
   </div>
 
   <section class="card card-wide" aria-labelledby="setup-title">

@@ -715,3 +715,7 @@ form {
 .arrow {
   position: relative;
 }
+
+.logo.logo-word {
+  width: min(72vw, 380px);
+}
