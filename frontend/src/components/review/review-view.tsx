@@ -36,6 +36,7 @@ import { useTripDetail } from "@/lib/queries/trips";
 import type { CategoryCode, ReviewItem, Trip } from "@/lib/types";
 import { cn, isTypingTarget } from "@/lib/utils";
 import { useIsMutating, useQueryClient } from "@tanstack/react-query";
+import { AiReviewDialog } from "@/components/trips/ai-review-dialog";
 import { TripSummary } from "./trip-summary";
 
 /** Ärendetyper där man klassar resan direkt i snabbflödet. */
@@ -203,6 +204,7 @@ export function ReviewView() {
   const reviewAction = useReviewAction();
   const actions = useTripActions();
   const [kind, setKind] = React.useState<string>("all");
+  const [aiReview, setAiReview] = React.useState(false);
   const [skipped, setSkipped] = React.useState<string[]>([]);
   // Besvarade ärenden döljs direkt, utan att vänta på servern. Misslyckas svaret läggs ärendet
   // tillbaka först i kön med felet synligt (front, failed).
@@ -484,7 +486,24 @@ export function ReviewView() {
       <PageHeader
         title="Granskning"
         description="Gå igenom det som behöver ditt beslut – ett ärende i taget, utan att öppna varje resa."
-        actions={total ? <Badge tone="warn" className="text-sm num">{formatNumber(total, 0)} att granska</Badge> : null}
+        actions={
+          total ? (
+            <>
+              <Badge tone="warn" className="text-sm num">
+                {formatNumber(total, 0)} att granska
+              </Badge>
+              <Button variant="secondary" onClick={() => setAiReview(true)} data-testid="review-ai-review">
+                <Sparkles aria-hidden /> Gå igenom väntande med AI
+              </Button>
+            </>
+          ) : null
+        }
+      />
+      <AiReviewDialog
+        open={aiReview}
+        onOpenChange={setAiReview}
+        selection={{ kind: "pending" }}
+        trips={all.map((i) => i.trip).filter((t): t is Trip => !!t)}
       />
 
       {list.isError ? (
