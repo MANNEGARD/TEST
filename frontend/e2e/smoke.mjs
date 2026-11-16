@@ -58,6 +58,8 @@ const EXPECTED = [
   { status: 400, url: /\/api\/v1\/locations\/home-from-vehicle$/ },
   // Kalenderlänken: ogiltiga länkar avvisas med klartextfel (avsnittet Integrationer).
   { status: 400, url: /\/api\/v1\/integrations\/microsoft\/ics$/ },
+  // Granskning: "Godkänn förslag" på ett förslag som hunnit ändras avvisas (avsnittet Granskning).
+  { status: 409, url: /\/api\/v1\/trips\/[^/]+\/approve$/ },
 ];
 /** Kartbildsanrop som testet besvarat lokalt: { url, referer }. */
 const tileRequests = [];
@@ -491,6 +493,89 @@ try {
       const ansRes = await answer;
       if (ansRes.status() !== 200) fail("granskning", `svar på sammanslagning gav ${ansRes.status()}`);
       await expectText(page, "slogs samman", "granskning");
+    });
+
+    await section("granskning i rask takt", async () => {
+      step("Granskning: A/P i rask takt utan att vänta på servern – rätt svar på rätt resa");
+      // Importerade resor är redan klassade: sex av dem görs oavgjorda och blir ärenden.
+      const imported = (await api(page, "GET", "/trips?page_size=40")).items.filter((t) => t.review_status === "imported");
+      for (const t of imported.slice(0, 6)) await api(page, "PATCH", `/trips/${t.id}`, { category: "undecided" });
+      await page.goto(`${BASE}/review`);
+      const card = page.getByTestId("review-current");
+      await card.waitFor({ timeout: 15000 });
+      const answered = new Map();
+      const started = Date.now();
+      for (let n = 0; n < 30 && answered.size < 6; n++) {
+        if (!(await card.count())) break; // kön är tom
+        const item = await card.getAttribute("data-item-id");
+        const trip = await card.getAttribute("data-trip-id");
+        if (trip && !answered.has(trip) && (await page.getByTestId("decide-work").count())) {
+          const key = answered.size % 2 ? "a" : "p";
+          answered.set(trip, key === "a" ? "work" : "private");
+          await page.keyboard.press(key);
+        } else {
+          await page.keyboard.press("ArrowRight");
+        }
+        // Nästa ärende visas direkt (inget väntar på svaret från servern).
+        await page.waitForFunction(
+          (prev) => document.querySelector('[data-testid="review-current"]')?.getAttribute("data-item-id") !== prev,
+          item,
+          { timeout: 1500 },
+        );
+      }
+      const elapsed = Date.now() - started;
+      if (answered.size < 4) fail("granskning i rask takt", `bara ${answered.size} resor att klassa`);
+      // Svaren sparas i bakgrunden: vänta tills alla har kommit fram och kontrollera varje resa.
+      const deadline = Date.now() + 20000;
+      let wrong = [];
+      do {
+        await page.waitForTimeout(300);
+        wrong = [];
+        for (const [id, category] of answered) {
+          const t = (await api(page, "GET", `/trips/${id}`)).trip;
+          if (t.category !== category || t.review_status !== "approved") wrong.push(`${id}: ${t.category}/${t.review_status} ≠ ${category}`);
+        }
+      } while (wrong.length && Date.now() < deadline);
+      if (wrong.length) fail("granskning i rask takt", `fel svar på resor: ${wrong.join("; ")}`);
+      else step(`  ${answered.size} svar på ${elapsed} ms, alla på rätt resa`);
+      // Omräkningen efter svaren blir klar och listan säger det.
+      const until = Date.now() + 30000;
+      while ((await api(page, "GET", "/review")).recompute_pending && Date.now() < until) await page.waitForTimeout(500);
+      if ((await api(page, "GET", "/review")).recompute_pending) fail("granskning i rask takt", "omräkningen blev aldrig klar");
+
+      step("Granskning: ett förslag som hunnit ändras godkänns inte – ärendet läggs tillbaka med felet");
+      await page.goto(`${BASE}/review`);
+      await card.waitFor({ timeout: 15000 });
+      let found = false;
+      for (let n = 0; n < 30 && !found; n++) {
+        if (!(await card.count())) break;
+        if (await page.getByTestId("decide-approve").count()) {
+          found = true;
+          break;
+        }
+        const item = await card.getAttribute("data-item-id");
+        await page.keyboard.press("ArrowRight");
+        await page.waitForFunction(
+          (prev) => document.querySelector('[data-testid="review-current"]')?.getAttribute("data-item-id") !== prev,
+          item,
+          { timeout: 1500 },
+        ).catch(() => {});
+      }
+      if (!found) {
+        step("  (inget förslag att godkänna i kön – hoppar över)");
+        return;
+      }
+      const item = await card.getAttribute("data-item-id");
+      const trip = await card.getAttribute("data-trip-id");
+      await api(page, "PATCH", `/trips/${trip}`, { category: "undecided" }); // förslaget ändras under tiden
+      const approveRes = responseTo(page, "POST", /\/trips\/[^/]+\/approve$/);
+      await page.keyboard.press("g");
+      const res = await approveRes;
+      if (res.status() !== 409) fail("granskning i rask takt", `godkännandet gav ${res.status()}, väntade 409`);
+      await page.getByTestId("review-failed").waitFor({ timeout: 5000 });
+      if ((await card.getAttribute("data-item-id")) !== item) fail("granskning i rask takt", "ärendet lades inte tillbaka först");
+      await expectText(page, "Förslaget för resan har ändrats", "granskning i rask takt");
+      await shot(page, "review-failed-light");
     });
 
     // ---------------------------------------------------------------- Export

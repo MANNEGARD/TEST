@@ -1290,6 +1290,23 @@
       }
      }
     ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "anyOf": [
+         {
+          "$ref": "#/components/schemas/ApproveIn"
+         },
+         {
+          "type": "null"
+         }
+        ],
+        "title": "Body"
+       }
+      }
+     }
+    },
     "responses": {
      "200": {
       "description": "Successful Response",
@@ -8581,6 +8598,25 @@
      "parts"
     ],
     "title": "AllocateRequest"
+   },
+   "ApproveIn": {
+    "properties": {
+     "expected_category": {
+      "anyOf": [
+       {
+        "type": "string",
+        "pattern": "^(work|private|undecided)$"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Expected Category",
+      "description": "Kategorin i förslaget som ägaren såg. Har förslaget ändrats sedan dess godkänns inget (409)."
+     }
+    },
+    "type": "object",
+    "title": "ApproveIn"
    },
    "AuditOut": {
     "properties": {

@@ -22,12 +22,14 @@ import app.models as M
 from app import jobs
 from app.db import utcnow
 from app.models.enums import Category, LogicalState, ReviewKind, ReviewState
+from app.services import audit
 from app.services import settings as settings_svc
 from app.services.ha import notifier
 from app.services.learning import feedback, recompute
 from app.services.trips import segments as seg
 from tests import v122_stordata as data
 from tests.conftest import reload_trip
+from tests.test_enprocess_sqlite import no_redis, single_process  # noqa: F401 - fixturer
 from tests.test_ha_support import setup_pull
 
 API = "/api/v1"
@@ -40,9 +42,15 @@ def snapshot(db, vehicle_id: uuid.UUID) -> dict[str, Any]:
     """Allt som omräkningen påverkar: resornas förslag och beslut, aktuella bedömningar,
     mönster och ärenden (utan tidsstämplar och vem som stängde ett ärende)."""
     db.expire_all()
+    # Mönster som skapas på nytt får nya id:n: jämför dem via sin nyckel.
+    keys = {str(p.id): p.pattern_key for p in db.execute(select(M.LocationPattern)).scalars()}
+
+    def basis(b: dict[str, Any] | None) -> dict[str, Any] | None:
+        return {**b, "pattern_id": keys.get(b.get("pattern_id"))} if b else b
+
     trips = {
         str(t.id): (t.state, t.category, t.subcategory, t.category_source, t.review_status, t.confidence, t.purpose,
-                    t.purpose_source, t.purpose_confirmed, t.tax_note, t.approval_source, t.approval_basis)
+                    t.purpose_source, t.purpose_confirmed, t.tax_note, t.approval_source, basis(t.approval_basis))
         for t in db.execute(select(M.LogicalTrip).where(M.LogicalTrip.vehicle_id == vehicle_id)).scalars()
     }
     # Bedömningens resultat med underlag (indatahashen innehåller nya mönsters slumpade id:n).
@@ -204,25 +212,40 @@ def test_godkann_massredigering_snabbfraga_och_angra_ger_samma_resultat(
 
 
 def test_sjalvgaende_lage_godkanner_samma_resor(client, db, user, vehicle, job_queue, actor):
-    """Tre beslut för samma kund gör att autopiloten godkänner nästa resa från bilen dit (H)."""
-    fleet = data.build(db, user, vehicle, imported=60, open_imported=4, live=8)
-    first = db.get(M.LogicalTrip, fleet.live_trip_ids[0])
-    same = [t.id for t in seg.active_trips(db, vehicle.id)
-            if t.end_location_id == first.end_location_id and t.review_status != "imported"]
-    decided, waiting = same[:3], same[3:]
-    assert waiting
+    """Tre beslut om samma kundbesök gör att autopiloten godkänner det fjärde besöket från
+    bilen ("Som de 3 senaste gångerna") – efter svaret i stället för i anropet, men med samma
+    resultat."""
+    from datetime import timedelta
+
+    from app.models.enums import AUTO_APPROVAL_SOURCES, TripSource
+    from app.services.trips import pipeline
+    from tests.conftest import TripFactory
+
+    data.build(db, user, vehicle, imported=200)
+    f = TripFactory(db, user, vehicle)
+    f._odo = 500000.0
+    monday = (utcnow() - timedelta(days=14)).replace(hour=7, minute=0, second=0, microsecond=0)
+    monday -= timedelta(days=monday.weekday())
+    visits = [f.trip(data.HOME, data.CUSTOMERS[0], km=20.0, minutes=25, source=TripSource.VOLVO_API,
+                     start_at=monday + timedelta(days=d)).id for d in range(4)]
+    pipeline.after_trips_changed(db, user_id=user.id, vehicle=vehicle, actor=audit.SYSTEM, notify=False,
+                                 use_llm=False)
+    db.commit()
+    before = snapshot(db, vehicle.id)
+    decided, waiting = visits[:3], visits[3]
+    assert before["trips"][str(waiting)][10] is None
 
     def old():
         for tid in decided:
             feedback.apply_decision(db, seg.load_trip(db, tid), user_id=user.id, actor=actor,
-                                    category=Category.WORK, purpose="Kundbesök Nykund")
+                                    category=Category.WORK, purpose="Kundbesök Kund 1")
     expected = _old_path(db, user, vehicle, old)
-    auto = {k for k, v in expected["trips"].items() if v[10] not in (None, "user")}
-    assert auto & {str(t) for t in waiting}, "scenariot ska ge ett automatiskt godkännande"
+    assert expected["trips"][str(waiting)][10] in AUTO_APPROVAL_SOURCES, "scenariot ska ge ett automatiskt godkännande"
 
     for tid in decided:
-        assert client.patch(f"{API}/trips/{tid}", json={"category": "work", "purpose": "Kundbesök Nykund"}).status_code == 200
-        recompute.run_vehicle(vehicle.id)
+        r = client.patch(f"{API}/trips/{tid}", json={"category": "work", "purpose": "Kundbesök Kund 1"})
+        assert r.status_code == 200, r.text
+        assert recompute.run_vehicle(vehicle.id) == {"rounds": 1}
     assert snapshot(db, vehicle.id) == expected
 
 
@@ -433,3 +456,61 @@ def test_migrering_0003_fran_en_121_databas_med_resor_och_arenden(tmp_path):
     assert s.execute(select(M.LogicalTrip).where(M.LogicalTrip.state == LogicalState.ACTIVE)).scalars().all()
     s.close()
     dbm.dispose_engine()
+
+
+# ----------------------------------------------------------------------------- enprocessläget
+
+
+@pytest.mark.usefixtures("single_process")
+def test_enprocesslaget_svarar_direkt_och_raknar_om_efter_svaret(caplog):
+    """Riktig SQLite-fil, jobb i processen och schemaläggaren i en egen tråd: ägaren svarar på
+    flera ärenden i rask takt, varje svar kommer direkt och omräkningen görs efteråt."""
+    import logging
+
+    from app import db as dbm
+    from tests.conftest import TEST_PASSWORD
+    from tests.test_enprocess_sqlite import Ticker, https_client
+
+    caplog.set_level(logging.WARNING)
+    ticker = Ticker()
+    with https_client() as c:
+        r = c.post(f"{API}/auth/setup", json={"email": "agare@example.com", "password": TEST_PASSWORD})
+        assert r.status_code == 200, r.text
+        c.headers["X-CSRF-Token"] = r.json()["csrf_token"]
+        with dbm.session_scope() as s:
+            user = s.execute(select(M.User)).scalar_one()
+            vehicle = s.execute(select(M.Vehicle)).scalar_one()
+            data.build(s, user, vehicle, imported=300)
+            vehicle_id = vehicle.id
+        ticker.start()
+        try:
+            items = [i for i in c.get(f"{API}/review").json()["items"] if i["kind"] == "category"]
+            assert len(items) >= 8
+            slowest = 0.0
+            for n, item in enumerate(items[:8]):
+                start = time.perf_counter()
+                r = c.patch(f"{API}/trips/{item['trip']['id']}", json={"category": "work" if n % 2 else "private"})
+                slowest = max(slowest, time.perf_counter() - start)
+                assert r.status_code == 200, r.text
+            assert slowest < 1.0, slowest
+            deadline = time.monotonic() + 60
+            while c.get(f"{API}/review").json()["recompute_pending"]:
+                assert time.monotonic() < deadline, "omräkningen blev aldrig klar"
+                time.sleep(0.2)
+        finally:
+            ticker.stop.set()
+            ticker.join(60)
+    assert ticker.errors == []
+    assert "database is locked" not in caplog.text
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR], caplog.text
+    # Omräkningen är fullständig: den gamla vägen ändrar ingenting efteråt.
+    s = dbm.get_sessionmaker()()
+    try:
+        done = snapshot(s, vehicle_id)
+        feedback.after_decisions(s, user_id=s.get(M.Vehicle, vehicle_id).owner_user_id, vehicle_id=vehicle_id,
+                                 actor=audit.SYSTEM)
+        s.flush()
+        assert snapshot(s, vehicle_id) == done
+    finally:
+        s.rollback()
+        s.close()

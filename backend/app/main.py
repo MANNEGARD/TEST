@@ -11,7 +11,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func, select, text
 
-from app import __version__
+from app import __version__, jobs
 from app.api import errors
 from app.api.router import api_router
 from app.config import get_config
@@ -133,6 +133,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        jobs.cancel_delayed()
         if _scheduler is not None:
             _scheduler.stop()
             _scheduler = None

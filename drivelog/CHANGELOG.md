@@ -3,6 +3,22 @@
 > Från 1.0.2 visar Home Assistant **Uppdatera** först när den nya versionen är färdigbyggd och
 > går att hämta – det går bra att trycka direkt.
 
+## 1.2.2
+
+- **Inga fler "Motstridiga mätarställningar" av avrundning.** Bilen och Volvos körjournal anger
+  hela kilometer, så två resor i rad kan skilja en kilometer utan att något är fel. Sådan
+  avrundning ger aldrig längre något ärende, någon lucka eller någon fråga om överlappande
+  resor – oavsett vad toleransen under *Inställningar → Sammanslagning av resor* är satt till.
+  Verkliga dubbletter och överlapp ger fortfarande ärende. Öppna ärenden som bara berodde på
+  avrundning stängs av sig själva strax efter uppdateringen (ärenden du redan har hanterat
+  rörs inte). Din inställning ändras inte.
+- **Snabbare Granskning.** När du svarar Arbete, Privat eller Godkänn visas nästa ärende
+  direkt, och du kan svara i rask takt – med musen eller med tangenterna. Förslagen för övriga
+  resor räknas om i bakgrunden en stund efter ditt senaste svar, och listan uppdateras av sig
+  själv när det är klart. Går ett svar inte att spara visas felet tydligt och ärendet läggs
+  tillbaka. Har ett förslag hunnit ändras när du trycker *Godkänn förslag* får du se det nya
+  förslaget i stället. Samma sak gäller massredigering och svar på frågorna i telefonen.
+
 ## 1.2.1
 
 Rättningar efter den första riktiga resan.

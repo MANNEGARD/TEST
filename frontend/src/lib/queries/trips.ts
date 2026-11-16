@@ -110,8 +110,10 @@ export function useUpdateTrip() {
 export function useApproveTrip() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: string) => api.post<Trip>(`/trips/${id}/approve`),
-    onMutate: async (id) => {
+    /** `expectedCategory`: förslaget som ägaren såg. Har det hunnit ändras svarar servern 409. */
+    mutationFn: ({ id, expectedCategory }: { id: string; expectedCategory?: CategoryCode }) =>
+      api.post<Trip>(`/trips/${id}/approve`, expectedCategory ? { expected_category: expectedCategory } : undefined),
+    onMutate: async ({ id }) => {
       await qc.cancelQueries({ queryKey: qk.trips.all });
       return { snapshot: optimisticTripPatch(qc, [id], { approve: true }) };
     },

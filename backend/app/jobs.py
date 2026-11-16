@@ -149,6 +149,15 @@ def _run_later(name: str, kwargs: dict[str, Any], delay: float) -> None:
         timer.start()
 
 
+def cancel_delayed() -> None:
+    """Avbryter fördröjda jobb som inte har startat (när processen stängs). Jobb som körs får
+    gå klart; det som inte hann köras tas igen efter start (se learning.recompute)."""
+    with _later_lock:
+        for timer, _first in _later.values():
+            timer.cancel()
+        _later.clear()
+
+
 def _fire_later(key: tuple[str, tuple[tuple[str, Any], ...]], name: str, kwargs: dict[str, Any]) -> None:
     with _later_lock:
         waiting = _later.get(key)

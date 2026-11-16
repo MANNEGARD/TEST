@@ -85,17 +85,17 @@ def build(db, user: M.User, vehicle: M.Vehicle, *, imported: int = 1000, open_im
             db, user.id, "automation",
             {"active_since": (utcnow() - timedelta(hours=1)).isoformat(timespec="seconds")}, allow_read_only=True,
         )
-    # Resor från bilen (efter att självgående läge började gälla).
-    trips._clock = utcnow() - timedelta(days=6)
+    # Resor från bilen (efter att självgående läge började gälla): en utresa på morgonen och
+    # hemresan samma dag, en dag i taget.
+    first_day = (utcnow() - timedelta(days=live + 1)).replace(hour=6, minute=0, second=0, microsecond=0)
     for i in range(live):
         dest = NEW_CUSTOMERS[i % len(NEW_CUSTOMERS)] if i % 2 == 0 else CUSTOMERS[i % len(CUSTOMERS)]
-        t = trips.trip(HOME, dest, km=float(rng.randint(5, 40)), minutes=rng.randint(10, 40),
-                       source=TripSource.VOLVO_API)
+        km = float(rng.randint(5, 40))
+        trips._clock = first_day + timedelta(days=i)
+        t = trips.trip(HOME, dest, km=km, minutes=rng.randint(10, 40), source=TripSource.VOLVO_API)
         fleet.live_trip_ids.append(t.id)
         trips.skip(hours=3)
-        trips.trip(dest, HOME, km=float(rng.randint(5, 40)), minutes=rng.randint(10, 40),
-                   source=TripSource.VOLVO_API)
-        trips.skip(hours=14)
+        trips.trip(dest, HOME, km=km, minutes=rng.randint(10, 40), source=TripSource.VOLVO_API)
     db.flush()
     pipeline.after_trips_changed(db, user_id=user.id, vehicle=vehicle, actor=audit.SYSTEM, notify=False,
                                  origin="import", use_llm=False)

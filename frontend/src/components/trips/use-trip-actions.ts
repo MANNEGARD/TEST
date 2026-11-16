@@ -19,11 +19,12 @@ export function useTripActions() {
   const approve = useApproveTrip();
   const bulk = useBulkUpdate();
 
-  const undoAction = (ids: string[], since: number) => ({
+  const undoAction = (ids: string[], since: number, onUndone?: () => void) => ({
     label: "Ångra",
     onClick: () => {
       undoLatestFeedback(ids, since)
         .then((n) => {
+          if (n) onUndone?.();
           void invalidateJournalData(qc);
           toast.success(n ? "Ändringen är ångrad." : "Det fanns ingen ändring att ångra.");
         })
@@ -34,11 +35,12 @@ export function useTripActions() {
   return {
     isPending: update.isPending || approve.isPending || bulk.isPending,
 
-    setCategory(id: string, category: CategoryCode, opts: { silent?: boolean } = {}) {
+    /** `onUndone` körs när ägaren ångrar ändringen från kvittot (t.ex. för att visa ärendet igen). */
+    setCategory(id: string, category: CategoryCode, opts: { silent?: boolean; onUndone?: () => void } = {}) {
       const since = Date.now();
       return update.mutateAsync({ id, patch: { category } }).then(
         (t) => {
-          if (!opts.silent) toast.success(`Kategori: ${CATEGORY_LABELS[category]}`, { action: undoAction([id], since) });
+          if (!opts.silent) toast.success(`Kategori: ${CATEGORY_LABELS[category]}`, { action: undoAction([id], since, opts.onUndone) });
           return t;
         },
         (err) => {
@@ -68,11 +70,12 @@ export function useTripActions() {
       });
     },
 
-    approve(id: string) {
+    /** `expectedCategory`: förslaget som visades. Har det hunnit ändras godkänns ingenting (409). */
+    approve(id: string, opts: { expectedCategory?: CategoryCode; onUndone?: () => void } = {}) {
       const since = Date.now();
-      return approve.mutateAsync(id).then(
+      return approve.mutateAsync({ id, expectedCategory: opts.expectedCategory }).then(
         (t) => {
-          toast.success("Godkänd.", { action: undoAction([id], since) });
+          toast.success("Godkänd.", { action: undoAction([id], since, opts.onUndone) });
           return t;
         },
         (err) => {

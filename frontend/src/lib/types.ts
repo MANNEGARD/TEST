@@ -239,6 +239,8 @@ export interface ReviewList {
   open_counts: Record<ReviewKindCode, number>;
   open_total: number;
   kind_labels: Record<string, string>;
+  /** Förslag och ärenden räknas om efter ägarens senaste beslut (listan hämtas då om). */
+  recompute_pending?: boolean;
 }
 
 export interface GapList {

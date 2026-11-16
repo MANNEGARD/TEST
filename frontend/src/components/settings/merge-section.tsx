@@ -117,7 +117,7 @@ export function MergeSection({ data }: { data: SettingsPayload }) {
             label="Tolerans i mätarställning"
             unit="km"
             decimal
-            hint={`Så mycket får mätarställningen skilja mellan två resor som hör ihop. Bilen avrundar till hela kilometer, så en liten skillnad är normal.${std(defTol, "km")}`}
+            hint={`Så mycket får mätarställningen skilja mellan två resor som hör ihop. Bilen avrundar till hela kilometer, så upp till 2 km räknas alltid som avrundning och ger aldrig något ärende.${std(defTol, "km")}`}
           />
         </Advanced>
         <SettingsSaveBar form={form} save={save} defaults />

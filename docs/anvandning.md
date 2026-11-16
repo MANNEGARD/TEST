@@ -370,6 +370,18 @@ taget, även med tangentbordet (A = arbete, P = privat, G = godkänn).
 
 Ärenden kan skjutas upp eller avfärdas, och varje åtgärd kan ångras.
 
+Nästa ärende visas så fort du har svarat – du behöver inte vänta på servern och kan svara i
+rask takt. Ett svar påverkar ofta förslagen för andra resor (till exempel andra resor till
+samma plats). De räknas om i bakgrunden en stund efter ditt senaste svar, och listan uppdateras
+av sig själv när det är klart. Går ett svar inte att spara visas felet på ärendet, som läggs
+tillbaka först i kön. Har förslaget hunnit ändras när du trycker *Godkänn förslag* godkänns
+ingenting; du ser i stället det nya förslaget.
+
+Bilen och Volvos körjournal anger mätarställningen i hela kilometer. Två resor i rad som skiljer
+sig upp till 2 km räknas därför som avrundning: det blir varken ärende ("Motstridiga
+mätarställningar", "Överlappande resor") eller lucka, oavsett toleransen under *Inställningar →
+Sammanslagning av resor*. Ett ärende som inte längre gäller stängs av sig självt.
+
 ## Översikten
 
 Månadens tjänstemil, antal tjänsteresor, beräknad milersättning och vad som väntar på

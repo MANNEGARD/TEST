@@ -511,6 +511,37 @@ try {
     await settled(page, "import förhandsgranskning");
   });
 
+  await section("granskning i rask takt", async () => {
+    step("Granskning: A/P i rask takt – nästa ärende direkt och rätt svar på rätt resa");
+    await visit(page, "/review/");
+    const card = page.getByTestId("review-current");
+    await card.waitFor({ timeout: 8000 });
+    const answered = new Map();
+    for (let n = 0; n < 10 && answered.size < 4; n++) {
+      if (!(await card.count())) break; // kön är tom
+      const item = await card.getAttribute("data-item-id");
+      const trip = await card.getAttribute("data-trip-id");
+      if (trip && !answered.has(trip) && (await page.getByTestId("decide-work").count())) {
+        const key = answered.size % 2 ? "a" : "p";
+        answered.set(trip, key === "a" ? "work" : "private");
+        await page.keyboard.press(key);
+      } else {
+        await page.keyboard.press("ArrowRight");
+      }
+      await page.waitForFunction(
+        (prev) => document.querySelector('[data-testid="review-current"]')?.getAttribute("data-item-id") !== prev,
+        item,
+        { timeout: 1500 },
+      );
+    }
+    if (answered.size < 2) fail(`bara ${answered.size} resor att klassa i granskningen`);
+    await page.waitForTimeout(600);
+    for (const [id, category] of answered) {
+      const t = (await api(page, "GET", `/trips/${id}`)).trip;
+      if (t.category !== category) fail(`resan ${id} fick ${t.category}, väntade ${category}`);
+    }
+  });
+
   await section("återställ", async () => {
     step("Återställ demot: tillbaka till startdatat");
     await visit(page, "/");

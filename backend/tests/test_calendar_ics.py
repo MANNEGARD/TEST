@@ -1493,7 +1493,8 @@ def test_existing_110_database_needs_no_migration(tmp_path, monkeypatch):
     url = contract_env(monkeypatch, tmp_path / "data")
     try:
         cfg = alembic_config(url)
-        assert ScriptDirectory.from_config(cfg).get_current_head() == "0002"
+        # 1.2.2 lade till 0003 (omräkning efter beslut); 1.2.0 i sig behövde ingen migrering.
+        assert ScriptDirectory.from_config(cfg).get_revision("0003").down_revision == "0002"
         command.upgrade(cfg, "0002")
         with dbm.session_scope() as db:
             u = M.User(email="forare@example.com", display_name="Förare", password_hash="x", is_admin=True)

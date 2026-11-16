@@ -2682,6 +2682,14 @@ export interface components {
             /** Parts */
             parts: components["schemas"]["Part"][];
         };
+        /** ApproveIn */
+        ApproveIn: {
+            /**
+             * Expected Category
+             * @description Kategorin i förslaget som ägaren såg. Har förslaget ändrats sedan dess godkänns inget (409).
+             */
+            expected_category?: string | null;
+        };
         /** AuditOut */
         AuditOut: {
             /**
@@ -5242,7 +5250,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ApproveIn"] | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

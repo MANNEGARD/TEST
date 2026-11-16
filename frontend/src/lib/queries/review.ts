@@ -17,6 +17,9 @@ export function visibleOpenCount(list: ReviewList | undefined): number | undefin
   return Object.entries(list.open_counts).reduce((sum, [k, n]) => (HIDDEN_REVIEW_KINDS.includes(k) ? sum : sum + n), 0);
 }
 
+/** Så ofta listan hämtas om medan förslagen räknas om efter ett beslut (backend gör det efter svaret). */
+const RECOMPUTE_POLL_MS = 2000;
+
 export function useReviewItems(params: { kind?: string[]; status?: string; limit?: number } = {}) {
   const { vehicleId } = useVehicle();
   const query = { status: "open", limit: 200, ...params, vehicle_id: vehicleId };
@@ -24,6 +27,7 @@ export function useReviewItems(params: { kind?: string[]; status?: string; limit
     queryKey: qk.review.list(vehicleId, query),
     queryFn: ({ signal }) => api.get<ReviewList>("/review", { query, signal }),
     enabled: !!vehicleId,
+    refetchInterval: (q) => (q.state.data?.recompute_pending ? RECOMPUTE_POLL_MS : false),
   });
 }
 

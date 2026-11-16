@@ -3,6 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import {
+  AlertTriangle,
   ArrowRight,
   BadgeCheck,
   Briefcase,
@@ -31,8 +32,8 @@ import { formatDate, formatNumber, formatPercent } from "@/lib/format";
 import { CATEGORY_LABELS, DECISION_SOURCE_LABELS, label, REVIEW_KIND_LABELS, REVIEW_KIND_SHORT } from "@/lib/labels";
 import { invalidateJournalData } from "@/lib/queries/keys";
 import { HIDDEN_REVIEW_KINDS, useAnswerMerge, useReviewAction, useReviewItems } from "@/lib/queries/review";
-import { useTripDetail, useUpdateTrip } from "@/lib/queries/trips";
-import type { ReviewItem, Trip } from "@/lib/types";
+import { useTripDetail } from "@/lib/queries/trips";
+import type { CategoryCode, ReviewItem, Trip } from "@/lib/types";
 import { cn, isTypingTarget } from "@/lib/utils";
 import { useQueryClient } from "@tanstack/react-query";
 import { TripSummary } from "./trip-summary";
@@ -46,7 +47,12 @@ function hasProposal(t: Trip | null | undefined): boolean {
 
 // ----------------------------------------------------------------------------- ärendekort
 
-function MergeQuestion({ item, onAnswer, busy }: { item: ReviewItem; onAnswer: (accept: boolean) => void; busy: boolean }) {
+/** Ett klick på en knapp: den andra halvan av ett dubbelklick hamnar annars på nästa ärende. */
+function once(e: React.MouseEvent, fn: () => void) {
+  if (e.detail <= 1) fn();
+}
+
+function MergeQuestion({ item, onAnswer }: { item: ReviewItem; onAnswer: (accept: boolean) => void }) {
   const minutes = item.data.minutes_low != null ? Math.round(item.data.minutes_low) : null;
   const minutesHigh = item.data.minutes_high != null ? Math.round(item.data.minutes_high) : null;
   return (
@@ -79,10 +85,10 @@ function MergeQuestion({ item, onAnswer, busy }: { item: ReviewItem; onAnswer: (
       </div>
       <p className="text-sm text-fg-muted">Var det samma resa med ett kort stopp (t.ex. ett ärende på vägen), eller två separata resor?</p>
       <div className="grid gap-2 sm:grid-cols-2">
-        <Button size="xl" variant="primary" onClick={() => onAnswer(true)} disabled={busy} data-testid="merge-yes">
+        <Button size="xl" variant="primary" onClick={(e) => once(e, () => onAnswer(true))} data-testid="merge-yes">
           <Merge aria-hidden /> Ja, slå samman <Kbd className="ml-auto hidden sm:inline-flex border-white/30 bg-white/10 text-current">J</Kbd>
         </Button>
-        <Button size="xl" variant="secondary" onClick={() => onAnswer(false)} disabled={busy} data-testid="merge-no">
+        <Button size="xl" variant="secondary" onClick={(e) => once(e, () => onAnswer(false))} data-testid="merge-no">
           <X aria-hidden /> Nej, två resor <Kbd className="ml-auto hidden sm:inline-flex">N</Kbd>
         </Button>
       </div>
@@ -93,14 +99,12 @@ function MergeQuestion({ item, onAnswer, busy }: { item: ReviewItem; onAnswer: (
 function TripDecision({
   item,
   trip,
-  busy,
   onCategory,
   onApprove,
   onPurpose,
 }: {
   item: ReviewItem;
   trip: Trip;
-  busy: boolean;
   onCategory: (c: "work" | "private") => void;
   onApprove: () => void;
   onPurpose: (text: string) => void;
@@ -131,14 +135,14 @@ function TripDecision({
         </div>
       ) : null}
       <div className={cn("grid gap-2", proposal ? "sm:grid-cols-3" : "sm:grid-cols-2")}>
-        <Button size="xl" variant="secondary" onClick={() => onCategory("work")} disabled={busy} className="border-work/40 hover:bg-work-soft" data-testid="decide-work">
+        <Button size="xl" variant="secondary" onClick={(e) => once(e, () => onCategory("work"))} className="border-work/40 hover:bg-work-soft" data-testid="decide-work">
           <Briefcase className="text-work" aria-hidden /> Arbete <Kbd className="ml-auto hidden sm:inline-flex">A</Kbd>
         </Button>
-        <Button size="xl" variant="secondary" onClick={() => onCategory("private")} disabled={busy} className="border-private/40 hover:bg-private-soft" data-testid="decide-private">
+        <Button size="xl" variant="secondary" onClick={(e) => once(e, () => onCategory("private"))} className="border-private/40 hover:bg-private-soft" data-testid="decide-private">
           <Home className="text-private" aria-hidden /> Privat <Kbd className="ml-auto hidden sm:inline-flex">P</Kbd>
         </Button>
         {proposal ? (
-          <Button size="xl" variant="primary" onClick={onApprove} disabled={busy} data-testid="decide-approve">
+          <Button size="xl" variant="primary" onClick={(e) => once(e, onApprove)} data-testid="decide-approve">
             <BadgeCheck aria-hidden /> Godkänn förslag <Kbd className="ml-auto hidden sm:inline-flex border-white/30 bg-white/10 text-current">G</Kbd>
           </Button>
         ) : null}
@@ -156,7 +160,7 @@ function TripDecision({
           </label>
           <div className="flex gap-2">
             <Input id="review-purpose" value={purpose} onChange={(e) => setPurpose(e.target.value)} placeholder={trip.purpose ?? "Vad var syftet med resan?"} maxLength={500} />
-            <Button type="submit" variant="secondary" disabled={!purpose.trim() || busy}>
+            <Button type="submit" variant="secondary" disabled={!purpose.trim()}>
               <Check aria-hidden /> Spara
             </Button>
           </div>
@@ -187,11 +191,17 @@ export function ReviewView() {
   const list = useReviewItems();
   const answer = useAnswerMerge();
   const reviewAction = useReviewAction();
-  const update = useUpdateTrip();
   const actions = useTripActions();
   const [kind, setKind] = React.useState<string>("all");
   const [skipped, setSkipped] = React.useState<string[]>([]);
+  // Besvarade ärenden döljs direkt, utan att vänta på servern. Misslyckas svaret läggs ärendet
+  // tillbaka först i kön med felet synligt (front, failed).
   const [done, setDone] = React.useState<Set<string>>(new Set());
+  const [front, setFront] = React.useState<string[]>([]);
+  const [failed, setFailed] = React.useState<Record<string, string>>({});
+  // Samma ärende besvaras aldrig två gånger, även om två tangenttryck hinner komma innan
+  // nästa ärende visas (svaret binds till ärendet som visades när det gavs).
+  const answered = React.useRef(new Set<string>());
 
   const all = React.useMemo(() => (list.data?.items ?? []).filter((i) => !HIDDEN_REVIEW_KINDS.includes(i.kind) && !done.has(i.id)), [list.data, done]);
   const counts = React.useMemo(() => {
@@ -202,14 +212,38 @@ export function ReviewView() {
   const effectiveKind = kind !== "all" && !counts[kind] ? "all" : kind;
   const queue = React.useMemo(() => {
     const items = all.filter((i) => effectiveKind === "all" || i.kind === effectiveKind);
-    return [...items.filter((i) => !skipped.includes(i.id)), ...skipped.map((id) => items.find((i) => i.id === id)).filter(Boolean)] as ReviewItem[];
-  }, [all, effectiveKind, skipped]);
+    const first = front.map((id) => items.find((i) => i.id === id)).filter(Boolean) as ReviewItem[];
+    const rest = items.filter((i) => !front.includes(i.id));
+    return [...first, ...rest.filter((i) => !skipped.includes(i.id)), ...skipped.map((id) => rest.find((i) => i.id === id)).filter(Boolean)] as ReviewItem[];
+  }, [all, effectiveKind, skipped, front]);
   const current = queue[0];
-  const busy = answer.isPending || reviewAction.isPending || update.isPending || actions.isPending;
 
+  /** Tar ärendet ur kön. Returnerar false om det redan är besvarat. */
   const finish = React.useCallback((id: string) => {
+    if (answered.current.has(id)) return false;
+    answered.current.add(id);
     setDone((d) => new Set(d).add(id));
     setSkipped((s) => s.filter((x) => x !== id));
+    setFront((f) => f.filter((x) => x !== id));
+    setFailed((f) => {
+      if (!(id in f)) return f;
+      const n = { ...f };
+      delete n[id];
+      return n;
+    });
+    return true;
+  }, []);
+
+  /** Lägger tillbaka ärendet först i kön – efter ett fel från servern (med felet) eller vid Ångra. */
+  const restore = React.useCallback((id: string, error?: unknown) => {
+    answered.current.delete(id);
+    setDone((d) => {
+      const n = new Set(d);
+      n.delete(id);
+      return n;
+    });
+    setFront((f) => [id, ...f.filter((x) => x !== id)]);
+    if (error !== undefined) setFailed((f) => ({ ...f, [id]: errorMessage(error) }));
   }, []);
 
   const undoReopen = (id: string) => ({
@@ -218,11 +252,7 @@ export function ReviewView() {
       api
         .post(`/review/${id}/reopen`)
         .then(() => {
-          setDone((d) => {
-            const n = new Set(d);
-            n.delete(id);
-            return n;
-          });
+          restore(id);
           void invalidateJournalData(qc);
         })
         .catch((e) => toast.error(errorMessage(e))),
@@ -230,38 +260,41 @@ export function ReviewView() {
 
   const skip = React.useCallback(() => {
     if (!current) return;
+    setFront((f) => f.filter((x) => x !== current.id));
     setSkipped((s) => [...s.filter((x) => x !== current.id), current.id]);
   }, [current]);
 
   const decideCategory = React.useCallback(
     (c: "work" | "private") => {
-      if (!current?.trip) return;
       const item = current;
-      finish(item.id);
-      actions.setCategory(item.trip!.id, c).catch(() => setDone((d) => { const n = new Set(d); n.delete(item.id); return n; }));
+      if (!item?.trip || !finish(item.id)) return;
+      actions.setCategory(item.trip.id, c, { onUndone: () => restore(item.id) }).catch((e) => restore(item.id, e));
     },
-    [current, actions, finish],
+    [current, actions, finish, restore],
   );
 
   const approve = React.useCallback(() => {
-    if (!current?.trip || !hasProposal(current.trip)) return;
     const item = current;
-    finish(item.id);
-    actions.approve(item.trip!.id).catch(() => setDone((d) => { const n = new Set(d); n.delete(item.id); return n; }));
-  }, [current, actions, finish]);
+    if (!item?.trip || !hasProposal(item.trip) || !finish(item.id)) return;
+    // Förslaget som visades: har det hunnit räknas om sedan dess godkänns ingenting.
+    actions
+      .approve(item.trip.id, { expectedCategory: item.trip.category as CategoryCode, onUndone: () => restore(item.id) })
+      .catch((e) => restore(item.id, e));
+  }, [current, actions, finish, restore]);
 
   const savePurpose = (text: string) => {
-    if (!current?.trip) return;
     const item = current;
-    if (item.kind === "purpose") finish(item.id);
-    actions.setPurpose(item.trip!.id, text).catch(() => {});
+    if (!item?.trip) return;
+    if (item.kind === "purpose" && !finish(item.id)) return;
+    actions.setPurpose(item.trip.id, text).catch((e) => {
+      if (item.kind === "purpose") restore(item.id, e);
+    });
   };
 
   const answerMerge = React.useCallback(
     (accept: boolean) => {
-      if (!current || current.kind !== "merge") return;
       const item = current;
-      finish(item.id);
+      if (!item || item.kind !== "merge" || !finish(item.id)) return;
       answer.mutate(
         { itemId: item.id, accept },
         {
@@ -280,20 +313,19 @@ export function ReviewView() {
                   : undoReopen(item.id),
             }),
           onError: (e) => {
-            setDone((d) => { const n = new Set(d); n.delete(item.id); return n; });
+            restore(item.id, e);
             toast.error(errorMessage(e));
           },
         },
       );
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [current, answer, finish, qc],
+    [current, answer, finish, restore, qc],
   );
 
   const itemAction = (action: "dismiss" | "snooze" | "resolve") => {
-    if (!current) return;
     const item = current;
-    finish(item.id);
+    if (!item || !finish(item.id)) return;
     reviewAction.mutate(
       { itemId: item.id, action },
       {
@@ -302,7 +334,7 @@ export function ReviewView() {
             action: undoReopen(item.id),
           }),
         onError: (e) => {
-          setDone((d) => { const n = new Set(d); n.delete(item.id); return n; });
+          restore(item.id, e);
           toast.error(errorMessage(e));
         },
       },
@@ -312,7 +344,9 @@ export function ReviewView() {
   // Tangentbordsgenvägar: A, P, G, J, N, →
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.metaKey || e.ctrlKey || e.altKey || isTypingTarget(e.target) || !current || busy) return;
+      // Inget väntar på servern: tangenterna går att trycka i rask takt. En nedhållen tangent
+      // (upprepning) besvarar däremot inte flera ärenden.
+      if (e.metaKey || e.ctrlKey || e.altKey || e.repeat || isTypingTarget(e.target) || !current) return;
       if (document.querySelector("[role=dialog]")) return;
       const k = e.key.toLowerCase();
       if (current.kind === "merge") {
@@ -329,7 +363,7 @@ export function ReviewView() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [current, busy, answerMerge, decideCategory, approve, skip]);
+  }, [current, answerMerge, decideCategory, approve, skip]);
 
   const tabs = Object.keys(REVIEW_KIND_LABELS).filter((k) => counts[k]);
   const total = all.length;
@@ -392,7 +426,13 @@ export function ReviewView() {
           <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_320px]">
             <section aria-label="Aktuellt ärende" aria-live="polite">
               {current ? (
-                <Card key={current.id} className="animate-pop-in p-5 sm:p-6" data-testid="review-current">
+                <Card
+                  key={current.id}
+                  className="animate-pop-in p-5 sm:p-6"
+                  data-testid="review-current"
+                  data-item-id={current.id}
+                  data-trip-id={current.trip?.id}
+                >
                   <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
                     <Badge tone={current.kind === "merge" ? "accent" : current.kind === "category" ? "undecided" : "neutral"}>
                       {label(REVIEW_KIND_LABELS, current.kind)}
@@ -401,17 +441,24 @@ export function ReviewView() {
                       {queue.length > 1 ? `${formatNumber(queue.length - 1, 0)} till efter detta` : "Sista ärendet"}
                     </span>
                   </div>
+                  {failed[current.id] ? (
+                    <p role="alert" className="mb-4 flex items-start gap-2 rounded-lg border border-err/40 bg-err-soft p-3 text-sm text-err-ink" data-testid="review-failed">
+                      <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
+                      <span>
+                        Ditt svar kunde inte sparas: {failed[current.id]} Ärendet ligger kvar – svara igen.
+                      </span>
+                    </p>
+                  ) : null}
                   <h2 className="mb-1 text-lg font-semibold tracking-tight">{current.title}</h2>
                   {current.detail && current.kind !== "merge" ? <p className="mb-4 text-sm text-fg-muted">{current.detail}</p> : <div className="mb-4" />}
 
                   {current.kind === "merge" ? (
-                    <MergeQuestion item={current} onAnswer={answerMerge} busy={busy} />
+                    <MergeQuestion item={current} onAnswer={answerMerge} />
                   ) : current.trip && TRIP_DECISION_KINDS.has(current.kind) ? (
                     <TripDecision
                       key={current.trip.id}
                       item={current}
                       trip={current.trip}
-                      busy={busy}
                       onCategory={decideCategory}
                       onApprove={approve}
                       onPurpose={savePurpose}
@@ -419,7 +466,7 @@ export function ReviewView() {
                   ) : (
                     <div className="space-y-4">
                       {current.trip ? <TripSummary trip={current.trip} /> : null}
-                      <Button variant="primary" size="lg" onClick={() => itemAction("resolve")} disabled={busy}>
+                      <Button variant="primary" size="lg" onClick={(e) => once(e, () => itemAction("resolve"))}>
                         <Check aria-hidden /> Markera som hanterat
                       </Button>
                     </div>
@@ -429,10 +476,10 @@ export function ReviewView() {
                     <Button variant="ghost" size="sm" onClick={skip} disabled={queue.length < 2}>
                       Hoppa över <ArrowRight aria-hidden />
                     </Button>
-                    <Button variant="ghost" size="sm" onClick={() => itemAction("snooze")} disabled={busy}>
+                    <Button variant="ghost" size="sm" onClick={(e) => once(e, () => itemAction("snooze"))}>
                       <Clock aria-hidden /> Skjut upp
                     </Button>
-                    <Button variant="ghost" size="sm" onClick={() => itemAction("dismiss")} disabled={busy}>
+                    <Button variant="ghost" size="sm" onClick={(e) => once(e, () => itemAction("dismiss"))}>
                       <X aria-hidden /> Avfärda
                     </Button>
                     {current.trip ? (

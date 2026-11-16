@@ -28,6 +28,7 @@ tiden aldrig skrivs över av en äldre bild – och nästa klick väntar som mes
 from __future__ import annotations
 
 import logging
+import time
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -51,6 +52,8 @@ DEBOUNCE_SECONDS = 1.5
 CHUNK = 50
 # En omräkning som inte blivit klar på så här lång tid räknas som avbruten.
 LEASE = timedelta(minutes=15)
+# SQLite: paus mellan stegen, så att ett anrop som väntar på skrivlåset alltid kommer före.
+SQLITE_PAUSE_SECONDS = 0.05
 # Högst så många omräkningar i följd per jobb (nya beslut under tiden); resten tar ticken.
 MAX_ROUNDS = 5
 
@@ -194,7 +197,8 @@ def _step(vehicle_id: uuid.UUID, trip_ids: list[uuid.UUID] | None = None) -> Ite
     skrivs sedan ovanpå.
     """
     with session_scope() as db:
-        if db.get_bind().dialect.name == "sqlite":
+        sqlite = db.get_bind().dialect.name == "sqlite"
+        if sqlite:
             db.execute(
                 update(Vehicle)
                 .where(Vehicle.id == vehicle_id)
@@ -206,6 +210,10 @@ def _step(vehicle_id: uuid.UUID, trip_ids: list[uuid.UUID] | None = None) -> Ite
                 LogicalTrip.state == LogicalState.ACTIVE)
             db.execute(q.order_by(LogicalTrip.id).with_for_update()).all()
         yield db
+    if sqlite:
+        # SQLite: ett anrop som väntar på skrivlåset sover i upp till 100 ms åt gången mellan
+        # försöken. Utan paus skulle nästa steg hinna ta låset först varje gång.
+        time.sleep(SQLITE_PAUSE_SECONDS)
 
 
 def _active_ids(vehicle_id: uuid.UUID) -> list[uuid.UUID]:
