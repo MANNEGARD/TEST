@@ -543,6 +543,38 @@ try {
       while ((await api(page, "GET", "/review")).recompute_pending && Date.now() < until) await page.waitForTimeout(500);
       if ((await api(page, "GET", "/review")).recompute_pending) fail("granskning i rask takt", "omräkningen blev aldrig klar");
 
+      step("Granskning: ett svar som inte har sparats än syns som \"Sparar … svar\"");
+      const tripPatch = /\/api\/v1\/trips\/[^/?]+$/;
+      let release = () => {};
+      const gate = new Promise((resolve) => (release = resolve));
+      await page.route(tripPatch, async (route) => {
+        if (route.request().method() !== "PATCH") return route.fallback();
+        await gate; // servern "tänker" tills testet släpper svaret
+        return route.continue();
+      });
+      if (imported[6]) await api(page, "PATCH", `/trips/${imported[6].id}`, { category: "undecided" });
+      await page.goto(`${BASE}/review`);
+      await card.waitFor({ timeout: 15000 });
+      for (let n = 0; n < 30 && !(await page.getByTestId("decide-work").count()); n++) {
+        const item = await card.getAttribute("data-item-id");
+        await page.keyboard.press("ArrowRight");
+        await page.waitForFunction(
+          (prev) => document.querySelector('[data-testid="review-current"]')?.getAttribute("data-item-id") !== prev,
+          item,
+          { timeout: 1500 },
+        ).catch(() => {});
+      }
+      if (await page.getByTestId("decide-work").count()) {
+        await page.keyboard.press("p");
+        await page.getByTestId("review-saving").waitFor({ timeout: 3000 });
+        release();
+        await page.getByTestId("review-saving").waitFor({ state: "detached", timeout: 15000 });
+      } else {
+        release();
+        step("  (inget ärende att klassa i kön – hoppar över)");
+      }
+      await page.unroute(tripPatch);
+
       step("Granskning: ett förslag som hunnit ändras godkänns inte – ärendet läggs tillbaka med felet");
       await page.goto(`${BASE}/review`);
       await card.waitFor({ timeout: 15000 });

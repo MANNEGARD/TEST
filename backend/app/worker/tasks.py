@@ -14,7 +14,6 @@ from sqlalchemy.orm import Session
 from app import jobs
 from app.db import session_scope, utcnow
 from app.models import LogicalTrip, OAuthState, User, Vehicle, VehicleObservation
-from app.models.enums import LogicalState
 from app.services import audit
 
 logger = logging.getLogger(__name__)
@@ -106,17 +105,18 @@ def classify_pending(user_id: str, vehicle_id: str) -> dict[str, Any]:
         if provider is None:
             return {"skipped": True, "reason": "no_provider"}
         user_uuid, actor = vehicle.owner_user_id, audit.Actor("ai", "llm")
-        trip_ids = [t.id for t in seg.active_trips(db, vehicle.id)]
+        trip_ids = [t.id for t in seg.active_trips(db, vehicle.id) if engine.may_reassess(t)]
         db.commit()
         cache: dict[str, Any] = {}
         changed = 0
         for trip_id in trip_ids:
             # En kort transaktion per resa: skrivlåset (SQLite) och resans radlås (PostgreSQL)
             # hålls aldrig medan nästa resa väntar på AI-svaret, så ägarens nästa klick och
-            # omräkningen behöver inte vänta på AI-leverantören.
+            # omräkningen behöver inte vänta på AI-leverantören. Resan läses på nytt, så att ett
+            # beslut som ägaren hunnit fatta under tiden aldrig skrivs över.
             db.expire_all()
             trip = db.get(LogicalTrip, trip_id)
-            if trip is None or trip.state != LogicalState.ACTIVE:
+            if trip is None or not engine.may_reassess(trip):
                 continue
             result = engine.classify_trip(db, trip, user_id=user_uuid, actor=actor, provider=provider,
                                           settings_cache=cache)

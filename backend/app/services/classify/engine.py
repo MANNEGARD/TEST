@@ -611,6 +611,15 @@ def _current_classification(db: Session, trip_id: uuid.UUID) -> TripClassificati
     ).scalar_one_or_none()
 
 
+def may_reassess(trip: LogicalTrip) -> bool:
+    """Om ``classify_trip`` alls kan ändra något för resan: användarbeslut och källmärkt import
+    rörs inte (utom ett saknat syfte på en tjänsteresa)."""
+    if trip.state != LogicalState.ACTIVE or trip.source == TripSource.GAP_FILL:
+        return False
+    decided = trip.review_status in _DECIDED
+    return not decided or (trip.work_km > 0 and (not trip.purpose or not trip.purpose.strip()))
+
+
 def classify_trip(
     db: Session,
     trip: LogicalTrip,
@@ -623,11 +632,9 @@ def classify_trip(
     settings_cache: dict[str, Any] | None = None,
 ) -> Assessment | None:
     """Bedömer och sparar förslaget. Returnerar None om inget ändrats sedan senast."""
-    if trip.state != LogicalState.ACTIVE or trip.source == TripSource.GAP_FILL:
+    if not may_reassess(trip):
         return None
     decided = trip.review_status in _DECIDED
-    if decided and not (trip.work_km > 0 and (not trip.purpose or not trip.purpose.strip())):
-        return None  # användarbeslut och källmärkt import rörs inte
 
     cache = settings_cache if settings_cache is not None else {}
     active_provider = provider if use_llm else None
