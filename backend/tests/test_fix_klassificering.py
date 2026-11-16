@@ -408,7 +408,9 @@ def test_klas6_events_of_deselected_calendar_are_retired(db, user, trips):
 
 def test_klas6_deselecting_calendar_via_api_retires_events(client, db, user, trips):
     setup_places(trips)
-    t = trips.trip(HOME, OFFICE, km=30, minutes=30)
+    # Resan läggs nära dagens datum: webbens omklassning efter bytet av kalendrar ser bara de
+    # senaste 120 dygnen, och testet ska inte sluta fungera när BASE_TIME blir för gammal.
+    t = trips.trip(HOME, OFFICE, km=30, minutes=30, start_at=datetime.now(UTC) - timedelta(days=3))
     event(db, user, "Familjemiddag", t.ended_at + timedelta(minutes=5), calendar_id="family",
           location_name="Storstadskontoret")
     event(db, user, "Planering", t.ended_at + timedelta(days=1), calendar_id="work")

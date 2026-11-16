@@ -154,17 +154,23 @@ def test_callback_text_reply_and_invalid(anon_client, ha_token, db, user, vehicl
 
 
 def test_summary_endpoint(anon_client, ha_token, db, user, vehicle, trips):
+    from zoneinfo import ZoneInfo
+
     now = utcnow()
+    # Resan läggs alltid i innevarande månad räknat i svensk tid (som summeringen räknar),
+    # även de första timmarna i månaden och när det redan är ny månad i Sverige men inte i UTC.
+    local = now.astimezone(ZoneInfo("Europe/Stockholm"))
+    month_start = local.replace(day=1, hour=0, minute=0, second=0, microsecond=0).astimezone(now.tzinfo)
     trips.location(HOME, name="Hemmet", type="home")
-    trips.trip(HOME, OREBRO, km=42.0, start_at=now - timedelta(hours=2), category=Category.WORK)
+    trips.trip(HOME, OREBRO, km=42.0, start_at=max(now - timedelta(hours=2), month_start), minutes=1,
+               category=Category.WORK)
     db.commit()
     resp = anon_client.get(f"{API}/ha/summary", headers=bearer(ha_token))
     assert resp.status_code == 200, resp.text
     data = resp.json()
     assert {"review_count", "pending_questions", "work_km_month", "private_km_month", "last_sync_at",
             "last_trip"} <= data.keys()
-    if now.day > 1 or now.hour > 3:  # resan ligger i innevarande månad
-        assert data["work_km_month"] == 42.0
+    assert data["work_km_month"] == 42.0
     assert data["last_trip"]["route"] == "Hemmet → Örebro"
     assert "Drottninggatan" not in resp.text and "Hemvägen" not in resp.text
 
