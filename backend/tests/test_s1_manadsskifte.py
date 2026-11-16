@@ -446,8 +446,11 @@ def test_stale_mark_from_assumption_keeps_file_when_rows_are_unchanged(db, user,
 
 
 def test_month_close_route_run_with_force(client, db, user, vehicle, trips):
-    work(trips, at=datetime.now(UTC) - timedelta(hours=2))
-    current = datetime.now(UTC).astimezone(settings_svc.user_timezone(db, user.id))
+    now = datetime.now(UTC)
+    current = now.astimezone(settings_svc.user_timezone(db, user.id))
+    # Resan läggs i innevarande månad, även de första timmarna efter ett månadsskifte.
+    month_start = current.replace(day=1, hour=0, minute=0, second=0, microsecond=0).astimezone(UTC)
+    work(trips, at=max(now - timedelta(hours=2), month_start), minutes=1)
     key = f"{current.year:04d}-{current.month:02d}"
     db.commit()
     r = client.post(f"{API}/month-close/{key}/run", params={"force": "true"})

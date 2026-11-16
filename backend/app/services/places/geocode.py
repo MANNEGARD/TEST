@@ -277,6 +277,10 @@ def run_pending(now: datetime | None = None, limit: int = 5) -> dict[str, Any]:
             logger.warning("Adressuppslaget misslyckades: %s", exc)
             results[cell] = (GeocodeStatus.FAILED, None)
             continue
+        except Exception as exc:  # ett oväntat svar får inte fälla hela körningen
+            logger.warning("Adressuppslaget misslyckades oväntat (%s).", type(exc).__name__)
+            results[cell] = (GeocodeStatus.FAILED, None)
+            continue
         results[cell] = (GeocodeStatus.OK, addr) if addr is not None else (GeocodeStatus.NOT_FOUND, None)
 
     with session_scope() as db:
@@ -734,7 +738,7 @@ def reverse(
         raise GeocodeError(f"Geokodaren gick inte att nå ({type(exc).__name__}).") from exc
     try:
         data = json.loads(bytes(body).decode("utf-8"))
-    except (UnicodeDecodeError, ValueError) as exc:
+    except (UnicodeDecodeError, ValueError, RecursionError) as exc:
         raise GeocodeError("Geokodarens svar var inte giltig JSON.") from exc
     if not isinstance(data, dict):
         raise GeocodeError("Geokodarens svar hade fel form.")

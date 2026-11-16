@@ -93,7 +93,10 @@ export function AutomationSection({ data }: { data: SettingsPayload }) {
     ? VETO_CHOICES
     : [...VETO_CHOICES, { value: veto, title: `${veto} timmar`, description: "Ett värde som satts tidigare." }];
   const activeSince = data.settings.automation?.active_since;
-  const since = typeof activeSince === "string" && activeSince ? formatDateTime(activeSince) : null;
+  // Datumet gäller bara om det sparade läget redan är självgående: byter du tillbaka från
+  // "Jag godkänner allt själv" sätts en ny starttid när du sparar.
+  const savedSelfDriving = data.settings.automation?.mode === "self_driving";
+  const since = savedSelfDriving && typeof activeSince === "string" && activeSince ? formatDateTime(activeSince) : null;
 
   return (
     <section aria-labelledby="settings-automatik">

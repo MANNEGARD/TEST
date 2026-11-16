@@ -208,6 +208,9 @@ def estimate(
     if s is None or margin is None:
         return _none(earliest, latest)
     at = _clamp_round(s, E, L)
+    if method == "odometer_speed" and E is not None:
+        # Den verkliga starten kan ligga var som helst i [E, L]: marginalen täcker hela vägen.
+        margin = max(_minutes(at - E), _minutes(L - at))
     margin = round(margin, 1)
     basis.update(method=method, margin_min=margin)
     return StartEstimate(at=at, earliest=E, latest=L, method=method, margin_min=margin, basis=basis)

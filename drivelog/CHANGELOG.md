@@ -22,10 +22,13 @@ för den som vill använda den.
   *Inställningar → Sekretess*. Går uppslaget inte att göra står adressen tom – ingen adress
   hittas på.
 - **Antaget kundbesök.** Stannar du på en ny plats som kartan visar som företag eller industri
-  med namn, en vardag inom kontorstid (standard mån–fre 07–18), räknas resan som
-  *Kundbesök &lt;namn&gt;*. Du får en notis första gången per plats och kan säga emot under
+  med namn, en vardag inom kontorstid (standard mån–fre 07–18) som inte är en röd dag eller
+  afton, räknas resan som *Kundbesök &lt;namn&gt;*. Platser med arbetsgivarens namn eller inom
+  1 km från tjänstestället, och myndigheter, advokater, mäklare och liknande antas aldrig –
+  där får du en fråga. Du får en notis första gången per plats och kan säga emot under
   vetotiden (standard 1 dygn). Ett *Fel* gör att platsen aldrig antas igen och att övriga
-  antagna resor dit frågas om. Antagna rader märks inte i Excel, men du ser dem före
+  antagna resor dit frågas om, också i en månad som redan har skickats. Ändrar du kategori
+  eller ärende på en godkänd tjänsteresa frågas hemresan efter den om. Antagna rader märks inte i Excel, men du ser dem före
   nedladdningen.
 - **Starttid ur bilens egna uppgifter.** Räcker bilens avläsningar räknas starttiden fram och
   visas som *≈ 07:35 (±4 min)* i appen och *ca 07:35* i underlaget, med en fotnot. Annars är
@@ -41,7 +44,8 @@ för den som vill använda den.
 - **Månadens underlag av sig självt.** När månaden är slut och allt är besvarat skapas filen,
   och du får notisen *Oktober klart* med en länk som går att öppna i telefonen utan att logga
   in. Väntar något säger notisen vad. Ändras något efteråt skapas en ny fil (*Oktober
-  uppdaterad*), och den gamla länken slutar gälla. En saknad starttid stoppar inte underlaget
+  uppdaterad*), och den gamla länken slutar gälla. Blir månaden helt utan tjänsteresor
+  återkallas filen. En saknad starttid stoppar inte underlaget
   men står i notisen och på exportsidan. Exportsidan har ett nytt månadskort.
 - **Nedladdningslänken** gäller 7 dagar och högst 10 hämtningar. Den stängs med *Stäng alla
   nedladdningslänkar* på exportsidan och när du byter eller återställer lösenordet. Den som har
@@ -58,7 +62,8 @@ för den som vill använda den.
   resorna klassas om efter varje synk.
 - **Sammanslagning i självgående läge:** resor slås bara ihop vid ett kort stopp (högst
   15 minuter) vid en bekräftad tank- eller laddstation, och ingen sammanslagningsfråga ställs.
-  Ett stopp hemma eller vid en privat plats slås aldrig ihop för resor från bilen.
+  Ett stopp hemma eller vid en privat plats slås aldrig ihop för resor från bilen – det gäller
+  i båda lägena, liksom den uträknade starttiden.
 - Exportens varning *osäker datakvalitet* för varje resa från bilen är ersatt med konkreta
   kontroller: saknad starttid, saknad adress, möjliga missade resor och privat adress i
   underlaget.

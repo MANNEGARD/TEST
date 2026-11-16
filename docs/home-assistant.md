@@ -215,7 +215,7 @@ historik – och demofordonet ger aldrig riktiga notiser.
 
 - Det första giltiga svaret gäller. Dubbla knapptryck och omförsök ger
   *dubblett* utan ny ändring.
-- En fråga som gått ut (standard 72 timmar) ändrar ingenting om du svarar i
+- En fråga som gått ut (standard 48 timmar) ändrar ingenting om du svarar i
   notisen; du får en kort återkoppling och kan svara i webbappen i stället.
 - Besvaras eller avgörs frågan i webbappen tas notisen bort från telefonen
   (`clear_notification`).

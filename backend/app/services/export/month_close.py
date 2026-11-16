@@ -253,6 +253,15 @@ def _question_blockers(db: Session, vehicle: Vehicle, trips: list[LogicalTrip]) 
     for t in trips:
         if not common.is_gap_fill(t) and t.undecided_km > common.KM_EPS and t.id not in web:
             phone.setdefault(t.id, t)
+    # Självgående läge: telefonen frågar bara om resor från bilen efter uppgraderingen
+    # (notifier.ensure_open_questions). Övriga oavgjorda resor hänvisas till webben.
+    from app.services.ha import notifier
+
+    since = notifier._self_driving_since(db, vehicle.owner_user_id)
+    if since is not None:
+        for tid, t in list(phone.items()):
+            if not notifier.is_live_since(db, t, since):
+                web[tid] = phone.pop(tid)
     out: list[Blocker] = []
     only_phone = [t for tid, t in phone.items() if tid not in web]
     if only_phone:

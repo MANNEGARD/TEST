@@ -244,7 +244,7 @@ def test_stored_government_office_not_assumed(db, user, vehicle, trips, auto, lo
 
 
 # 6 · Demobilens hem öppnar inte för kartuppslag ----------------------------------------------
-def test_demo_home_does_not_unlock_geocoding(db, user, monkeypatch, no_dns):
+def test_demo_home_does_not_unlock_geocoding(db, user, monkeypatch, no_dns):  # noqa: F811
     from app.db import utcnow
     from app.models.enums import GeocodeStatus
     from app.services.places import geocode
@@ -273,13 +273,13 @@ def test_demo_home_does_not_unlock_geocoding(db, user, monkeypatch, no_dns):
 
 
 # 7 · Karttjänsten nere i två dygn: adressen slås upp när den är uppe igen ---------------------
-def test_geocoder_outage_then_recovery(db, user, vehicle, monkeypatch, no_dns):
+def test_geocoder_outage_then_recovery(db, user, vehicle, monkeypatch, no_dns):  # noqa: F811
     import httpx
 
     from app.db import utcnow
     from app.models.enums import GeocodeStatus
     from app.services.places import geocode
-    from tests.test_s1_adresser import B, Recorder, enable, home, pending_place, reload
+    from tests.test_s1_adresser import Recorder, enable, home, pending_place, reload
 
     enable(db, user)
     home(db, user)
@@ -306,7 +306,7 @@ def test_geocoder_outage_then_recovery(db, user, vehicle, monkeypatch, no_dns):
     assert len(ok.requests) == 1
 
 
-def test_gave_up_place_is_retried_on_next_visit(db, user, vehicle, monkeypatch, no_dns):
+def test_gave_up_place_is_retried_on_next_visit(db, user, vehicle, monkeypatch, no_dns):  # noqa: F811
     import httpx
 
     from app.db import utcnow
@@ -409,3 +409,54 @@ def test_live_trips_after_upgrade_stay_phone_questions(db, user, vehicle, trips,
                               now=datetime(2026, 10, 2, 10, tzinfo=UTC))
     q = [b for b in st.blockers if b.code == "open_questions"]
     assert len(q) == 1 and not q[0].web_only
+
+
+# 13 · Testet för månadsskiftets knapp går igenom även de första timmarna i månaden -------------
+@pytest.mark.parametrize("at", ["2026-12-01T00:20:00+01:00", "2026-12-01T01:59:00+01:00",
+                                "2026-11-21T22:30:00+01:00"])
+def test_month_close_route_force_early_in_month(at, client, db, user, vehicle, trips):
+    import time_machine
+
+    from tests import test_s1_manadsskifte as s1
+    from tests.conftest import TEST_PASSWORD
+
+    with time_machine.travel(datetime.fromisoformat(at), tick=True):
+        resp = client.post("/api/v1/auth/login", json={"email": user.email, "password": TEST_PASSWORD})
+        client.headers["X-CSRF-Token"] = resp.json()["csrf_token"]
+        s1.test_month_close_route_run_with_force(client, db, user, vehicle, trips)
+
+
+# 11 · Djupt nästlad JSON från geokodaren räknas som ett misslyckat uppslag -------------------------
+def test_deeply_nested_json_is_a_failed_lookup(db, user, monkeypatch, no_dns):  # noqa: F811
+    from app.db import utcnow
+    from app.models.enums import GeocodeStatus
+    from app.services.places import geocode
+    from tests.test_s1_adresser import Recorder, enable, home, pending_place, reload, use
+
+    enable(db, user)
+    home(db, user)
+    loc = pending_place(db, user)
+    db.commit()
+    rec = use(monkeypatch, Recorder(b"[" * 60000))
+    t = utcnow()
+    out = geocode.run_pending(now=t)
+    assert out.get("failed") == 1
+    assert reload(db, loc).geocode_status == GeocodeStatus.FAILED
+    cache = db.execute(select(M.GeocodeCache)).scalar_one()
+    assert cache.attempts == 1 and cache.next_attempt_at is not None
+    geocode.run_pending(now=t + timedelta(minutes=1))
+    assert len(rec.requests) == 1  # omförsöksschemat gäller
+
+
+# 10 · Felmarginalen för K2 täcker hela det möjliga fönstret ---------------------------------------
+def test_k2_margin_covers_window():
+    from app.services.trips import start_time
+    from tests.test_s1_starttid import m, view
+
+    # E 0, första ökningen 14 min (+0,5 km), sedan 120 km/h.
+    steps = [view(m(14), 100.5), view(m(19), 110.5)]
+    est = start_time.estimate(earliest=m(0), latest=m(15), start_odometer=100.0, ended_at=m(30), distance_km=20.0,
+                              steps=steps, end=view(m(30), 120.0))
+    assert est.method == "odometer_speed"
+    assert est.margin_min >= (est.at - m(0)).total_seconds() / 60
+    assert est.margin_min >= (m(14) - est.at).total_seconds() / 60

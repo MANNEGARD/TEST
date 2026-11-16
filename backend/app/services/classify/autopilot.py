@@ -1171,7 +1171,6 @@ def _on_assumed_correction(db: Session, trip: LogicalTrip, *, before: dict[str, 
     ``stale``, och filen ersätts när frågorna är besvarade. Byter ägaren bara ärende
     ("Annat ärende") återkallas inget.
     """
-    from app.services.trips import pipeline
 
     if trip.category == before.get("category"):
         return None

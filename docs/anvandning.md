@@ -98,7 +98,13 @@ En resa **antas** vara *Kundbesök <namn>* när allt detta stämmer: ingen av sp
 gäller och ingen egen regel eller historik har avgjort resan, målet är en ny obekräftad
 arbetsplats med namn i kartan (eller en oklar plats med namn som AI-leverantören bedömer som
 arbete, om en sådan är inkopplad), du har inte sagt *Fel* om platsen tidigare, och stoppet
-ligger inom kontorstid (standard mån–fre 07–18).
+ligger inom kontorstid (standard mån–fre 07–18) och inte på en röd dag eller afton (t.ex.
+juldagen, långfredag, midsommarafton).
+
+Inget antas heller – det blir en vanlig fråga – när platsens namn innehåller din arbetsgivares
+namn (*Inställningar → Allmänt*), när platsen ligger inom 1 km från ditt tjänsteställe, eller
+när kartan visar en myndighet, advokat, mäklare, försäkringsbolag, församling,
+arbetsförmedling, förening eller ett vineri/bryggeri. Där uträttar man ofta privata ärenden.
 
 - **Notis första gången per plats:** *Antaget: Kundbesök Exempel AB · tis 2,3 mil · Räknas som
   tjänst i morgon 14:05 om du inte säger emot*, med *Stämmer*, *Fel – privat* och *Annat
@@ -113,7 +119,10 @@ ligger inom kontorstid (standard mån–fre 07–18).
 - **Stämmer** eller ett företagsnamn gör platsen till en bekräftad kund med en egen regel
   (*Din regel för …*).
 - **Fel** gör att platsen aldrig antas igen. Övriga antagna resor dit öppnas och frågas om.
-  Ligger någon av dem i en månad som redan har skickats, skapas ett uppdaterat underlag.
+  Ligger någon av dem i en månad som redan har skickats, skapas ett uppdaterat underlag när
+  du har svarat.
+- **Hemresan följer utresan:** ändrar du kategori eller ärende på en godkänd tjänsteresa
+  frågas hemresan efter den (*Hemresa efter …*) om igen.
 - Antagna rader märks inte i Excel-filen. Du ser antalet i månadsnotisen och listan under
   *Se antagna* innan du laddar ned filen.
 
@@ -149,10 +158,10 @@ när det här inte längre gäller:
 | --- | --- |
 | Bilens sista avläsning efter månadsslutet | *Väntar på bilens sista uppgifter* |
 | Ny Volvo-inloggning | *Volvo behöver ny inloggning* |
-| Obesvarade frågor (även uppskjutna) | *N resor väntar på ditt svar* (fördelning av en blandad resa: *öppna webben*) |
+| Obesvarade frågor (även uppskjutna) | *N resor väntar på ditt svar* (fördelning av en blandad resa, eller resor från tiden före självgående läget som telefonen inte frågar om: *öppna webben*) |
 | Tjänsteresor som inte är godkända | *N tjänsteresor är inte godkända* |
 | Vetotid för antagna resor | *Väntar till … på ditt veto* |
-| Adresser som slås upp (högst 48 h) | *Adresser slås upp* |
+| Adresser som slås upp (högst 48 h) | *Adresser slås upp*, eller *Adressen kunde inte slås upp än – nytt försök görs varje dygn* om karttjänsten inte svarar |
 | Fel i kontrollen, t.ex. överlappande resor eller privat adress i underlaget | Felets rubrik |
 
 - **Klar:** underlaget skapas och notisen *Oktober klart* kommer, med *Öppna underlaget* och,
@@ -160,7 +169,8 @@ när det här inte längre gäller:
   starttid och hur många rader som är antagna.
 - **Väntar:** notisen *Oktober väntar …* säger vad som väntar. Den kommer första gången och
   sedan var 3:e dygn, högst 3 gånger. Månadens undanlagda frågor ställs om en gång.
-- **Inga tjänsteresor:** notisen *November: inga tjänsteresor*, ingen fil.
+- **Inga tjänsteresor:** notisen *November: inga tjänsteresor*, ingen fil. Rättar du efteråt
+  den sista tjänsteresan i en skickad månad till privat återkallas filen och länken slutar gälla.
 - **Ändrat efteråt:** ändrar du en resa i en månad som redan har skickats skapas en ny fil
   inom ett par timmar, med notisen *Oktober uppdaterad: +1 resa, +34 km*. Den gamla filen och dess
   länk slutar gälla. Ändras inget i underlaget skapas aldrig någon ny fil.
@@ -271,8 +281,10 @@ ingen fråga, men du kan fortfarande slå samman manuellt.
 **I självgående läge** slås resor från bilen bara ihop vid ett stopp på högst 15 minuter vid en
 bekräftad tank- eller laddstation. Allt annat blir separata resor, och ingen
 sammanslagningsfråga ställs. Ett stopp hemma eller vid en bekräftad privat plats slås aldrig
-ihop när någon av resorna kommer från bilen, i något läge. Ett mellanstopp hemma eller vid en
-privat plats skrivs alltid som "Privat stopp" i underlaget, aldrig med adress.
+ihop när någon av resorna kommer från bilen, i något läge (också i *Jag godkänner allt
+själv*). Ett mellanstopp hemma eller vid en privat plats på en resa från bilen skrivs som
+"Privat stopp" i underlaget, aldrig med adress; importerade och manuellt inlagda resor skrivs
+som förut.
 
 ## Granskning
 
