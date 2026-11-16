@@ -46,8 +46,6 @@ export interface ImportSummary {
   rows_duplicate: number;
   rows_duplicate_differs: number;
   rows_error: number;
-  /** Rader bland rows_new som ägaren har tagit bort tidigare och som kommer tillbaka (1.3.0). */
-  rows_restored?: number;
   distance_km: number;
   fuel_liters: number;
   energy_kwh: number;
@@ -58,8 +56,6 @@ export interface ImportSummary {
   notes: string[];
   // Tillkommer när importen har bekräftats (commit):
   imported?: number;
-  /** Antal av de importerade som ägaren hade tagit bort tidigare (1.3.0). */
-  restored?: number;
   auto_merged?: number;
   merge_questions?: number;
   /** Antal adresser i importen som kopplats till en plats (befintlig eller nyskapad). */

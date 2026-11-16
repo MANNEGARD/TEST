@@ -43,9 +43,7 @@ AUTOMATION_MODES = (MODE_SELF_DRIVING, MODE_MANUAL)
 DEFAULT_OFFICE_HOURS: dict[str, Any] = {"days": [0, 1, 2, 3, 4], "start": "07:00", "end": "18:00"}
 
 # Inställningar som bara appen själv sätter (inte via API:t).
-READ_ONLY: frozenset[tuple[str, str]] = frozenset(
-    {("automation", "active_since"), ("merge", "category_rules_since")}
-)
+READ_ONLY: frozenset[tuple[str, str]] = frozenset({("automation", "active_since")})
 
 # Skatteverkets schablonbelopp för tjänsteresor med egen bil, inkomståren 2025 och 2026.
 DEFAULT_RATE_PER_MIL = 25.0
@@ -66,18 +64,8 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "journal_scope": SCOPE_BUSINESS_ONLY,  # business_only | complete
     },
     "merge": {
-        # Kategoriregler (1.3.0): två tjänsteresor i rad följer tjänstegränserna, två privata
-        # privatgränserna; allt annat slås inte ihop automatiskt. False = det tidigare
-        # regelverket (samma gränser för alla, i självgående läge bara tankstopp). Befintliga
-        # installationer får False av migreringen 0003 tills ägaren sparar sektionen.
-        "by_category": True,
-        # Tidpunkt (ISO-8601) då kategorireglerna började gälla. Resor som fanns före den
-        # slås aldrig ihop av reglerna. Sätts av update_section, inte av ägaren. Tom = ingen gräns.
-        "category_rules_since": "",
-        "auto_max_minutes": 15,  # Tjänsteresor (och det tidigare regelverket): automatiskt
-        "ask_max_minutes": 60,  # Tjänsteresor (och det tidigare regelverket): fråga
-        "private_auto_max_minutes": 15,  # Privata resor: automatiskt
-        "private_ask_max_minutes": 15,  # Privata resor: fråga (15 = ingen fråga som standard)
+        "auto_max_minutes": 15,  # Regel A: ≤ 15 min → automatisk sammanslagning
+        "ask_max_minutes": 60,  # Regel B: > 15 och ≤ 60 min → fråga användaren
         "odometer_tolerance_km": 2.0,  # heltalsavrundning i mätarställning
         "enabled": True,
         # Verifierade importerade resor slås inte ihop automatiskt (Volvos app kan
@@ -174,8 +162,6 @@ _BOUNDS: dict[tuple[str, str], tuple[float, float]] = {
     ("automation", "assumption_veto_hours"): (0, 168),
     ("merge", "auto_max_minutes"): (0, 240),
     ("merge", "ask_max_minutes"): (0, 24 * 60),
-    ("merge", "private_auto_max_minutes"): (0, 240),
-    ("merge", "private_ask_max_minutes"): (0, 24 * 60),
     ("merge", "odometer_tolerance_km"): (0, 20),
     ("ai", "auto_threshold"): (0.5, 1.0),
     ("ai", "review_threshold"): (0.0, 1.0),
@@ -374,8 +360,6 @@ def _validate(section: str, values: dict[str, Any]) -> None:
             raise SettingsError("automation.assumption_veto_hours måste vara ett helt antal timmar.")
         if values.get("active_since"):
             _parse_iso(values["active_since"], "automation.active_since")
-    if section == "merge" and values.get("category_rules_since"):
-        _parse_iso(values["category_rules_since"], "merge.category_rules_since")
     if section == "import" and values.get("default_coverage") not in (None, "selection", "complete", "unknown"):
         raise SettingsError("import.default_coverage måste vara selection, complete eller unknown.")
 
@@ -448,23 +432,11 @@ def update_section(
     _validate(section, values)
     row = db.execute(select(Setting).where(Setting.user_id == user_id, Setting.key == section)).scalar_one_or_none()
     current = dict(row.value) if row and isinstance(row.value, dict) else {}
-    was_by_category = bool({**DEFAULTS.get(section, {}), **current}.get("by_category", False))
     current.update(values)
     if section == "merge":
         merged = {**DEFAULTS["merge"], **current}
         if merged["ask_max_minutes"] < merged["auto_max_minutes"]:
             raise SettingsError("Gränsen för fråga måste vara minst lika stor som gränsen för automatisk sammanslagning.")
-        if merged["private_ask_max_minutes"] < merged["private_auto_max_minutes"]:
-            raise SettingsError(
-                "Gränsen för fråga för privata resor måste vara minst lika stor som gränsen för "
-                "automatisk sammanslagning."
-            )
-        if merged["by_category"] and not was_by_category and "category_rules_since" not in values:
-            # Övergången från det tidigare regelverket: resor som redan finns slås inte ihop
-            # och ger inga frågor i efterhand (byggkontraktet 2.A.2 punkt 5).
-            from app.db import utcnow
-
-            current["category_rules_since"] = utcnow().isoformat()
     if section == "ai":
         merged = {**DEFAULTS["ai"], **current}
         if merged["review_threshold"] > merged["auto_threshold"]:

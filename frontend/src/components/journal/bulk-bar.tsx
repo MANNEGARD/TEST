@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { BadgeCheck, Briefcase, Download, Home, Merge, PenLine, Star, Trash2, X } from "lucide-react";
+import { BadgeCheck, Briefcase, Download, Home, Merge, PenLine, Star, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -14,8 +14,6 @@ export interface BulkHandlers {
   onFavorite: () => void;
   onMerge: () => void;
   onExport: () => void;
-  /** Ta bort valda importerade och manuellt inlagda resor (öppnar en bekräftelse). */
-  onDelete?: () => void;
   onClear: () => void;
 }
 
@@ -80,11 +78,6 @@ export function BulkBar({ count, busy, handlers }: { count: number; busy?: boole
       <Button size="sm" variant="secondary" onClick={handlers.onExport}>
         <Download /> Exportera valda
       </Button>
-      {handlers.onDelete ? (
-        <Button size="sm" variant="secondary" onClick={handlers.onDelete} disabled={busy} data-testid="bulk-delete">
-          <Trash2 className="text-err-ink" /> Ta bort
-        </Button>
-      ) : null}
       <Button size="sm" variant="ghost" onClick={handlers.onClear} className="ml-auto">
         <X /> Avmarkera
       </Button>

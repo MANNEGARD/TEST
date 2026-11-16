@@ -4,15 +4,9 @@
 * Regel B – stillestånd > A-gränsen och ≤ ``ask_max_minutes`` (standard 60): fråga.
 * Regel C – längre stillestånd: endast manuell sammanslagning.
 
-Två regelverk (``merge.by_category``):
-
-* Kategoriregler (1.3.0, standard): bara två avgjorda resor av samma kategori slås ihop,
-  tjänsteresor med tjänstegränserna och privata med privatgränserna. Stopp hemma eller vid
-  en bekräftad privat plats slås aldrig ihop. Samma i manuellt och självgående läge.
-* Det tidigare regelverket (befintliga installationer tills ägaren sparar sektionen):
-  ett stopp hemma eller vid en bekräftad privat plats slås aldrig ihop när någon av resorna
-  är en live-resa. I självgående läge slås live-resor bara ihop vid ett kort stopp vid en
-  bekräftad tank- eller laddstation, och inga frågor ställs.
+Vakten: ett stopp hemma eller vid en bekräftad privat plats slås aldrig ihop när någon
+av resorna är en live-resa. I självgående läge slås live-resor bara ihop vid ett kort
+stopp vid en bekräftad tank- eller laddstation, och inga frågor ställs.
 
 Originalresorna (RawTrip) ändras aldrig. En sammanslagning skapar en ny LogicalTrip
 vars segment pekar på samma RawTrips; källresorna markeras ``merged`` och kan
@@ -784,10 +778,6 @@ def evaluate_vehicle(
     result: dict[str, Any] = {"auto_merged": 0, "questions": [], "overlaps": 0, "merged_trip_ids": []}
     if not merge_settings.get("enabled", True):
         return result
-    if uses_category_rules(merge_settings):
-        return _evaluate_by_category(
-            db, vehicle_id=vehicle_id, merge_settings=merge_settings, actor=actor, apply_auto=apply_auto, result=result
-        )
 
     from app.services.classify import autopilot
 
@@ -863,152 +853,6 @@ def evaluate_vehicle(
                     "minutes_high": gap.minutes_high,
                     "exact": gap.exact,
                     "rule": "A" if verdict == "auto" else "B",
-                },
-            )
-            if created:
-                result["questions"].append(item)
-        i += 1
-    return result
-
-
-# ----------------------------------------------------------------------- kategoriregler (1.3.0)
-
-_DECIDED_STATUSES = (ReviewStatus.APPROVED, ReviewStatus.IMPORTED)
-_CATEGORY_TITLES = {
-    Category.WORK: "Slå samman två tjänsteresor?",
-    Category.PRIVATE: "Slå samman två privata resor?",
-}
-
-
-def uses_category_rules(merge_settings: dict[str, Any]) -> bool:
-    """Gäller kategorireglerna (``merge.by_category``)? Annars det tidigare regelverket."""
-    return bool(merge_settings.get("by_category", False))
-
-
-def category_limits(merge_settings: dict[str, Any], category: str) -> tuple[float, float]:
-    """(automatiskt, fråga) i minuter för två avgjorda resor av samma kategori."""
-    if category == Category.PRIVATE:
-        return float(merge_settings["private_auto_max_minutes"]), float(merge_settings["private_ask_max_minutes"])
-    return float(merge_settings["auto_max_minutes"]), float(merge_settings["ask_max_minutes"])
-
-
-def decided_category(trip: LogicalTrip) -> str | None:
-    """Resans kategori när den är avgjord av ägaren, en regel eller importen – annars None.
-
-    Ett antagande med vetotid (``assumed``) är inget beslut: slogs det ihop med ägarens egen
-    resa skulle hela resan bli antagen (``_set_approval``), och ett "Fel" öppna båda.
-    """
-    if trip.review_status not in _DECIDED_STATUSES:
-        return None
-    if trip.category not in (Category.WORK, Category.PRIVATE):
-        return None
-    if trip.has_mixed_categories or trip.undecided_km > seg.KM_EPS:
-        return None
-    if trip.approval_source == ApprovalSource.ASSUMED:
-        return None
-    return trip.category
-
-
-def _rules_since(merge_settings: dict[str, Any]) -> Any:
-    from datetime import datetime
-
-    value = merge_settings.get("category_rules_since")
-    if not isinstance(value, str) or not value:
-        return None
-    try:
-        parsed = datetime.fromisoformat(value)
-    except ValueError:
-        return None
-    return parsed if parsed.tzinfo is not None else None
-
-
-def _created_since(trip: LogicalTrip, since: Any) -> bool:
-    return any(r.created_at is not None and r.created_at >= since for r in seg.ordered_raws(trip))
-
-
-def _evaluate_by_category(
-    db: Session,
-    *,
-    vehicle_id: uuid.UUID,
-    merge_settings: dict[str, Any],
-    actor: Actor,
-    apply_auto: bool,
-    result: dict[str, Any],
-) -> dict[str, Any]:
-    """Kategoriregler: två avgjorda tjänsteresor i rad följer tjänstegränserna, två privata
-    privatgränserna. Allt annat (tjänst + privat, något oavgjort eller antaget) slås inte ihop
-    automatiskt och ger ingen fråga. Stopp hemma eller vid en bekräftad privat plats slås
-    aldrig ihop, oavsett källa. Gäller lika i manuellt och självgående läge.
-    """
-    tol = float(merge_settings["odometer_tolerance_km"])
-    since = _rules_since(merge_settings)
-    trips = seg.active_trips(db, vehicle_id)
-    i = 0
-    while i < len(trips) - 1:
-        a, b = trips[i], trips[i + 1]
-        if not (_mergeable(a) and _mergeable(b)) or a.sort_time is None or b.sort_time is None:
-            i += 1
-            continue
-        prev_raw, next_raw = _edge_raws(a)[1], _edge_raws(b)[0]
-        gap = stop_gap(prev_raw, next_raw)
-        if decide(gap, auto_max=0, ask_max=0, odometer_tolerance=tol) == "overlap":
-            _, created = review.upsert(
-                db,
-                vehicle_id=vehicle_id,
-                kind=ReviewKind.ANOMALY,
-                dedupe_key=f"overlap:{prev_raw.id}:{next_raw.id}",
-                title="Överlappande resor",
-                detail="Två resor överlappar varandra i tid eller mätarställning. Kontrollera uppgifterna.",
-                logical_trip_id=b.id,
-                data={"first_trip_id": str(a.id), "second_trip_id": str(b.id), "type": "overlap"},
-            )
-            result["overlaps"] += 1 if created else 0
-            i += 1
-            continue
-
-        kind = stop_kind(db.get(KnownLocation, prev_raw.end_location_id) if prev_raw.end_location_id else None)
-        if kind in ("home", "private"):
-            i += 1  # stopp hemma eller vid en privat plats slås aldrig ihop
-            continue
-        cat_a, cat_b = decided_category(a), decided_category(b)
-        if cat_a is None or cat_a != cat_b:
-            i += 1  # inte avgjorda, eller tjänst och privat: ingen automatik och ingen fråga
-            continue
-        if since is not None and not (_created_since(a, since) or _created_since(b, since)):
-            i += 1  # resor från före kategorireglerna slås inte ihop i efterhand
-            continue
-
-        auto_max, ask_max = category_limits(merge_settings, cat_a)
-        verdict = decide(gap, auto_max=auto_max, ask_max=ask_max, odometer_tolerance=tol)
-        decision = _decision_for(db, prev_raw.id, next_raw.id)
-        pending = decision is None and _open_question(db, vehicle_id, prev_raw.id, next_raw.id)
-        if verdict == "auto" and apply_auto and not pending and (decision is None or decision.decision == "merged"):
-            merged = merge_trips(db, [a, b], trigger="rule_a", actor=actor, odometer_tolerance=tol)
-            merged = seg.load_trip(db, merged.id) or merged
-            trips[i : i + 2] = [merged]
-            result["auto_merged"] += 1
-            result["merged_trip_ids"].append(str(merged.id))
-            continue  # jämför den sammanslagna resan med nästa (kedjor av korta stopp)
-
-        if verdict in ("ask", "auto") and decision is None:
-            item, created = review.upsert(
-                db,
-                vehicle_id=vehicle_id,
-                kind=ReviewKind.MERGE,
-                dedupe_key=review.merge_key(prev_raw.id, next_raw.id),
-                title=f"{_CATEGORY_TITLES[cat_a]} Stillestånd: {gap.label}.",
-                detail=_merge_detail(a, b),
-                logical_trip_id=b.id,
-                data={
-                    "first_trip_id": str(a.id),
-                    "second_trip_id": str(b.id),
-                    "first_raw_trip_id": str(prev_raw.id),
-                    "second_raw_trip_id": str(next_raw.id),
-                    "minutes_low": gap.minutes_low,
-                    "minutes_high": gap.minutes_high,
-                    "exact": gap.exact,
-                    "rule": "A" if verdict == "auto" else "B",
-                    "category": cat_a,
                 },
             )
             if created:

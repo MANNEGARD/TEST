@@ -21,10 +21,8 @@ import { useTripActions } from "@/components/trips/use-trip-actions";
 import { periodToRange } from "@/lib/period";
 import { EXPORT_SELECTION_KEY } from "@/components/export/export-period";
 import { useJourneys, useTrips, type TripListParams } from "@/lib/queries/trips";
-import type { Trip } from "@/lib/types";
 import { readStorage, writeStorage } from "@/lib/utils";
 import { BulkBar } from "./bulk-bar";
-import { BulkDeleteDialog } from "./bulk-delete-dialog";
 import { ColumnPicker } from "./column-picker";
 import { ActiveFilterChips, FilterButton } from "./filter-panel";
 import { activeFilterCount, EMPTY_FILTERS, type JournalFilters } from "./filters";
@@ -68,9 +66,6 @@ export function JournalView() {
   const [page, setPage] = React.useState(1);
   const [selected, setSelected] = React.useState<Set<string>>(new Set());
   const [visible, setVisible] = React.useState<string[]>(() => readStorage("local", COLS_KEY, DEFAULT_VISIBLE));
-  // Resorna bakom markeringen (även från andra sidor) – borttagningen behöver deras källa och sträcka.
-  const [known, setKnown] = React.useState<Record<string, Trip>>({});
-  const [deleting, setDeleting] = React.useState(false);
 
   // ⌘K-sökningen navigerar hit med ?q= – följ URL:en när den ändras utifrån.
   const urlQ = params.get("q") ?? "";
@@ -144,11 +139,7 @@ export function JournalView() {
     setPage(1);
   };
 
-  const onSelect = (ids: string[], on: boolean) => {
-    if (on && trips.data) {
-      const found = trips.data.items.filter((t) => ids.includes(t.id));
-      if (found.length) setKnown((prev) => ({ ...prev, ...Object.fromEntries(found.map((t) => [t.id, t])) }));
-    }
+  const onSelect = (ids: string[], on: boolean) =>
     setSelected((prev) => {
       const next = new Set(prev);
       for (const id of ids) {
@@ -157,10 +148,8 @@ export function JournalView() {
       }
       return next;
     });
-  };
 
   const ids = [...selected];
-  const selectedTrips = ids.map((id) => trips.data?.items.find((t) => t.id === id) ?? known[id]).filter((t): t is Trip => !!t);
   const data = trips.data;
   const quick = quickOf(filters);
   const hasFilters = activeFilterCount(filters) > 0 || !!filters.q;
@@ -254,7 +243,6 @@ export function JournalView() {
               writeStorage("session", EXPORT_SELECTION_KEY, ids);
               router.push("/export?selected=1");
             },
-            onDelete: () => setDeleting(true),
             onClear: () => setSelected(new Set()),
           }}
         />
@@ -318,7 +306,6 @@ export function JournalView() {
         )}
       </Card>
       {mergeFlow.dialog}
-      <BulkDeleteDialog trips={selectedTrips} open={deleting} onOpenChange={setDeleting} onDone={() => setSelected(new Set())} />
     </>
   );
 }

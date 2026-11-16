@@ -265,34 +265,3 @@ export function zonedToISO(dateISO: string, time: string): string {
   utc = guess - tzOffsetMs(utc); // korrigera över sommartidsskifte
   return new Date(utc).toISOString();
 }
-
-// ----------------------------------------------------------------------------- korta datum i löptext
-
-/** "mån 16/11" – veckodag och dag/månad, för tidsspann i löptext. */
-export function formatWeekdayDayMonth(value: DateInput): string {
-  const d = toDate(value);
-  if (!d) return MISSING;
-  const p = parts(d, { month: "numeric", day: "numeric" });
-  return `${formatWeekday(d, true)} ${Number(p.day)}/${Number(p.month)}`;
-}
-
-/** "tis 4 nov" (med veckodag) eller "4 nov". */
-export function formatDayMonth(value: DateInput, withWeekday = true): string {
-  const d = toDate(value);
-  if (!d) return MISSING;
-  const p = parts(d, { month: "numeric", day: "numeric" });
-  const date = `${Number(p.day)} ${monthName(Number(p.month), true)}`;
-  return withWeekday ? `${formatWeekday(d, true)} ${date}` : date;
-}
-
-/**
- * Tidsspann i löptext: samma lokala dag → ["mån 16/11 08:10", "12:40"],
- * olika dagar → ["mån 16/11 22:10", "tis 17/11 06:40"].
- */
-export function formatSpanParts(from: DateInput, to: DateInput): [string, string] {
-  const a = toDate(from);
-  const b = toDate(to);
-  if (!a || !b) return [MISSING, MISSING];
-  const start = `${formatWeekdayDayMonth(a)} ${formatTime(a)}`;
-  return formatDate(a) === formatDate(b) ? [start, formatTime(b)] : [start, `${formatWeekdayDayMonth(b)} ${formatTime(b)}`];
-}

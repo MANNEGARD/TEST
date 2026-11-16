@@ -1,5 +1,4 @@
 import { ArrowDown } from "lucide-react";
-import { CollectionGapNote } from "@/components/trip-detail/collection-gap-note";
 import { CategoryPill } from "@/components/trips/category-pill";
 import { TripTime } from "@/components/trips/trip-time";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -103,7 +102,6 @@ export function QuickTripCard({
           ) : null}
         </div>
       ) : null}
-      {full ? <CollectionGapNote trip={full} compact className="mt-4 p-3" /> : null}
     </div>
   );
 }

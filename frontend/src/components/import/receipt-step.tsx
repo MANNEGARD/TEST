@@ -63,7 +63,6 @@ export function ReceiptStep({
   const newPlaces = result.locations_new;
   const places = newPlaces ?? result.locations_created ?? 0;
   const superseded = result.reconciled_api_trips?.superseded ?? 0;
-  const restored = result.restored ?? 0;
 
   return (
     <section aria-labelledby="import-receipt-title">
@@ -81,9 +80,7 @@ export function ReceiptStep({
                 {result.already_committed
                   ? "Importen var redan bekräftad – inget har lagts till två gånger."
                   : imported > 0
-                    ? `${periodLabel(result.period_start, result.period_end)} · ${milNumber(result.distance_km)} mil. Resorna finns nu i körjournalen${
-                        restored > 0 ? `, varav ${formatNumber(restored, 0)} som du hade tagit bort` : ""
-                      }.`
+                    ? `${periodLabel(result.period_start, result.period_end)} · ${milNumber(result.distance_km)} mil. Resorna finns nu i körjournalen.`
                     : "Inga nya resor tillkom – de fanns redan i körjournalen när importen bekräftades."}
               </p>
             </div>

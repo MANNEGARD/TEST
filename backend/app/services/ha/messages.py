@@ -62,27 +62,6 @@ def _q_path(public_id: str) -> str:
     return f"/m/q/{public_id}"
 
 
-def _trip_tz(db: Session, trip: LogicalTrip) -> tzinfo:
-    from app.models import Vehicle
-    from app.services import settings as settings_svc
-
-    vehicle = db.get(Vehicle, trip.vehicle_id)
-    if vehicle is None:
-        from zoneinfo import ZoneInfo
-
-        return ZoneInfo(settings_svc.default_timezone())
-    return settings_svc.user_timezone(db, vehicle.owner_user_id)
-
-
-def collection_gap_short(trip: LogicalTrip, tz: tzinfo) -> str | None:
-    """Kort varning om ett uppehåll i hämtningen före resan, eller None (byggkontraktet 3.A.3)."""
-    if "collection_gap" not in set(trip.quality_flags or []):
-        return None
-    from app.services.volvo import detection
-
-    return detection.collection_gap_text(detection.collection_gap_of(trip), tz, form="short")
-
-
 def classify(db: Session, trip: LogicalTrip, public_id: str, *, hide_locations: bool) -> dict[str, Any]:
     origin, dest = trip_labels(db, trip)
     route = f"{origin} → {dest}"
@@ -90,9 +69,6 @@ def classify(db: Session, trip: LogicalTrip, public_id: str, *, hide_locations: 
     question = "Var detta arbete eller privat?"
     if trip.category in (Category.WORK, Category.PRIVATE):
         question += f" Förslag: {'Arbete' if trip.category == Category.WORK else 'Privat'}."
-    gap_text = collection_gap_short(trip, _trip_tz(db, trip))
-    if gap_text:
-        question += f" {gap_text}"
     detail = f"Ny resa: {route}. {distance}. {question}"
     message = f"Ny resa: {distance}. {question}" if hide_locations else detail
     return {
@@ -322,11 +298,7 @@ def classify_v2(
     origin, dest = place_labels(db, trip)
     day, distance = fmt_day(trip.ended_at or trip.sort_time, tz), fmt_mil(trip.distance_km)
     multi = is_multi(trip)
-    gap_text = collection_gap_short(trip, tz)
-    if gap_text:
-        tail = f"Tjänst eller privat? {gap_text}"
-    else:
-        tail = "Tjänst eller privat?" + (f" {MULTI_TEXT}" if multi else "")
+    tail = "Tjänst eller privat?" + (f" {MULTI_TEXT}" if multi else "")
     detail = f"{day} {fmt_trip_times(trip, tz)} · {origin} → {dest} · {distance}. {tail}"
     message = f"{day} · {distance}. {tail}" if hide_locations else detail
     acts: list[dict[str, Any]] = []
