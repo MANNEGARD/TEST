@@ -1,7 +1,7 @@
 "use client";
 
 import { keepPreviousData, useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { api, type Query } from "../api";
+import { api, DECISION_TIMEOUT_MS, type Query } from "../api";
 import type { BulkUpdate, CategoryCode, ManualTrip, Trip, TripDetail, TripList, TripUpdate } from "../types";
 import { useVehicle } from "../vehicle";
 import { invalidateJournalData, qk } from "./keys";
@@ -97,7 +97,8 @@ export function restoreSnapshot(qc: QueryClient, snapshot: Snapshot | undefined)
 export function useUpdateTrip() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, patch }: { id: string; patch: TripUpdate }) => api.patch<Trip>(`/trips/${id}`, patch),
+    mutationFn: ({ id, patch }: { id: string; patch: TripUpdate }) =>
+      api.patch<Trip>(`/trips/${id}`, patch, { timeoutMs: DECISION_TIMEOUT_MS }),
     onMutate: async ({ id, patch }) => {
       await qc.cancelQueries({ queryKey: qk.trips.all });
       return { snapshot: optimisticTripPatch(qc, [id], patch) };
@@ -110,9 +111,13 @@ export function useUpdateTrip() {
 export function useApproveTrip() {
   const qc = useQueryClient();
   return useMutation({
-    /** `expectedCategory`: förslaget som ägaren såg. Har det hunnit ändras svarar servern 409. */
-    mutationFn: ({ id, expectedCategory }: { id: string; expectedCategory?: CategoryCode }) =>
-      api.post<Trip>(`/trips/${id}/approve`, expectedCategory ? { expected_category: expectedCategory } : undefined),
+    /** `expected`: förslaget (kategori och syfte) som ägaren såg. Har det hunnit ändras svarar servern 409. */
+    mutationFn: ({ id, expected }: { id: string; expected?: { category: CategoryCode; purpose: string | null } }) =>
+      api.post<Trip>(
+        `/trips/${id}/approve`,
+        expected ? { expected_category: expected.category, expected_purpose: expected.purpose } : undefined,
+        { timeoutMs: DECISION_TIMEOUT_MS },
+      ),
     onMutate: async ({ id }) => {
       await qc.cancelQueries({ queryKey: qk.trips.all });
       return { snapshot: optimisticTripPatch(qc, [id], { approve: true }) };

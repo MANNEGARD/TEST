@@ -35,7 +35,7 @@ import { HIDDEN_REVIEW_KINDS, useAnswerMerge, useReviewAction, useReviewItems } 
 import { useTripDetail } from "@/lib/queries/trips";
 import type { CategoryCode, ReviewItem, Trip } from "@/lib/types";
 import { cn, isTypingTarget } from "@/lib/utils";
-import { useQueryClient } from "@tanstack/react-query";
+import { useIsMutating, useQueryClient } from "@tanstack/react-query";
 import { TripSummary } from "./trip-summary";
 
 /** Ärendetyper där man klassar resan direkt i snabbflödet. */
@@ -202,6 +202,18 @@ export function ReviewView() {
   // Samma ärende besvaras aldrig två gånger, även om två tangenttryck hinner komma innan
   // nästa ärende visas (svaret binds till ärendet som visades när det gavs).
   const answered = React.useRef(new Set<string>());
+  // Svar som är skickade men inte sparade än: syns på sidan, och ägaren varnas om fliken
+  // stängs innan de har kommit fram.
+  const saving = useIsMutating();
+  React.useEffect(() => {
+    if (!saving) return;
+    const warn = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [saving]);
 
   // Kön hålls stilla medan ägaren svarar: listan hämtas om efter varje svar och medan
   // förslagen räknas om, men nya ärenden läggs sist (i den ordning de först syntes) och
@@ -317,7 +329,10 @@ export function ReviewView() {
     if (!item?.trip || !hasProposal(item.trip) || !finish(item)) return;
     // Förslaget som visades: har det hunnit räknas om sedan dess godkänns ingenting.
     actions
-      .approve(item.trip.id, { expectedCategory: item.trip.category as CategoryCode, onUndone: () => restore(item) })
+      .approve(item.trip.id, {
+        expected: { category: item.trip.category as CategoryCode, purpose: item.trip.purpose ?? null },
+        onUndone: () => restore(item),
+      })
       .catch((e) => restore(item, e));
   }, [current, actions, finish, restore]);
 
@@ -530,6 +545,11 @@ export function ReviewView() {
                     ) : null}
                   </div>
                 </Card>
+              ) : null}
+              {saving ? (
+                <p className="mt-3 text-xs text-fg-muted" role="status" data-testid="review-saving">
+                  Sparar {formatNumber(saving, 0)} svar …
+                </p>
               ) : null}
               <p className="mt-3 hidden flex-wrap items-center gap-x-4 gap-y-1 text-xs text-fg-muted sm:flex" aria-label="Kortkommandon">
                 <span className="inline-flex items-center gap-1.5"><Kbd>A</Kbd> Arbete</span>

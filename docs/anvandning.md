@@ -373,14 +373,18 @@ taget, även med tangentbordet (A = arbete, P = privat, G = godkänn).
 Nästa ärende visas så fort du har svarat – du behöver inte vänta på servern och kan svara i
 rask takt. Ett svar påverkar ofta förslagen för andra resor (till exempel andra resor till
 samma plats). De räknas om i bakgrunden en stund efter ditt senaste svar, och listan uppdateras
-av sig själv när det är klart. Går ett svar inte att spara visas felet på ärendet, som läggs
-tillbaka först i kön. Har förslaget hunnit ändras när du trycker *Godkänn förslag* godkänns
-ingenting; du ser i stället det nya förslaget.
+av sig själv när det är klart. Medan svar skickas står "Sparar … svar" under ärendet, och
+webbläsaren varnar om du stänger fliken innan de har kommit fram. Går ett svar inte att spara
+(eller svarar servern inte inom 20 sekunder) visas felet på ärendet, som läggs tillbaka först i
+kön. Har förslaget (kategori eller syfte) hunnit ändras när du trycker *Godkänn förslag*
+godkänns ingenting; du ser i stället det nya förslaget.
 
 Bilen och Volvos körjournal anger mätarställningen i hela kilometer. Två resor i rad som skiljer
-sig upp till 2 km räknas därför som avrundning: det blir varken ärende ("Motstridiga
-mätarställningar", "Överlappande resor") eller lucka, oavsett toleransen under *Inställningar →
-Sammanslagning av resor*. Ett ärende som inte längre gäller stängs av sig självt.
+sig 1 km (glapp eller överlapp) räknas därför som avrundning: det blir varken ärende
+("Motstridiga mätarställningar", "Överlappande resor") eller lucka, oavsett toleransen under
+*Inställningar → Sammanslagning av resor*. 2 km eller mer är mer än avrundning och följer
+toleransen som förut. Ett ärende som inte längre gäller stängs av sig självt, och en lucka som
+du redan har hanterat (till exempel intygat som privat körning) står kvar som den är.
 
 ## Översikten
 

@@ -340,6 +340,22 @@ def test_godkann_ett_forslag_som_hunnit_andras_vagras(client, db, user, vehicle,
     assert client.post(f"{API}/trips/{trip_id}/approve").status_code == 200  # utan förväntan som förut
 
 
+def test_godkann_vagras_om_syftet_hunnit_andras(client, db, user, vehicle, fleet, job_queue):
+    """"Godkänn förslag" bekräftar även syftet: har omräkningen bytt syftet (men inte kategorin)
+    sedan ägaren såg förslaget godkänns ingenting."""
+    trip_id = next(t for t in open_category_trips(db, vehicle) if db.get(M.LogicalTrip, t).category != "undecided")
+    trip = db.get(M.LogicalTrip, trip_id)
+    shown = {"expected_category": trip.category, "expected_purpose": trip.purpose}
+    trip.purpose = "Ett annat syfte från omräkningen"
+    db.flush()
+    r = client.post(f"{API}/trips/{trip_id}/approve", json=shown)
+    assert r.status_code == 409 and r.json()["code"] == "proposal_changed"
+    assert reload_trip(db, trip_id).review_status != "approved"
+    r = client.post(f"{API}/trips/{trip_id}/approve",
+                    json={**shown, "expected_purpose": "Ett annat syfte från omräkningen"})
+    assert r.status_code == 200 and reload_trip(db, trip_id).review_status == "approved"
+
+
 def test_vanliga_anrop_raknar_om_direkt_som_forut(db, user, vehicle, fleet, actor, job_queue):
     """Tjänstekod utan recompute.defer (t.ex. inställningar, kalender) räknar om direkt."""
     trip = seg.load_trip(db, open_category_trips(db, vehicle)[0])
@@ -514,3 +530,106 @@ def test_enprocesslaget_svarar_direkt_och_raknar_om_efter_svaret(caplog):
     finally:
         s.rollback()
         s.close()
+
+
+# ----------------------------------------------------------------------------- AI-bedömningen efter svaret
+
+
+@pytest.mark.usefixtures("single_process")
+def test_ai_bedomningen_haller_inget_skrivlas_medan_ai_svarar(monkeypatch):
+    """classify.pending går efter svaret. Medan AI-leverantören tänker får databasen inte vara
+    låst för skrivning – annars väntar ägarens nästa klick (och omräkningen) på AI-svaren."""
+    import sqlite3
+
+    from app import db as dbm
+    from app.services.classify import engine
+    from app.worker import tasks
+
+    path = dbm.sqlite_file_path(str(dbm.get_engine().url))
+    locked: list[int] = []
+
+    class CheckingAI:
+        name, model = "fake", "fake-1"
+        calls = 0
+
+        def assess(self, document):
+            CheckingAI.calls += 1
+            probe = sqlite3.connect(path, timeout=0)
+            try:
+                probe.execute("BEGIN IMMEDIATE")  # lyckas bara om ingen annan håller skrivlåset
+                probe.execute("ROLLBACK")
+            except sqlite3.OperationalError:
+                locked.append(CheckingAI.calls)
+            finally:
+                probe.close()
+            return None
+
+    with dbm.session_scope() as s:
+        user = M.User(email="agare@example.com", display_name="Ägare", password_hash="x", is_admin=True)
+        s.add(user)
+        s.flush()
+        vehicle = M.Vehicle(owner_user_id=user.id, name="Bilen", registration_number="ABC123", is_default=True)
+        s.add(vehicle)
+        s.flush()
+        data.build(s, user, vehicle, imported=60)
+        user_id, vehicle_id = user.id, vehicle.id
+    monkeypatch.setattr(engine, "get_provider", lambda db, uid: CheckingAI())
+    tasks.classify_pending(str(user_id), str(vehicle_id))
+    assert CheckingAI.calls >= 3
+    assert locked == []
+
+
+def test_massredigering_och_omrakningen_laser_resorna_i_samma_ordning(engine, db, user, vehicle):
+    """PostgreSQL: omräkningens steg låser resor i id-ordning. Massredigeringen ska låsa i samma
+    ordning, annars kan de två låsa varandra i kors (deadlock) och någon av dem får fel."""
+    import threading
+
+    if engine.dialect.name != "postgresql":
+        pytest.skip("radlås prövas bara mot PostgreSQL")
+    data.build(db, user, vehicle, imported=20)
+    low, high = sorted(open_category_trips(db, vehicle)[:2])
+    db.commit()
+    errors: list[BaseException] = []
+    holding = threading.Event()
+
+    def recompute_step() -> None:
+        s = dbm_session()
+        try:
+            s.execute(select(M.LogicalTrip.id).where(M.LogicalTrip.id == low).with_for_update())
+            holding.set()
+            time.sleep(0.5)  # massredigeringen hinner nu börja
+            s.execute(select(M.LogicalTrip.id).where(M.LogicalTrip.id == high).with_for_update())
+            s.commit()
+        except BaseException as exc:  # noqa: BLE001 - redovisas i testet
+            errors.append(exc)
+            s.rollback()
+        finally:
+            s.close()
+
+    def bulk() -> None:
+        holding.wait(5)
+        s = dbm_session()
+        try:
+            recompute.defer(s)
+            trips = [s.get(M.LogicalTrip, high), s.get(M.LogicalTrip, low)]  # inte i id-ordning
+            feedback.bulk_apply(s, trips, user_id=user.id, actor=audit.SYSTEM, category="work")
+            s.commit()
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+            s.rollback()
+        finally:
+            s.close()
+
+    threads = [threading.Thread(target=recompute_step), threading.Thread(target=bulk)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(30)
+    assert errors == []
+    assert reload_trip(db, low).category == "work" and reload_trip(db, high).category == "work"
+
+
+def dbm_session():
+    from app import db as dbm
+
+    return dbm.get_sessionmaker()()

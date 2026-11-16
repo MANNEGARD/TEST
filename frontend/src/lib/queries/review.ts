@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "../api";
+import { api, DECISION_TIMEOUT_MS } from "../api";
 import type { Gap, GapList, ReviewItem, ReviewList, Trip } from "../types";
 import { useVehicle } from "../vehicle";
 import { invalidateJournalData, qk } from "./keys";
@@ -50,7 +50,7 @@ export function useAnswerMerge() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ itemId, accept }: { itemId: string; accept: boolean }) =>
-      api.post<{ merged: boolean; trip: Trip | null }>(`/merge-questions/${itemId}/answer`, { accept }),
+      api.post<{ merged: boolean; trip: Trip | null }>(`/merge-questions/${itemId}/answer`, { accept }, { timeoutMs: DECISION_TIMEOUT_MS }),
     onSuccess: () => invalidateJournalData(qc),
   });
 }
@@ -59,7 +59,9 @@ export function useReviewAction() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ itemId, action, minutes }: { itemId: string; action: "dismiss" | "resolve" | "snooze" | "reopen"; minutes?: number }) =>
-      api.post<ReviewItem>(`/review/${itemId}/${action}`, action === "snooze" ? { minutes: minutes ?? 1440 } : {}),
+      api.post<ReviewItem>(`/review/${itemId}/${action}`, action === "snooze" ? { minutes: minutes ?? 1440 } : {}, {
+        timeoutMs: DECISION_TIMEOUT_MS,
+      }),
     onSuccess: () => invalidateJournalData(qc),
   });
 }

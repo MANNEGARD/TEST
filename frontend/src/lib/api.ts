@@ -112,7 +112,12 @@ export interface RequestOptions {
   /** Skicka inte till /login vid 401 (används av auth-kontrollen). */
   allow401?: boolean;
   headers?: Record<string, string>;
+  /** Ger upp efter så här många millisekunder (ApiError med koden "timeout"). */
+  timeoutMs?: number;
 }
+
+/** Tidsgräns för ett svar i Granskning: ägaren ska få veta om svaret inte kom fram. */
+export const DECISION_TIMEOUT_MS = 20_000;
 
 type Method = "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
 
@@ -155,6 +160,19 @@ async function rawRequest(method: Method, path: string, opts: RequestOptions, re
   }
   if (method !== "GET" && csrfToken) headers["X-CSRF-Token"] = csrfToken;
 
+  let signal = opts.signal;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
+  if (opts.timeoutMs) {
+    const ctrl = new AbortController();
+    opts.signal?.addEventListener("abort", () => ctrl.abort(), { once: true });
+    timer = setTimeout(() => {
+      timedOut = true;
+      ctrl.abort();
+    }, opts.timeoutMs);
+    signal = ctrl.signal;
+  }
+
   let res: Response;
   try {
     res = await (demoFetch ?? fetch)(buildUrl(path, opts.query), {
@@ -162,12 +180,17 @@ async function rawRequest(method: Method, path: string, opts: RequestOptions, re
       headers,
       body,
       credentials: "same-origin",
-      signal: opts.signal,
+      signal,
       cache: "no-store",
     });
   } catch (err) {
+    if (timedOut) {
+      throw new ApiError(0, { code: "timeout", detail: "Servern svarade inte i tid, så svaret är kanske inte sparat." });
+    }
     if (err instanceof DOMException && err.name === "AbortError") throw err;
     throw new ApiError(0, {});
+  } finally {
+    clearTimeout(timer);
   }
 
   if (res.ok) return res;

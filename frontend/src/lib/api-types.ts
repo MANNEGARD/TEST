@@ -2689,6 +2689,11 @@ export interface components {
              * @description Kategorin i förslaget som ägaren såg. Har förslaget ändrats sedan dess godkänns inget (409).
              */
             expected_category?: string | null;
+            /**
+             * Expected Purpose
+             * @description Syftet i förslaget som ägaren såg (null = inget syfte). Godkännandet bekräftar även syftet, så har det ändrats sedan dess godkänns inget (409). Utelämnas fältet kontrolleras inte syftet.
+             */
+            expected_purpose?: string | null;
         };
         /** AuditOut */
         AuditOut: {

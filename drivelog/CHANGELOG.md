@@ -10,14 +10,15 @@
   avrundning ger aldrig längre något ärende, någon lucka eller någon fråga om överlappande
   resor – oavsett vad toleransen under *Inställningar → Sammanslagning av resor* är satt till.
   Verkliga dubbletter och överlapp ger fortfarande ärende. Öppna ärenden som bara berodde på
-  avrundning stängs av sig själva strax efter uppdateringen (ärenden du redan har hanterat
-  rörs inte). Din inställning ändras inte.
+  avrundning stängs av sig själva strax efter uppdateringen (ärenden och luckor du redan har
+  hanterat rörs inte). Din inställning ändras inte.
 - **Snabbare Granskning.** När du svarar Arbete, Privat eller Godkänn visas nästa ärende
   direkt, och du kan svara i rask takt – med musen eller med tangenterna. Förslagen för övriga
   resor räknas om i bakgrunden en stund efter ditt senaste svar, och listan uppdateras av sig
   själv när det är klart. Går ett svar inte att spara visas felet tydligt och ärendet läggs
-  tillbaka. Har ett förslag hunnit ändras när du trycker *Godkänn förslag* får du se det nya
-  förslaget i stället. Samma sak gäller massredigering och svar på frågorna i telefonen.
+  tillbaka. Har ett förslag (kategori eller syfte) hunnit ändras när du trycker *Godkänn
+  förslag* får du se det nya förslaget i stället. Samma sak gäller massredigering och svar på
+  frågorna i telefonen. Har du AI-bedömning påslagen väntar dina svar inte längre på den.
 
 ## 1.2.1
 

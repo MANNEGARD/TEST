@@ -70,10 +70,10 @@ export function useTripActions() {
       });
     },
 
-    /** `expectedCategory`: förslaget som visades. Har det hunnit ändras godkänns ingenting (409). */
-    approve(id: string, opts: { expectedCategory?: CategoryCode; onUndone?: () => void } = {}) {
+    /** `expected`: förslaget (kategori och syfte) som visades. Har det hunnit ändras godkänns ingenting (409). */
+    approve(id: string, opts: { expected?: { category: CategoryCode; purpose: string | null }; onUndone?: () => void } = {}) {
       const since = Date.now();
-      return approve.mutateAsync({ id, expectedCategory: opts.expectedCategory }).then(
+      return approve.mutateAsync({ id, expected: opts.expected }).then(
         (t) => {
           toast.success("Godkänd.", { action: undoAction([id], since, opts.onUndone) });
           return t;

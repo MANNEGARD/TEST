@@ -23,6 +23,10 @@ automatiska godkännanden, samma ärenden), men görs i korta transaktioner om h
 ``CHUNK`` resor. Varje steg låser först det det ska skriva (SQLite: skrivlåset tas direkt;
 PostgreSQL: resorna låses med SELECT … FOR UPDATE), så att ett beslut som kommer under
 tiden aldrig skrivs över av en äldre bild – och nästa klick väntar som mest ett kort steg.
+
+En skillnad i spåret: ärenden för andra resor som omräkningen stänger får ``resolved_by``
+"system" (den gamla vägen skrev ägaren, eftersom det skedde i ägarens anrop). Det är
+omräkningen som stänger dem, och fältet visas inte i webbappen.
 """
 
 from __future__ import annotations

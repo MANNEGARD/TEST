@@ -449,15 +449,25 @@ class ApproveIn(BaseModel):
         default=None, pattern="^(work|private|undecided)$",
         description="Kategorin i förslaget som ägaren såg. Har förslaget ändrats sedan dess godkänns inget (409).",
     )
+    expected_purpose: str | None = Field(
+        default=None, max_length=10_000,
+        description="Syftet i förslaget som ägaren såg (null = inget syfte). Godkännandet bekräftar även "
+        "syftet, så har det ändrats sedan dess godkänns inget (409). Utelämnas fältet kontrolleras inte syftet.",
+    )
+
+    def proposal_changed(self, trip: LogicalTrip) -> bool:
+        if self.expected_category is not None and self.expected_category != trip.category:
+            return True
+        return "expected_purpose" in self.model_fields_set and (self.expected_purpose or None) != (trip.purpose or None)
 
 
 @router.post("/trips/{trip_id}/approve", response_model=TripOut, summary="Godkänn föreslagen klassning")
 def approve_trip(trip_id: uuid.UUID, principal: PrincipalDep, db: DbDep, body: ApproveIn | None = None) -> TripOut:
     trip = get_owned_trip(db, principal, trip_id)
-    if body is not None and body.expected_category is not None and body.expected_category != trip.category:
+    if body is not None and body.proposal_changed(trip):
         # Förslagen räknas om efter föregående beslut; ägaren godkänner bara det hen faktiskt såg.
         raise conflict("Förslaget för resan har ändrats sedan du såg det. Titta på det nya förslaget.",
-                       "proposal_changed", {"category": trip.category})
+                       "proposal_changed", {"category": trip.category, "purpose": trip.purpose})
     recompute.defer(db)
     feedback.apply_decision(db, trip, user_id=principal.user.id, actor=principal.actor, approve=True)
     _cancel_notifications(db, trip.id)

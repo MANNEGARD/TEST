@@ -13,7 +13,8 @@ from sqlalchemy.orm import Session
 
 from app import jobs
 from app.db import session_scope, utcnow
-from app.models import OAuthState, User, Vehicle, VehicleObservation
+from app.models import LogicalTrip, OAuthState, User, Vehicle, VehicleObservation
+from app.models.enums import LogicalState
 from app.services import audit
 
 logger = logging.getLogger(__name__)
@@ -101,11 +102,28 @@ def classify_pending(user_id: str, vehicle_id: str) -> dict[str, Any]:
         vehicle = db.get(Vehicle, uuid.UUID(vehicle_id))
         if vehicle is None or str(vehicle.owner_user_id) != user_id:
             return {"skipped": True}
-        if engine.get_provider(db, vehicle.owner_user_id) is None:
+        provider = engine.get_provider(db, vehicle.owner_user_id)
+        if provider is None:
             return {"skipped": True, "reason": "no_provider"}
-        changed = engine.classify_pending(db, user_id=vehicle.owner_user_id, vehicle=vehicle, actor=audit.Actor("ai", "llm"))
-        for trip in seg.active_trips(db, vehicle.id):
+        user_uuid, actor = vehicle.owner_user_id, audit.Actor("ai", "llm")
+        trip_ids = [t.id for t in seg.active_trips(db, vehicle.id)]
+        db.commit()
+        cache: dict[str, Any] = {}
+        changed = 0
+        for trip_id in trip_ids:
+            # En kort transaktion per resa: skrivlåset (SQLite) och resans radlås (PostgreSQL)
+            # hålls aldrig medan nästa resa väntar på AI-svaret, så ägarens nästa klick och
+            # omräkningen behöver inte vänta på AI-leverantören.
+            db.expire_all()
+            trip = db.get(LogicalTrip, trip_id)
+            if trip is None or trip.state != LogicalState.ACTIVE:
+                continue
+            result = engine.classify_trip(db, trip, user_id=user_uuid, actor=actor, provider=provider,
+                                          settings_cache=cache)
+            if result is not None and result.changed:
+                changed += 1
             pipeline.sync_trip_review_items(db, trip)
+            db.commit()
         return {"changed": changed}
 
 

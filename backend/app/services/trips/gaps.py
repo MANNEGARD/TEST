@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import utcnow
-from app.models import DataGap, LogicalTrip, RawTrip, TripSegment, Vehicle
+from app.models import DataGap, LogicalTrip, RawTrip, ReviewItem, TripSegment, Vehicle
 from app.models.enums import (
     Category,
     DecisionSource,
@@ -72,15 +72,24 @@ def recompute(
     # Avrundning till hela kilometer ger aldrig lucka eller ärende (seg.ODOMETER_ROUNDING_KM).
     slack = seg.odometer_slack(tolerance_km)
     seen: set[str] = set()
+    # Luckor som bara försvunnit för att de ryms i avrundningen (de fanns med en lägre tolerans).
+    rounding_only: set[str] = set()
     flagged: set[str] = set()
     overlaps = 0
-    # Varje resa jämförs med den resa som hittills når längst i mätarställning – inte bara
-    # med föregående. En resa som ligger inuti en annan ger då ett överlapp, men ingen falsk
-    # lucka mot nästa resa.
+    # Varje resa jämförs med föregående resa – eller med den resa som hittills når längst i
+    # mätarställning, om den slutar närmare där resan börjar. En resa som ligger inuti en annan
+    # ger då ett överlapp men ingen falsk lucka mot nästa resa, medan en enda felskriven
+    # slutställning bara ger ett ärende och inte döljer senare luckor.
+    prev: RawTrip | None = None
     reach: RawTrip | None = None
     for b in raws:
-        a = reach
-        if a is None or b.odometer_end > a.odometer_end:  # type: ignore[operator]
+        a = prev
+        if a is not None and reach is not None and reach is not a and abs(
+            b.odometer_start - reach.odometer_end  # type: ignore[operator]
+        ) < abs(b.odometer_start - a.odometer_end):  # type: ignore[operator]
+            a = reach
+        prev = b
+        if reach is None or b.odometer_end > reach.odometer_end:  # type: ignore[operator]
             reach = b
         if a is None:
             continue
@@ -98,6 +107,8 @@ def recompute(
             gap.to_time = b.started_at or b.start_earliest
             gap.before_raw_trip_id, gap.after_raw_trip_id = a.id, b.id
             gap.is_current = True
+        elif diff > tolerance_km:
+            rounding_only.add(f"odo:{a.odometer_end:.0f}:{b.odometer_start:.0f}")
         elif diff < -slack:
             overlaps += 1
             key = f"odo-overlap:{a.id}:{b.id}"
@@ -119,7 +130,30 @@ def recompute(
         db, vehicle_id, prefixes=("odo-overlap:",), keep=flagged, data_type="odometer_overlap",
         note=review.OVERLAP_GONE_NOTE,
     )
+
+    def backwards_gone(item: ReviewItem) -> bool:
+        """Nattsökningens ärende (stats.anomalies, samma nyckel): resorna motsäger inte längre
+        varandra mer än avrundningen, eller någon av dem är makulerad."""
+        try:
+            first, second = (db.get(RawTrip, uuid.UUID(item.data[k])) for k in ("first_raw_trip_id", "second_raw_trip_id"))
+        except (KeyError, TypeError, ValueError):
+            return False
+        if first is None or second is None or first.voided_at is not None or second.voided_at is not None:
+            return True
+        if first.odometer_end is None or second.odometer_start is None:
+            return True
+        return not second.odometer_start < first.odometer_end - slack
+
+    review.close_stale(
+        db, vehicle_id, prefixes=("odo-overlap:", "anomaly:odo_order:"), keep=flagged,
+        data_type="odometer_backwards", note=review.OVERLAP_GONE_NOTE, when=backwards_gone,
+    )
     for key, gap in existing.items():
+        if key in rounding_only and gap.status != GapStatus.OPEN and gap.is_current:
+            # Ägaren har redan hanterat luckan (t.ex. intygat den som privat körning med en lägre
+            # tolerans före 1.2.2). Den ryms i avrundningen men ingenting har ändrats: beslutet
+            # och privatposten står kvar.
+            continue
         if key not in seen:
             gap.is_current = False
             if gap.status == GapStatus.RESOLVED_PRIVATE and gap.resolved_raw_trip_id is not None:

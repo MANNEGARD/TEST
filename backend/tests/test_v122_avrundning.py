@@ -74,7 +74,7 @@ def test_exempel_fran_utredningen(db, user, vehicle, trips, actor):
 
 
 @pytest.mark.parametrize("tolerance", [0.0, 0.5, 1.0, 2.0])
-@pytest.mark.parametrize("second_start", [197735, 197734.5, 197735.6, 197736, 197737])
+@pytest.mark.parametrize("second_start", [197735, 197735.4, 197735.6, 197736, 197737])
 def test_avrundning_larmar_aldrig(db, user, vehicle, trips, tolerance, second_start):
     _pair(trips, 197736, second_start)
     out = gaps.recompute(db, vehicle.id, _tolerance(db, user, tolerance))
@@ -157,7 +157,7 @@ def test_omrakningen_stanger_arendet_hos_en_befintlig_installation(db, user, veh
 # ----------------------------------------------------------------------------- sammanslagningen
 
 
-@pytest.mark.parametrize("odo_gap", [-1.9, -1.0, 0.0, 1.0, 1.9])
+@pytest.mark.parametrize("odo_gap", [-1.0, -0.5, 0.0, 0.5, 1.0])
 def test_sammanslagningen_bortser_fran_avrundning(odo_gap):
     gap = merge.StopGap(10.0, 10.0, True, odo_gap)
     assert merge.decide(gap, auto_max=15, ask_max=60, odometer_tolerance=0.0) == "auto"
@@ -222,3 +222,85 @@ def test_installningen_skrivs_inte_over(db, user, vehicle, trips, actor):
     _pair(trips, 197736, 197735)
     pipeline.after_trips_changed(db, user_id=user.id, vehicle=vehicle, actor=audit.SYSTEM, notify=False)
     assert settings_svc.get_section(db, user.id, "merge")["odometer_tolerance_km"] == 0.0
+
+
+# ----------------------------------------------------------------------------- efter granskningen
+
+
+@pytest.mark.parametrize("tolerance", [0.0, 1.0])
+def test_tva_km_ar_inte_avrundning(db, user, vehicle, trips, tolerance):
+    """Två avläsningar i hela km kan tillsammans avrunda 1 km fel, aldrig 2 km: med en låg
+    sparad tolerans ger 2 km fortfarande ärende och lucka som i 1.2.1."""
+    _pair(trips, 1036, 1034, km2=20.0)  # 2 km överlapp (1034–1054)
+    trips.skip(hours=3)
+    trips.trip(C, A, km=5.0, odometer_start=1056)  # 2 km glapp efter 1034–1054
+    gaps.recompute(db, vehicle.id, _tolerance(db, user, tolerance))
+    assert len(_overlap_items(db, vehicle)) == 1
+    (gap,) = _current_gaps(db, vehicle)
+    assert gap.km == pytest.approx(2.0)
+
+
+def test_kort_resa_importerad_tva_ganger_ger_arende(db, user, vehicle, trips):
+    trips.trip(A, B, km=2.0, odometer_start=5000)
+    trips.skip(hours=3)
+    trips.trip(A, B, km=2.0, odometer_start=5000)  # samma korta resa, annan tid
+    gaps.recompute(db, vehicle.id, _tolerance(db, user, 0.0))
+    assert len(_overlap_items(db, vehicle)) == 1
+
+
+@pytest.mark.parametrize(("odo_gap", "verdict"), [(-2.0, "overlap"), (2.0, "odometer_gap")])
+def test_sammanslagningen_ser_tva_km_med_lag_tolerans(odo_gap, verdict):
+    gap = merge.StopGap(10.0, 10.0, True, odo_gap)
+    assert merge.decide(gap, auto_max=15, ask_max=60, odometer_tolerance=0.0) == verdict
+
+
+def test_en_felskriven_slutstallning_ger_ett_arende_och_luckorna_finns_kvar(db, user, vehicle, trips):
+    """En slutställning med en siffra för mycket får inte göra varje senare resa till ett
+    överlapp eller dölja verkliga luckor (som i 1.2.1: ett ärende, luckan finns kvar)."""
+    first = trips.trip(A, B, km=30.0, odometer_start=10000)
+    seg.ordered_raws(first)[0].odometer_end = 100030
+    odo = 10030
+    for i in range(10):
+        trips.skip(hours=3)
+        start = odo + (25 if i == 4 else 0)  # en verklig lucka på 25 km
+        trips.trip(B, C, km=20.0, odometer_start=start)
+        odo = start + 20
+    db.flush()
+    out = gaps.recompute(db, vehicle.id, _tolerance(db, user, 2.0))
+    assert out["odometer_overlaps"] == 1 and len(_overlap_items(db, vehicle)) == 1
+    assert [(g.odometer_start, g.odometer_end) for g in _current_gaps(db, vehicle)] == [(10110, 10135)]
+
+
+@pytest.mark.parametrize("scope", ["complete", "business_only"])
+def test_intygad_privat_lucka_inom_avrundningen_behalls(db, user, vehicle, trips, actor, monkeypatch, scope):
+    """En lucka på 1 km som ägaren i 1.2.1 (tolerans 0) intygade som privat körning: posten
+    behålls efter uppgraderingen och inget ärende om ändrad privat körning skapas."""
+    settings_svc.update_section(db, user.id, "general", {"journal_scope": scope})
+    _pair(trips, 1036, 1037)
+    monkeypatch.setattr(seg, "ODOMETER_ROUNDING_KM", 0.0)  # så räknade 1.2.1
+    gaps.recompute(db, vehicle.id, _tolerance(db, user, 0.0), scope=scope)
+    (gap,) = _current_gaps(db, vehicle)
+    fill = gaps.resolve_as_private(db, gap, actor=actor)
+    db.flush()
+    monkeypatch.undo()
+    pipeline.after_trips_changed(db, user_id=user.id, vehicle=vehicle, actor=audit.SYSTEM, notify=False)
+    db.refresh(fill)
+    db.refresh(gap)
+    assert fill.state == "active" and gap.status == "resolved_private" and gap.is_current
+    stale = db.execute(select(M.ReviewItem).where(M.ReviewItem.dedupe_key.like("gap-fill-stale:%"))).scalars().all()
+    assert stale == []
+
+
+def test_avvikelsesokningens_arende_stangs_vid_omrakningen(db, user, vehicle, trips, actor):
+    """Nattsökningen och omräkningen delar nyckeln odo-overlap:. Har nattsökningen skrivit
+    ärendet senast stängs det ändå vid nästa omräkning när överlappet är borta."""
+    a, b = _pair(trips, 1036, 1030)
+    pipeline.after_trips_changed(db, user_id=user.id, vehicle=vehicle, actor=actor, notify=False)
+    anomalies.scan_vehicle(db, vehicle, user_id=user.id)
+    (item,) = _overlap_items(db, vehicle)
+    assert item.data["type"] == "odometer_backwards"
+    rb = seg.ordered_raws(b)[0]
+    rb.odometer_start, rb.odometer_end = 1036, 1056  # ägaren rättar mätarställningen
+    db.flush()
+    pipeline.after_trips_changed(db, user_id=user.id, vehicle=vehicle, actor=actor, notify=False)
+    assert item.status == ReviewState.RESOLVED and item.resolution["reason"] == review.NO_LONGER_REASON

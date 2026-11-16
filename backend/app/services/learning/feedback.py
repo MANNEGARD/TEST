@@ -358,6 +358,15 @@ def bulk_apply(
     if recompute.is_deferred(db):
         for vid in sorted({t.vehicle_id for t in trips}):
             recompute.request(db, vid)  # före resorna (samma låsordning som insamlingen)
+    if trips:
+        # PostgreSQL: lås resorna i id-ordning innan någon ändras – samma ordning som
+        # omräkningens steg – så att de två aldrig låser varandra i kors. (SQLite: inget.)
+        db.execute(
+            select(LogicalTrip.id)
+            .where(LogicalTrip.id.in_([t.id for t in trips]))
+            .order_by(LogicalTrip.id)
+            .with_for_update()
+        ).all()
     for trip in trips:
         try:
             apply_decision(

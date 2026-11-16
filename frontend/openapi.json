@@ -8613,6 +8613,19 @@
       ],
       "title": "Expected Category",
       "description": "Kategorin i förslaget som ägaren såg. Har förslaget ändrats sedan dess godkänns inget (409)."
+     },
+     "expected_purpose": {
+      "anyOf": [
+       {
+        "type": "string",
+        "maxLength": 10000
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Expected Purpose",
+      "description": "Syftet i förslaget som ägaren såg (null = inget syfte). Godkännandet bekräftar även syftet, så har det ändrats sedan dess godkänns inget (409). Utelämnas fältet kontrolleras inte syftet."
      }
     },
     "type": "object",
