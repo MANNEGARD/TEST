@@ -17,22 +17,12 @@
 # Kör samma rad igen för att uppdatera till senaste versionen; allt ditt ligger kvar i
 # /opt/drivelog/data. Glömt lösenordet: lägg till --nytt-losenord sist på raden.
 #
-# Automatisk uppdatering (val sist på raden):
-#   --automatisk-uppdatering        installerar som vanligt och slår sedan på automatiken: en
-#                                   systemd-timer kör ungefär var 15:e minut en lokal kopia av
-#                                   skriptet (/opt/drivelog/server.sh) som installerar en nyare
-#                                   version när den erbjuds – med säkerhetskopia och återgång.
-#   --utan-automatisk-uppdatering   slår av den (domänen behövs inte).
-#   --lage                          visar läget i klartext (domänen behövs inte).
-#
 # Inställningar via miljövariabler (behövs normalt inte):
 #   DRIVELOG_ADMIN_EMAIL, DRIVELOG_ADMIN_PASSWORD  konto utan frågor (automatiserad installation)
 #   DRIVELOG_VERSION     en viss version i stället för den senaste
 #   DRIVELOG_DATA        datakatalog (standard /opt/drivelog/data)
 #   DRIVELOG_TZ          tidszon (standard Europe/Stockholm)
 #   DRIVELOG_SKIP_DNS_CHECK=1  hoppa över kontrollen att domänen pekar hit
-#   DRIVELOG_HEM         katalog för automatikens kopia, läge, logg och säkerhetskopior (/opt/drivelog)
-#   DRIVELOG_KOPIOR      antal säkerhetskopior som sparas vid automatisk uppdatering (standard 3)
 set -euo pipefail
 
 REPO_RAW="${DRIVELOG_REPO_RAW:-https://raw.githubusercontent.com/SMGD-MP/TEST/HEAD}"
@@ -43,338 +33,29 @@ NAME="${DRIVELOG_CONTAINER:-drivelog}"
 PULL="${DRIVELOG_PULL:-1}"
 TZ_NAMN="${DRIVELOG_TZ:-Europe/Stockholm}"
 VANTA_SEKUNDER="${DRIVELOG_WAIT:-300}"
-HEM="${DRIVELOG_HEM:-/opt/drivelog}"
-ANTAL_KOPIOR="${DRIVELOG_KOPIOR:-3}"
-LAS="${DRIVELOG_LAS:-/run/lock/drivelog-server.lock}"
-SYSTEMD_KATALOG="${DRIVELOG_SYSTEMD_DIR:-/etc/systemd/system}"
-ENHET=drivelog-uppdatering
-KONF="$HEM/automatik.conf"
-LAGEFIL="$HEM/lage.txt"
-KOPIEKATALOG="$HEM/kopior"
-SKRIPT="${BASH_SOURCE[0]:-}"
-# Det här som automatiken sparar och läser tillbaka (inga hemligheter).
-KONF_NYCKLAR=(DOMAN IMAGE DATA NAME PULL TZ_NAMN VANTA_SEKUNDER REPO_RAW ANTAL_KOPIOR)
 
-TIDSSTYRD=0 # 1 = körs av systemd-timern: inga frågor, allt loggas, återgång i stället för halvfärdigt
-LOGGFIL=""  # sätts när automatiken är på: allt som skrivs ut hamnar också där, med tidsstämpel
-
-tid() { date '+%Y-%m-%d %H:%M:%S'; }
-till_loggfil() {
-  [[ -n "$LOGGFIL" ]] || return 0
-  printf '%s %s\n' "$(tid)" "$*" >>"$LOGGFIL" 2>/dev/null || true
-  # Under systemd går utskriften redan till journalen; körs raden för hand skickas den dit här.
-  if [[ "$TIDSSTYRD" != 1 ]] && command -v logger >/dev/null 2>&1; then
-    logger -t "$ENHET" -- "$*" 2>/dev/null || true
-  fi
-}
-rubrik() { printf '\n== %s\n' "$*"; till_loggfil "== $*"; }
-info() { printf '   %s\n' "$*"; till_loggfil "$*"; }
-varna() { printf '   ! %s\n' "$*" >&2; till_loggfil "VARNING: $*"; }
+rubrik() { printf '\n== %s\n' "$*"; }
+info() { printf '   %s\n' "$*"; }
+varna() { printf '   ! %s\n' "$*" >&2; }
 die() {
   printf '\n✗ %s\n' "$1" >&2
-  till_loggfil "FEL: $1"
-  [[ "$TIDSSTYRD" != 1 ]] || satt_lage senaste_fel "$(tid) – $1"
   shift || true
-  for rad in "$@"; do
-    printf '  %s\n' "$rad" >&2
-    till_loggfil "  $rad"
-  done
+  for rad in "$@"; do printf '  %s\n' "$rad" >&2; done
   exit 1
 }
 
-# --- Versioner, läge och inställningar för automatiken -------------------------------------------
-ar_version() { [[ "$1" =~ ^[0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6}$ ]]; }
-ar_nyare() { # a b → sant om a är en högre version än b (talvis: 1.10.0 > 1.9.0)
-  local -a a b
-  local i
-  IFS=. read -r -a a <<<"$1"
-  IFS=. read -r -a b <<<"$2"
-  for i in 0 1 2; do
-    ((10#${a[i]} > 10#${b[i]})) && return 0
-    ((10#${a[i]} < 10#${b[i]})) && return 1
-  done
-  return 1
-}
-
-# Versionen som erbjuds (drivelog/config.yaml på standardgrenen). Strikt: exakt en rad
-# `version: "X.Y.Z"`, och bara den läses – inget annat från nätet tolkas.
-las_erbjuden_version() {
-  local text rad
-  text="$(curl -fsSL --max-time 20 --max-filesize 65536 --proto '=https,file' \
-    "$REPO_RAW/drivelog/config.yaml" 2>/dev/null)" || return 1
-  rad="$(grep -E '^version:' <<<"$text" || true)"
-  [[ -n "$rad" && "$rad" != *$'\n'* ]] || return 1
-  [[ "$rad" =~ ^version:\ \"([0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6})\"[[:space:]]*$ ]] || return 1
-  printf '%s' "${BASH_REMATCH[1]}"
-}
-
-# Versionen i den container som kör: avbildens etikett io.hass.version (alltid satt vid bygget),
-# annars taggen. Tomt om den inte går att avgöra.
-korande_version() {
-  local v
-  v="$(docker inspect -f '{{index .Config.Labels "io.hass.version"}}' "$NAME" 2>/dev/null || true)"
-  if ! ar_version "$v"; then
-    v="$(docker inspect -f '{{.Config.Image}}' "$NAME" 2>/dev/null || true)"
-    v="${v##*:}"
-    ar_version "$v" || v=""
-  fi
-  printf '%s' "$v"
-}
-
-auto_ar_pa() { [[ -f "$SYSTEMD_KATALOG/$ENHET.timer" && -f "$KONF" ]]; }
-
-las_lage() { # nyckel
-  [[ -r "$LAGEFIL" ]] || return 0
-  sed -n "s/^$1=//p" "$LAGEFIL" | tail -n 1
-}
-satt_lage() { # nyckel värde ("" tar bort nyckeln)
-  [[ -d "$HEM" ]] || return 0
-  local varde="${2//$'\n'/ }" tmp="$LAGEFIL.tmp"
-  {
-    if [[ -r "$LAGEFIL" ]]; then grep -v "^$1=" "$LAGEFIL" || true; fi
-    if [[ -n "$varde" ]]; then printf '%s=%s\n' "$1" "$varde"; fi
-  } >"$tmp" 2>/dev/null || return 0
-  chmod 600 "$tmp" && mv -f "$tmp" "$LAGEFIL" || true
-}
-
-borja_logga() { # loggfilen i HEM; roteras vid 1 MB
-  [[ -d "$HEM" ]] || return 0
-  LOGGFIL="$HEM/uppdatering.log"
-  if [[ -f "$LOGGFIL" ]] && (($(stat -c %s "$LOGGFIL" 2>/dev/null || echo 0) > 1048576)); then
-    mv -f "$LOGGFIL" "$LOGGFIL.1" || true
-  fi
-  touch "$LOGGFIL" && chmod 600 "$LOGGFIL" || LOGGFIL=""
-}
-
-sakert_varde() { [[ "$1" =~ ^[A-Za-z0-9._:/@+=-]*$ && "${#1}" -le 300 ]]; }
-ar_doman() { [[ "$1" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$ ]]; }
-
-skriv_konf() {
-  local n tmp="$KONF.tmp"
-  for n in "${KONF_NYCKLAR[@]}"; do
-    sakert_varde "${!n}" || die "Inställningen $n kan inte sparas för automatiken (otillåtna tecken)."
-  done
-  {
-    printf '# DriveLog – automatisk uppdatering. Skrivs av server.sh när raden körs; inga hemligheter.\n'
-    for n in "${KONF_NYCKLAR[@]}"; do printf '%s=%s\n' "$n" "${!n}"; done
-  } >"$tmp"
-  chmod 600 "$tmp"
-  mv -f "$tmp" "$KONF"
-}
-las_konf() { # läser bara kända nycklar med säkra värden; källas aldrig som skript
-  [[ -r "$KONF" ]] || return 1
-  local rad n v
-  while IFS= read -r rad || [[ -n "$rad" ]]; do
-    [[ -z "$rad" || "$rad" == \#* ]] && continue
-    [[ "$rad" == *=* ]] || return 1
-    n="${rad%%=*}"
-    v="${rad#*=}"
-    [[ " ${KONF_NYCKLAR[*]} " == *" $n "* ]] || return 1
-    sakert_varde "$v" || return 1
-    printf -v "$n" '%s' "$v"
-  done <"$KONF"
-}
-kontrollera_konf() {
-  ar_doman "$DOMAN" || return 1
-  [[ "$DATA" == /* && "$DATA" != / && "$DATA" != *..* ]] || return 1
-  [[ "$PULL" == 0 || "$PULL" == 1 ]] || return 1
-  [[ "$VANTA_SEKUNDER" =~ ^[0-9]{1,5}$ && "$ANTAL_KOPIOR" =~ ^[1-9][0-9]?$ ]] || return 1
-  [[ -n "$IMAGE" && -n "$NAME" && -n "$REPO_RAW" ]]
-}
-
-ta_las() { # vänta (1/0): två körningar (för hand eller automatiskt) får aldrig gå samtidigt
-  command -v flock >/dev/null 2>&1 || return 0
-  mkdir -p "$(dirname "$LAS")"
-  exec 9>"$LAS"
-  flock -n 9 && return 0
-  [[ "$1" == 1 ]] || return 1
-  info "En annan körning (t.ex. den automatiska uppdateringen) pågår – väntar tills den är klar …"
-  flock -w 3600 9 || die "Den andra körningen blev inte klar inom en timme." "Försök igen senare."
-}
-
-# Den lokala kopia som timern kör. Kommer skriptet genom ett rör (curl … | bash) finns ingen fil
-# att kopiera; då hämtas samma fil ur repot. Kopian kontrolleras innan den ersätter den gamla.
-spara_kopia() {
-  local tmp="$HEM/server.sh.ny"
-  rm -f "$tmp"
-  if [[ -n "$SKRIPT" && -f "$SKRIPT" && -r "$SKRIPT" ]]; then
-    cp -- "$SKRIPT" "$tmp" || return 1
-  else
-    curl -fsSL --max-time 30 --max-filesize 1048576 --proto '=https,file' \
-      "$REPO_RAW/deploy/server.sh" -o "$tmp" 2>/dev/null || { rm -f "$tmp"; return 1; }
-  fi
-  if [[ "$(head -n 1 "$tmp")" != '#!/usr/bin/env bash' ]] || ! grep -q -- '--tidsstyrd' "$tmp" \
-    || ! bash -n "$tmp" 2>/dev/null; then
-    rm -f "$tmp"
-    return 1
-  fi
-  chmod 700 "$tmp" && mv -f "$tmp" "$HEM/server.sh"
-}
-
-skriv_enheter() {
-  [[ "$HEM" =~ ^/[A-Za-z0-9._/-]+$ ]] || die "Katalogen $HEM kan inte användas för automatiken."
-  cat >"$SYSTEMD_KATALOG/$ENHET.service" <<EOF
-# Skriven av DriveLogs installationsrad (server.sh). Slå av: kör raden med --utan-automatisk-uppdatering.
-[Unit]
-Description=DriveLog – automatisk uppdatering
-Wants=network-online.target
-After=network-online.target docker.service
-
-[Service]
-Type=oneshot
-Environment=DRIVELOG_HEM=$HEM
-ExecStart=/bin/bash $HEM/server.sh --tidsstyrd
-SyslogIdentifier=$ENHET
-TimeoutStartSec=45min
-EOF
-  cat >"$SYSTEMD_KATALOG/$ENHET.timer" <<EOF
-# Skriven av DriveLogs installationsrad (server.sh). Slå av: kör raden med --utan-automatisk-uppdatering.
-[Unit]
-Description=DriveLog – leta efter en ny version ungefär var 15:e minut
-
-[Timer]
-OnActiveSec=15min
-OnUnitInactiveSec=15min
-RandomizedDelaySec=5min
-
-[Install]
-WantedBy=timers.target
-EOF
-  chmod 644 "$SYSTEMD_KATALOG/$ENHET.service" "$SYSTEMD_KATALOG/$ENHET.timer"
-}
-
-sla_pa_automatik() {
-  command -v systemctl >/dev/null 2>&1 && [[ -d "$SYSTEMD_KATALOG" ]] \
-    || die "Servern saknar systemd, så automatisk uppdatering kan inte slås på." "Uppdatera genom att köra raden igen."
-  rubrik "Slår på automatisk uppdatering"
-  (umask 077 && mkdir -p "$HEM" "$KOPIEKATALOG")
-  chmod 700 "$HEM" "$KOPIEKATALOG"
-  borja_logga
-  spara_kopia || die "Den lokala kopian av skriptet kunde inte sparas i $HEM." "Kör raden igen om en stund."
-  skriv_konf
-  skriv_enheter
-  systemctl daemon-reload
-  systemctl enable --now "$ENHET.timer" >/dev/null 2>&1 \
-    || die "Timern $ENHET.timer kunde inte startas." "Titta i:  systemctl status $ENHET.timer"
-  satt_lage misslyckad_version ""
-  info "Automatisk uppdatering är påslagen (kopia: $HEM/server.sh, timer: $ENHET.timer)."
-}
-
-fornya_automatik() { # raden kördes för hand med automatiken på: ny kopia och aktuella inställningar
-  if spara_kopia; then
-    skriv_konf
-    skriv_enheter
-    systemctl daemon-reload || true
-    info "Automatikens kopia av skriptet och dess inställningar är förnyade."
-  else
-    varna "Automatikens kopia av skriptet kunde inte förnyas – den gamla används tills vidare."
-  fi
-}
-
-sla_av_automatik() {
-  rubrik "Slår av automatisk uppdatering"
-  if command -v systemctl >/dev/null 2>&1; then
-    systemctl disable --now "$ENHET.timer" >/dev/null 2>&1 || true
-  fi
-  rm -f "$SYSTEMD_KATALOG/$ENHET.timer" "$SYSTEMD_KATALOG/$ENHET.service"
-  if command -v systemctl >/dev/null 2>&1; then
-    systemctl daemon-reload >/dev/null 2>&1 || true
-    systemctl reset-failed "$ENHET.service" >/dev/null 2>&1 || true
-  fi
-  [[ -d "$HEM" ]] && borja_logga
-  rm -f "$KONF" "$HEM/server.sh"
-  info "Automatisk uppdatering är avslagen. DriveLog kör vidare som förut; uppdatera genom att köra raden igen."
-  [[ ! -d "$KOPIEKATALOG" ]] || info "Säkerhetskopiorna från tidigare uppdateringar ligger kvar i $KOPIEKATALOG."
-}
-
-visa_lage() {
-  local erb kor status kopior senaste v
-  if [[ -f "$KONF" ]]; then las_konf || true; fi
-  printf 'DriveLog – läge\n\n'
-  if auto_ar_pa; then
-    status="på"
-    if command -v systemctl >/dev/null 2>&1 && [[ "$(systemctl is-active "$ENHET.timer" 2>/dev/null)" == active ]]; then
-      status+=" (letar efter en ny version ungefär var 15:e minut)"
-    else
-      status+=", men timern $ENHET.timer är inte aktiv – kör installationsraden med --automatisk-uppdatering igen"
-    fi
-  else
-    status="av (uppdatera genom att köra installationsraden igen)"
-  fi
-  printf '  Automatisk uppdatering:  %s\n' "$status"
-  if command -v docker >/dev/null 2>&1 && docker inspect "$NAME" >/dev/null 2>&1; then
-    kor="$(korande_version)"
-    if [[ "$(docker inspect -f '{{.State.Running}}' "$NAME" 2>/dev/null)" == true ]]; then
-      printf '  Kör version:             %s (igång)\n' "${kor:-okänd}"
-    else
-      printf '  Kör version:             %s (STOPPAD)\n' "${kor:-okänd}"
-    fi
-  else
-    printf '  Kör version:             ingen DriveLog-container (%s) hittades\n' "$NAME"
-  fi
-  erb="$(las_erbjuden_version || true)"
-  printf '  Erbjuden version:        %s\n' "${erb:-kunde inte läsas just nu}"
-  v="$(las_lage senaste_kontroll)"
-  printf '  Senaste kontroll:        %s\n' "${v:-ingen än}"
-  v="$(las_lage senaste_uppgradering)"
-  printf '  Senaste uppgradering:    %s\n' "${v:-ingen än}"
-  v="$(las_lage senaste_fel)"
-  printf '  Senaste fel:             %s\n' "${v:-inget}"
-  if [[ -n "$(las_lage misslyckad_version)" ]]; then
-    printf '  Hoppar över version:     %s (startade inte; prövas igen när en nyare erbjuds eller när du kör raden själv)\n' \
-      "$(las_lage misslyckad_version)"
-  fi
-  if [[ -d "$KOPIEKATALOG" ]]; then
-    kopior="$(find "$KOPIEKATALOG" -maxdepth 1 -name 'drivelog-data-*.tar.gz' | sort)"
-    senaste="$(tail -n 1 <<<"$kopior")"
-    printf '  Säkerhetskopior:         %s st i %s%s\n' "$(grep -c . <<<"$kopior" || true)" "$KOPIEKATALOG" \
-      "${senaste:+ (senaste: ${senaste##*/})}"
-  fi
-  printf '\n  Hela loggen:  sudo tail -n 50 %s   eller   journalctl -t %s\n' "$HEM/uppdatering.log" "$ENHET"
-}
-
-# --- Argument --------------------------------------------------------------------------------------
 DOMAN=""
 NYTT_LOSENORD=0
-AUTO_PA=0
-AUTO_AV=0
-VISA_LAGE=0
 for arg in "$@"; do
   case "$arg" in
     --nytt-losenord) NYTT_LOSENORD=1 ;;
-    --automatisk-uppdatering) AUTO_PA=1 ;;
-    --utan-automatisk-uppdatering) AUTO_AV=1 ;;
-    --lage) VISA_LAGE=1 ;;
-    --tidsstyrd) TIDSSTYRD=1 ;;
     -*) die "Okänt val: $arg" ;;
     *) [[ -z "$DOMAN" ]] || die "Ange bara en domän."; DOMAN="$arg" ;;
   esac
 done
-[[ "$AUTO_PA$AUTO_AV" != 11 ]] || die "Välj antingen --automatisk-uppdatering eller --utan-automatisk-uppdatering."
-if [[ "$TIDSSTYRD" == 1 && $# -ne 1 ]]; then die "--tidsstyrd används bara av timern och tar inga andra val."; fi
-if [[ "$VISA_LAGE" == 1 || "$TIDSSTYRD" == 1 || ("$AUTO_AV" == 1 && -z "$DOMAN") ]]; then
-  [[ "$(id -u)" == 0 ]] || die "Kör raden med sudo."
-fi
-if [[ "$VISA_LAGE" == 1 ]]; then
-  visa_lage
-  exit 0
-fi
-if [[ "$AUTO_AV" == 1 && -z "$DOMAN" ]]; then
-  ta_las 1
-  sla_av_automatik
-  exit 0
-fi
-if [[ "$TIDSSTYRD" == 1 ]]; then
-  # Inställningarna är de som gällde när ägaren senast körde raden (automatik.conf).
-  if ! las_konf || ! kontrollera_konf; then
-    borja_logga
-    die "Automatikens inställningar ($KONF) saknas eller är trasiga." \
-      "Kör installationsraden med --automatisk-uppdatering igen."
-  fi
-fi
 [[ -n "$DOMAN" ]] || die "Ange domänen sist på raden, t.ex. drivelog.smgd.se."
 DOMAN="${DOMAN,,}"
-ar_doman "$DOMAN" \
+[[ "$DOMAN" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$ ]] \
   || die "'$DOMAN' ser inte ut som ett domännamn (skriv det utan https:// och utan snedstreck)."
 [[ "$(id -u)" == 0 ]] || die "Kör raden med sudo (skriptet behöver vara root för att installera och starta Docker)."
 LOKAL=0
@@ -394,262 +75,6 @@ fraga() { # variabelnamn, ledtext, [dold]
   printf -v "$1" '%s' "$svar"
 }
 
-# --- Gemensamt för start och uppgradering --------------------------------------------------------
-# Inställningsfilen skrivs av Python i avbilden (riktig JSON även för konstiga tecken). Värdena
-# går in via standard in – aldrig på en kommandorad eller i en miljövariabel.
-skriv_installningar() { # e-post ("" = behåll), lösenord ("" = inget)
-  printf '%s\n%s\n%s\n' "$DOMAN" "$1" "$2" | docker run --rm -i --entrypoint python3 -v "$DATA:/data" "$BILD" -I -c '
-import json, os, sys
-doman, epost, losenord = (rad.rstrip("\n") for rad in sys.stdin.readlines()[:3])
-sokvag = "/data/options.json"
-standard = {"domain": "", "admin_email": "", "admin_password": "", "strato_dyndns": False,
-            "strato_dyndns_user": "", "strato_dyndns_password": "", "log_level": "info"}
-try:
-    with open(sokvag, encoding="utf-8") as fil:
-        gammal = json.load(fil)
-    if not isinstance(gammal, dict):
-        gammal = {}
-except (OSError, ValueError):
-    gammal = {}
-data = {nyckel: gammal.get(nyckel, varde) for nyckel, varde in standard.items()}
-data["domain"] = doman
-if epost:
-    data["admin_email"] = epost
-data["admin_password"] = losenord
-tmp = sokvag + ".tmp"
-fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
-with os.fdopen(fd, "w", encoding="utf-8") as fil:
-    json.dump(data, fil)
-    fil.flush()
-    os.fsync(fil.fileno())
-os.replace(tmp, sokvag)
-'
-}
-
-starta_container() { # avbild (namn eller id)
-  if docker ps -a --format '{{.Names}}' | grep -qx "$NAME"; then
-    docker stop -t 30 "$NAME" >/dev/null 2>&1 || true
-    docker rm "$NAME" >/dev/null
-  fi
-  docker run -d --name "$NAME" --restart unless-stopped --init -e TZ="$TZ_NAMN" \
-    -v "$DATA:/data" -p 80:80 -p 443:443 -p 443:443/udp "$1" >/dev/null
-}
-
-visa_logg() {
-  if [[ -n "$LOGGFIL" ]]; then
-    docker logs --tail "${1:-40}" "$NAME" 2>&1 | sed 's/^/   | /' | tee -a "$LOGGFIL" >&2 || true
-  else
-    docker logs --tail "${1:-40}" "$NAME" 2>&1 | sed 's/^/   | /' >&2 || true
-  fi
-}
-halsa() { # extra curl-val
-  curl -fsS --max-time 8 "$@" --resolve "$DOMAN:443:127.0.0.1" "https://$DOMAN/api/v1/health/ready" >/dev/null 2>&1
-}
-KURL_VAL=()
-[[ "$LOKAL" == 1 ]] && KURL_VAL=(-k) # lokalt certifikat
-
-# Väntar på hälsokontrollen. 0 = svarar, 2 = kontot kunde inte skapas, 3 = containern startade
-# inte, 4 = inget svar inom tidsgränsen.
-vanta_pa_svar() {
-  local slut=$((SECONDS + VANTA_SEKUNDER)) logg
-  while ((SECONDS < slut)); do
-    if halsa "${KURL_VAL[@]}"; then
-      return 0
-    fi
-    logg="$(docker logs --tail 300 "$NAME" 2>&1 || true)"
-    if grep -qF -e "Det finns inget konto" -e "Kontot kunde inte skapas" <<<"$logg"; then
-      return 2
-    fi
-    # Utan tillsyn: en container som startas om gång på gång har inte startat.
-    if [[ "$TIDSSTYRD" == 1 ]] && (($(docker inspect -f '{{.RestartCount}}' "$NAME" 2>/dev/null || echo 0) >= 3)); then
-      return 3
-    fi
-    if [[ "$(docker inspect -f '{{.State.Running}}' "$NAME" 2>/dev/null)" != true ]]; then
-      sleep 5 # Docker startar om containern av sig själv; ge den en chans
-      if [[ "$(docker inspect -f '{{.State.Running}}' "$NAME" 2>/dev/null)" != true ]]; then
-        return 3
-      fi
-    fi
-    sleep 3
-  done
-  return 4
-}
-
-# --- Automatisk uppdatering (körs av timern) -------------------------------------------------------
-FEL=""
-KOPIA=""
-
-hamta_avbild() { # BILD
-  if [[ "$PULL" == 1 ]]; then
-    docker pull -q "$BILD" >/dev/null 2>&1
-  else
-    docker image inspect "$BILD" >/dev/null 2>&1
-  fi
-}
-
-# Säkerhetskopia av hela datakatalogen (databas, nycklar, certifikat, inställningar). Containern
-# är stoppad, så SQLite skrivs inte under tiden. De ANTAL_KOPIOR senaste sparas.
-sakerhetskopiera() { # versionen som kopian hör till
-  local behov ledigt namn gammal
-  (umask 077 && mkdir -p "$KOPIEKATALOG")
-  behov="$(du -sk "$DATA" 2>/dev/null | cut -f1)"
-  ledigt="$(df -Pk "$KOPIEKATALOG" 2>/dev/null | awk 'NR == 2 {print $4}')"
-  if [[ ! "$behov" =~ ^[0-9]+$ || ! "$ledigt" =~ ^[0-9]+$ ]] || ((ledigt < behov + 102400)); then
-    FEL="För lite ledigt diskutrymme för säkerhetskopian (datat är ungefär $((${behov:-0} / 1024)) MB, ledigt $((${ledigt:-0} / 1024)) MB)."
-    return 1
-  fi
-  namn="$KOPIEKATALOG/drivelog-data-$(date +%Y%m%dT%H%M%S)-$1.tar.gz"
-  if ! tar --numeric-owner -C "$DATA" -czf "$namn.tmp" . 2>/dev/null || ! tar -tzf "$namn.tmp" >/dev/null 2>&1; then
-    rm -f "$namn.tmp"
-    FEL="Säkerhetskopian av $DATA kunde inte skapas."
-    return 1
-  fi
-  chmod 600 "$namn.tmp"
-  mv -f "$namn.tmp" "$namn"
-  KOPIA="$namn"
-  while IFS= read -r gammal; do
-    [[ -n "$gammal" ]] || continue
-    rm -f -- "$gammal"
-    info "Äldre säkerhetskopia borttagen: ${gammal##*/}"
-  done < <(find "$KOPIEKATALOG" -maxdepth 1 -name 'drivelog-data-*.tar.gz' | sort -r | tail -n +"$((ANTAL_KOPIOR + 1))")
-}
-
-aterstall_data() { # kopia
-  find "$DATA" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + || return 1
-  tar --numeric-owner -p -C "$DATA" -xzf "$1"
-}
-
-# Startar en avbild och kontrollerar att den svarar och är rätt version. Sätter FEL om inte.
-starta_och_kontrollera() { # avbild, version, skriv inställningar (1/0)
-  local kod=0 kor
-  BILD="$1"
-  if [[ "$3" == 1 ]] && ! skriv_installningar "" ""; then
-    FEL="inställningsfilen kunde inte skrivas med avbilden $1"
-    return 1
-  fi
-  if ! starta_container "$1"; then
-    FEL="containern kunde inte skapas"
-    return 1
-  fi
-  vanta_pa_svar || kod=$?
-  case "$kod" in
-    0)
-      kor="$(korande_version)"
-      [[ "$kor" == "$2" ]] && return 0
-      FEL="den svarar, men som version ${kor:-okänd} i stället för $2"
-      ;;
-    2) FEL="kontot kunde inte läsas eller skapas" ;;
-    3) FEL="containern startade inte (stannade eller startades om gång på gång)" ;;
-    *) FEL="den svarade inte inom $VANTA_SEKUNDER sekunder" ;;
-  esac
-  visa_logg 40
-  return 1
-}
-
-stada_avbilder() { # behåll: avbilder som ska sparas
-  [[ "$PULL" == 1 ]] || return 0 # lokala avbilder (prov) rörs inte
-  local ref
-  while IFS= read -r ref; do
-    [[ -n "$ref" && "$ref" != *"<none>"* ]] || continue
-    [[ " $* " == *" $ref "* ]] && continue
-    docker rmi "$ref" >/dev/null 2>&1 && info "Gammal avbild borttagen: $ref"
-  done < <(docker images --format '{{.Repository}}:{{.Tag}}' "$IMAGE" 2>/dev/null || true)
-}
-
-uppgradera() { # körande version, ny version
-  local gammal="$1" ny="$2" gammal_id gammal_bild orsak
-  BILD="$IMAGE:$ny"
-  rubrik "Uppgraderar DriveLog $gammal → $ny"
-  hamta_avbild || die "Kunde inte hämta $BILD – inget har ändrats. Försöker igen vid nästa kontroll."
-  gammal_id="$(docker inspect -f '{{.Image}}' "$NAME")"
-  gammal_bild="$(docker inspect -f '{{.Config.Image}}' "$NAME")"
-  # Återgången startar exakt samma avbild – även om taggen skulle ha flyttats.
-  [[ "$(docker image inspect -f '{{.Id}}' "$gammal_bild" 2>/dev/null)" == "$gammal_id" ]] || gammal_bild="$gammal_id"
-
-  info "Stoppar DriveLog $gammal för säkerhetskopian …"
-  if ! docker stop -t 30 "$NAME" >/dev/null; then
-    docker start "$NAME" >/dev/null 2>&1 || true
-    die "DriveLog $gammal kunde inte stoppas – inget har ändrats."
-  fi
-  if ! sakerhetskopiera "$gammal"; then
-    docker start "$NAME" >/dev/null 2>&1 || true
-    die "$FEL Inget har ändrats; DriveLog $gammal startades igen."
-  fi
-  info "Säkerhetskopia: $KOPIA"
-
-  info "Startar DriveLog $ny …"
-  if starta_och_kontrollera "$BILD" "$ny" 1; then
-    satt_lage misslyckad_version ""
-    satt_lage senaste_uppgradering "$(tid) – $gammal → $ny"
-    info "Klart: DriveLog $ny är igång och svarar."
-    stada_avbilder "$BILD" "$gammal_bild"
-    return 0
-  fi
-
-  orsak="$FEL"
-  varna "DriveLog $ny fungerade inte: $orsak. Går tillbaka till $gammal."
-  docker rm -f "$NAME" >/dev/null 2>&1 || true
-  satt_lage misslyckad_version "$ny"
-  info "Återställer datat från $KOPIA …"
-  aterstall_data "$KOPIA" || die "Version $ny startade inte ($orsak), och datat kunde inte återställas." \
-    "Säkerhetskopian finns kvar: $KOPIA" "Kör installationsraden, eller be om hjälp."
-  if starta_och_kontrollera "$gammal_bild" "$gammal" 0; then
-    info "Återgick till DriveLog $gammal med datat från före försöket."
-    die "Version $ny startade inte ($orsak). DriveLog $gammal kör igen, med datat från före försöket." \
-      "$ny prövas inte igen förrän en nyare version erbjuds eller du kör installationsraden själv."
-  fi
-  die "Version $ny startade inte ($orsak), och återgången till $gammal misslyckades också ($FEL)." \
-    "Datat är återställt från $KOPIA. Kör installationsraden för hand, eller be om hjälp."
-}
-
-tidsstyrd_korning() {
-  local erbjuden kor miss
-  borja_logga
-  if ! ta_las 0; then
-    info "En annan körning pågår redan – den här kontrollen hoppas över."
-    exit 0
-  fi
-  docker info >/dev/null 2>&1 || die "Docker svarar inte – ingen uppdatering nu."
-  if [[ "$(docker inspect -f '{{.State.Running}}' "$NAME" 2>/dev/null)" != true ]]; then
-    satt_lage senaste_kontroll "$(tid) – DriveLog ($NAME) kör inte, ingen uppdatering"
-    die "DriveLog-containern $NAME kör inte – ingen uppdatering." "Starta DriveLog genom att köra installationsraden."
-  fi
-  erbjuden="$(las_erbjuden_version)" \
-    || die "Kunde inte läsa vilken version som erbjuds – inget har ändrats. Försöker igen vid nästa kontroll."
-  kor="$(korande_version)"
-  [[ -n "$kor" ]] || die "Kan inte avgöra vilken version som kör – ingen automatisk uppdatering." \
-    "Kör installationsraden för hand."
-  if ! ar_nyare "$erbjuden" "$kor"; then
-    satt_lage senaste_kontroll "$(tid) – ingen ny version (kör $kor, erbjuds $erbjuden)"
-    info "Ingen ny version (kör $kor, erbjuds $erbjuden)."
-    exit 0
-  fi
-  miss="$(las_lage misslyckad_version)"
-  if [[ "$erbjuden" == "$miss" ]]; then
-    satt_lage senaste_kontroll "$(tid) – $erbjuden hoppas över (startade inte förra gången), kör $kor"
-    info "Version $erbjuden startade inte förra gången – försöker inte igen (kör $kor)."
-    exit 0
-  fi
-  satt_lage senaste_kontroll "$(tid) – ny version $erbjuden erbjuds (kör $kor)"
-  info "Ny version erbjuds: $erbjuden (kör $kor)."
-  uppgradera "$kor" "$erbjuden"
-}
-
-if [[ "$TIDSSTYRD" == 1 ]]; then
-  tidsstyrd_korning
-  exit 0
-fi
-
-# --- 0. Lås och automatik ----------------------------------------------------------------------------
-ta_las 1
-if auto_ar_pa; then
-  borja_logga
-  till_loggfil "Installationsraden körs för hand${VERSION:+ (version $VERSION)}."
-  # Ägaren kör raden själv: en version som tidigare misslyckades får prövas igen.
-  satt_lage misslyckad_version ""
-fi
-[[ "$AUTO_AV" == 0 ]] || sla_av_automatik
-
 # --- 1. Docker -------------------------------------------------------------------------------------
 if ! command -v docker >/dev/null 2>&1; then
   rubrik "Installerar Docker (tar någon minut)"
@@ -667,7 +92,8 @@ fi
 # --- 2. Version ------------------------------------------------------------------------------------
 if [[ -z "$VERSION" ]]; then
   # Den version som erbjuds i repot är alltid färdigbyggd och publicerad (se .github/workflows/addon.yml).
-  VERSION="$(las_erbjuden_version || true)"
+  VERSION="$(curl -fsSL --max-time 20 "$REPO_RAW/drivelog/config.yaml" 2>/dev/null \
+    | sed -n 's/^version: "\([0-9][0-9.]*\)"[[:space:]]*$/\1/p' | head -n 1 || true)"
   if [[ -z "$VERSION" ]]; then
     varna "Kunde inte läsa aktuell version – använder den senast publicerade."
     VERSION=latest
@@ -699,21 +125,17 @@ if [[ "$LOKAL" == 0 && "${DRIVELOG_SKIP_DNS_CHECK:-0}" != 1 ]]; then
   if [[ -n "$publika4" ]]; then
     traff=0
     for a in $dns4; do [[ " $publika4 " == *" $a "* ]] && traff=1; done
-    # shellcheck disable=SC2086,SC2116 # echo slår ihop raderna till en
     [[ "$traff" == 1 ]] || die "$DOMAN pekar på $(echo $dns4), inte på den här servern ($publika4)." \
       "Ändra A-posten hos den som sköter domänens DNS (för smgd.se: STRATO) till serverns adress," \
       "vänta några minuter och kör raden igen. Utan det kan certifikatet inte hämtas."
-    # shellcheck disable=SC2086,SC2116
     info "A-posten stämmer: $(echo $dns4)"
   else
     varna "Servern har ingen publik adress på sitt eget nätverkskort, så kontrollen kan inte göras här."
-    # shellcheck disable=SC2086,SC2116
     varna "$DOMAN pekar på $(echo $dns4) – det ska vara serverns publika adress."
   fi
   if [[ -n "$dns6" ]]; then
     traff=0
     for a in $dns6; do [[ $'\n'"$mina6"$'\n' == *$'\n'"$a"$'\n'* ]] && traff=1; done
-    # shellcheck disable=SC2086,SC2116
     [[ "$traff" == 1 ]] || die "$DOMAN har en AAAA-post (IPv6) som inte leder hit: $(echo $dns6)." \
       "Certifikatutfärdaren kontrollerar helst över IPv6 och hamnar då på fel server." \
       "Ta bort AAAA-posten (eller peka den på serverns IPv6-adress) och kör raden igen."
@@ -758,7 +180,6 @@ if [[ "$NY_INSTALLATION" == 1 || "$NYTT_LOSENORD" == 1 ]]; then
   while [[ "${#LOSENORD}" -lt 12 ]]; do
     [[ -z "$LOSENORD" ]] || varna "Lösenordet måste vara minst 12 tecken."
     fraga LOSENORD "Lösenord (minst 12 tecken, syns inte när du skriver): " dold
-    LOSENORD2=""
     fraga LOSENORD2 "Samma lösenord en gång till: " dold
     if [[ "$LOSENORD" != "$LOSENORD2" ]]; then
       varna "Lösenorden var inte lika – försök igen."
@@ -770,6 +191,36 @@ else
   LOSENORD=""
 fi
 
+# Inställningsfilen skrivs av Python i avbilden (riktig JSON även för konstiga tecken). Värdena
+# går in via standard in – aldrig på en kommandorad eller i en miljövariabel.
+skriv_installningar() { # e-post ("" = behåll), lösenord ("" = inget)
+  printf '%s\n%s\n%s\n' "$DOMAN" "$1" "$2" | docker run --rm -i --entrypoint python3 -v "$DATA:/data" "$BILD" -I -c '
+import json, os, sys
+doman, epost, losenord = (rad.rstrip("\n") for rad in sys.stdin.readlines()[:3])
+sokvag = "/data/options.json"
+standard = {"domain": "", "admin_email": "", "admin_password": "", "strato_dyndns": False,
+            "strato_dyndns_user": "", "strato_dyndns_password": "", "log_level": "info"}
+try:
+    with open(sokvag, encoding="utf-8") as fil:
+        gammal = json.load(fil)
+    if not isinstance(gammal, dict):
+        gammal = {}
+except (OSError, ValueError):
+    gammal = {}
+data = {nyckel: gammal.get(nyckel, varde) for nyckel, varde in standard.items()}
+data["domain"] = doman
+if epost:
+    data["admin_email"] = epost
+data["admin_password"] = losenord
+tmp = sokvag + ".tmp"
+fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+with os.fdopen(fd, "w", encoding="utf-8") as fil:
+    json.dump(data, fil)
+    fil.flush()
+    os.fsync(fil.fileno())
+os.replace(tmp, sokvag)
+'
+}
 LOSENORD_I_FILEN=0
 stada() {
   # Lösenordet ska inte ligga kvar i klartext: efter en lyckad start finns kontot i databasen, och
@@ -785,29 +236,50 @@ skriv_installningar "$EPOST" "$LOSENORD"
 
 # --- 6. Starta -------------------------------------------------------------------------------------
 rubrik "Startar DriveLog"
-FORE=""
-docker inspect "$NAME" >/dev/null 2>&1 && FORE="$(korande_version)"
-starta_container "$BILD"
+if docker ps -a --format '{{.Names}}' | grep -qx "$NAME"; then
+  docker stop -t 30 "$NAME" >/dev/null 2>&1 || true
+  docker rm "$NAME" >/dev/null
+fi
+docker run -d --name "$NAME" --restart unless-stopped --init -e TZ="$TZ_NAMN" \
+  -v "$DATA:/data" -p 80:80 -p 443:443 -p 443:443/udp "$BILD" >/dev/null
+
+visa_logg() { docker logs --tail "${1:-40}" "$NAME" 2>&1 | sed 's/^/   | /' >&2 || true; }
+halsa() { # extra curl-val
+  curl -fsS --max-time 8 "$@" --resolve "$DOMAN:443:127.0.0.1" "https://$DOMAN/api/v1/health/ready" >/dev/null 2>&1
+}
+KURL_VAL=()
+[[ "$LOKAL" == 1 ]] && KURL_VAL=(-k) # lokalt certifikat
 
 if [[ "$LOKAL" == 1 ]]; then
   info "Väntar på att DriveLog ska svara …"
 else
   info "Väntar på att DriveLog ska svara och att certifikatet ska hämtas (kan ta ett par minuter) …"
 fi
-svar=0
-vanta_pa_svar || svar=$?
-if [[ "$svar" == 2 ]]; then
-  visa_logg 25
-  die "Kontot kunde inte skapas – se raderna ovan." "Rätta det som står där och kör raden igen."
-fi
-if [[ "$svar" == 3 ]]; then
-  visa_logg 40
-  die "DriveLog startade inte – se raderna ovan."
-fi
+klar=0
+slut=$((SECONDS + VANTA_SEKUNDER))
+while ((SECONDS < slut)); do
+  if halsa "${KURL_VAL[@]}"; then
+    klar=1
+    break
+  fi
+  logg="$(docker logs --tail 300 "$NAME" 2>&1 || true)"
+  if grep -qF -e "Det finns inget konto" -e "Kontot kunde inte skapas" <<<"$logg"; then
+    visa_logg 25
+    die "Kontot kunde inte skapas – se raderna ovan." "Rätta det som står där och kör raden igen."
+  fi
+  if [[ "$(docker inspect -f '{{.State.Running}}' "$NAME" 2>/dev/null)" != true ]]; then
+    sleep 5 # Docker startar om containern av sig själv; ge den en chans
+    if [[ "$(docker inspect -f '{{.State.Running}}' "$NAME" 2>/dev/null)" != true ]]; then
+      visa_logg 40
+      die "DriveLog startade inte – se raderna ovan."
+    fi
+  fi
+  sleep 3
+done
 
 stada
 
-if [[ "$svar" != 0 ]]; then
+if [[ "$klar" != 1 ]]; then
   visa_logg 40
   if halsa -k; then
     die "DriveLog är igång, men certifikatet för $DOMAN har inte kunnat hämtas än." \
@@ -819,20 +291,6 @@ if [[ "$svar" != 0 ]]; then
     "Titta i loggen:  docker logs --tail 100 $NAME"
 fi
 
-# --- 7. Automatisk uppdatering ------------------------------------------------------------------------
-if [[ -n "$LOGGFIL" ]]; then
-  EFTER="$(korande_version)"
-  if [[ -n "$FORE" && -n "$EFTER" && "$FORE" != "$EFTER" ]]; then
-    satt_lage senaste_uppgradering "$(tid) – $FORE → $EFTER (installationsraden för hand)"
-  fi
-  till_loggfil "Installationsraden klar: DriveLog ${EFTER:-$VERSION} är igång."
-fi
-if [[ "$AUTO_PA" == 1 ]]; then
-  sla_pa_automatik
-elif auto_ar_pa; then
-  fornya_automatik
-fi
-
 rubrik "Klart"
 info "DriveLog $VERSION är igång: https://$DOMAN"
 if [[ "$NY_INSTALLATION" == 1 ]]; then
@@ -840,10 +298,6 @@ if [[ "$NY_INSTALLATION" == 1 ]]; then
 elif [[ "$NYTT_LOSENORD" == 1 ]]; then
   info "Lösenordet för $EPOST är bytt."
 fi
-if auto_ar_pa; then
-  info "Nya versioner installeras automatiskt. Läget:  sudo $HEM/server.sh --lage"
-else
-  info "Uppdatera senare: kör samma rad igen."
-fi
+info "Uppdatera senare: kör samma rad igen."
 info "Allt ditt ligger i $DATA – ta med den katalogen i serverns säkerhetskopia."
 info "Loggen: docker logs --tail 50 $NAME"
