@@ -111,7 +111,7 @@ def test_full_document_fields(db, user, vehicle, trips, world):
     assert doc["owner"]["about_work"].startswith("Jag är servicetekniker")
     assert doc["origin"]["name"] == "Kontoret" and doc["destination"]["company"] == "Exempel Åkeri AB"
     assert doc["destination"]["note"] == "Lastkaj på baksidan. Portkod [borttaget]"
-    assert [d["time"] for d in doc["day"]] == ["09:00–09:20", "11:00–11:20", "19:00–19:20"]
+    assert [d["time"] for d in doc["day"]] == ["07:00–07:20", "09:00–09:20", "17:00–17:20"]
     assert [d["this_trip"] for d in doc["day"]] == [False, True, False]
     assert doc["day"][0]["purpose"] == "Kontorsdag" and doc["day"][0]["status"] == "godkänd av dig"
     assert doc["previous_trip"]["to"] == "Kontoret" and doc["next_trip"]["to"] == "Gymmet"
@@ -120,7 +120,7 @@ def test_full_document_fields(db, user, vehicle, trips, world):
     by_subject = {e["subject"]: e for e in doc["calendar_day"]}
     assert set(by_subject) == {"Service Exempel Åkeri", "Privat bokning"}
     service = by_subject["Service Exempel Åkeri"]
-    assert service["body"] == "Byt filter. Mötes-ID: [borttaget]"
+    assert service["body"] == "Byt filter."  # raden med mötes-ID och lösenord tas bort helt
     assert service["participants"] == [{"name": "Lennart Exempel", "relation": "kollega", "company_domain": None}]
     private = by_subject["Privat bokning"]
     assert private["marked_private"] is True and private["location"] is None and private["body"] is None

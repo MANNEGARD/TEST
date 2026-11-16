@@ -87,10 +87,11 @@ Månadsnotisen i självgående läge har en länk som hämtar underlaget utan in
 | Microsoft Graph | Läsning av valda kalendrar | När Outlook är anslutet |
 | Kalenderlänk (ICS) | Hämtar kalenderfilen (GET) | När en länk är sparad, var 30:e minut och vid Synka nu |
 | Home Assistant (din egen) | Notistexter | När notiser är påslagna |
-| AI-leverantör | Avidentifierat underlag för en resa, se nedan | Endast om en leverantör är ansluten och reglerna inte räcker |
+| AI-leverantör | Underlag för en resa – fullständigt (standard från 1.3.0) eller minimalt, se nedan | Endast om en leverantör är ansluten: när reglerna inte räcker, när ärendet saknas, när en kalenderbokning stämmer med resan, och vid AI-genomgången |
 | Kartplattor | Vilket kartområde du tittar på, och sidans ursprung som Referer (t.ex. `https://drivelog.example/`, aldrig sökvägen) | När en karta visas (kan stängas av eller pekas mot egen plattserver) |
-| Geokodare (standard OpenStreetMap Nominatim) | Mittpunkten av en liten ruta (koordinat med fyra decimaler) där bilen stannat på en okänd plats | När geokodningen är på (standard från 1.1.0) och hemmet finns som plats med koordinat |
-| Geokodare, *Hämta adressen från kartan* | Den valda platsens position (fyra decimaler), en gång | Bara när du trycker på knappen på en plats (även bostaden), och geokodningen är på |
+| Geokodare (standard OpenStreetMap Nominatim) | Platsens position (sex decimaler) där bilen stannat på en okänd plats, och bostadens position en gång (1.3.0) | När geokodningen är på (standard från 1.1.0) och hemmet finns som plats med koordinat |
+| Geokodare, adress → position (1.3.0) | Adresstexten för en plats som har adress men saknar position (t.ex. från en importerad körjournal) | Samma villkor, högst 3 per minut och inom samma dygnsgräns |
+| Geokodare, *Hämta adressen från kartan* | Den valda platsens position, en gång | Bara när du trycker på knappen på en plats, och geokodningen är på |
 | Home Assistant (din egen) | Signerad nedladdningslänk i månadsnotisen | Självgående läge, när underlaget är klart |
 
 Ingen telemetri eller analys skickas någonstans.
@@ -100,7 +101,9 @@ Ingen telemetri eller analys skickas någonstans.
 När bilen stannar på en plats som inte redan finns i DriveLog slår servern upp gatuadressen,
 som standard hos OpenStreetMaps Nominatim.
 
-- Bara `GET <geokodare>/reverse` med rutans mittpunkt skickas. Resa, tid, id, namn och
+- Bara `GET <geokodare>/reverse` med platsens position (från 1.3.0 sex decimaler, för att rätt
+  hus ska hittas; svaret sparas fortfarande per liten ruta) och `GET <geokodare>/search` med en
+  plats adresstext skickas. Resa, tid, id, namn och
   kalender skickas aldrig. User-Agent är neutral (`SMGD-DriveLog/<version> (self-hosted
   logbook; reverse geocoding)`) och ingen Referer skickas.
 - **OpenStreetMap ser serverns publika adress och när uppslagen görs.** Tidpunkterna kan säga
@@ -120,8 +123,8 @@ som standard hos OpenStreetMaps Nominatim.
 - **Hämta adressen från kartan** (på en plats under *Platser*) skickar just den platsens
   position, avrundad till fyra decimaler, en gång när du trycker – samma anrop och skydd som
   ovan: svaret sparas per ruta (ett nytt tryck skickar ingenting) och anropet räknas mot
-  gränsen 500 per dygn. Det är det enda sättet bostadens position når karttjänsten; den slås aldrig upp av sig
-  själv. Svaret sparas inte förrän du sparar platsen.
+  gränsen 500 per dygn. Från 1.3.0 slås även bostadens adress upp automatiskt en gång (bara
+  adress och ort sparas). Svaret från knappen sparas inte förrän du sparar platsen.
 
 ### Kartbilderna och Referer
 
@@ -153,7 +156,9 @@ Microsoft). Tjänsten ser serverns publika adress och när hämtningarna görs.
   anslutning. Tidsgräns 5 sekunder för anslutning, 10 sekunder per läsning och 20 sekunder
   totalt. Svaret läses strömmat och avbryts vid 10 MB. Packade svar (gzip m.fl.) avvisas.
 - Innehållet är opålitlig indata. Bara rubrik, tid, plats, ledig/upptagen, privat-flagga,
-  UID och – om du har slagit på det – en kort brödtext läses. All text tvättas från styr- och
+  UID och – med *Läs hela bokningen* (påslaget från 1.3.0) – beskrivningen (högst 4 000
+  tecken) och deltagarna (namn och adress, högst 50) läses. Beskrivningar och deltagare
+  skrivs aldrig i loggarna. All text tvättas från styr- och
   osynliga tecken och kapas. Taken (25 000 händelser, 5 000 tillfällen i synkfönstret, inga
   täta upprepningar) hindrar en elak fil från att belasta servern.
 - Tolkningen använder biblioteken `icalendar` (BSD-2-Clause) och `recurring-ical-events`
@@ -161,15 +166,35 @@ Microsoft). Tjänsten ser serverns publika adress och när hämtningarna görs.
 
 ### AI-leverantören
 
-Skickas: platsetikett eller ort, platstyp, veckodag, klockslag, sträcka, regelmotorns
-signaler, tidigare bekräftade syften för samma resa och – om tillåtet – rubrik, tid och plats
-för matchade kalenderbokningar. Skickas aldrig: koordinater, VIN, registreringsnummer,
-hemadress, privata platsers namn, gatuadresser eller kalenderns brödtext (de två sista kan
-slås på uttryckligen).
+Två nivåer (*Inställningar → Förslag och AI*):
 
-Kalendertexter och importerade kommentarer behandlas som opålitlig indata. De skickas
-avgränsade som data, och modellens svar valideras efteråt – en instruktion gömd i en
-kalenderrubrik kan inte ändra en klassning eller smyga in påhittade uppgifter.
+- **Fullständigt underlag** (standard från 1.3.0): platsernas namn och gatuadresser (även
+  bostaden och privata platser), kartans namn och typ, platsanteckningar, dagens resor, resan
+  före och efter, historik och dina regler, kalenderbokningarna för dagen och – vid resor till
+  en annan ort – hela vistelsen och de närmaste dagarna (rubrik, plats, tvättad beskrivning och
+  deltagarnas namn med kollega/extern och den externa e-postdomänen), arbetsgivarens namn och
+  "Om mitt arbete". **Det betyder att personuppgifter (du själv, kollegor, kunder och
+  kandidater i bokningarna) och arbetsgivarens uppgifter lämnar servern till den leverantör du
+  valt** – ägaren har bett om det, och arbetsgivaren har godkänt att jobbkalendern används.
+  Privata bokningar skickas bara som tid.
+- **Minimalt**: platsetikett eller ort, platstyp, veckodag, klockslag, sträcka, regelmotorns
+  signaler, tidigare bekräftade syften och – om tillåtet – rubrik, tid och plats för matchade
+  bokningar. Hemadress, privata platsers namn, gatuadresser och brödtext skickas inte (de två
+  sista kan slås på).
+
+Aldrig, på någon nivå: koordinater, VIN, registreringsnummer, API-nycklar, tokens, lösenord,
+kalenderlänken, Home Assistant-token och e-postadresser.
+
+**Promptinjektion.** Allt i underlaget – kalendertexter, platsnamn från kartan, anteckningar,
+importerade kommentarer, "Om mitt arbete" – är opålitlig indata. Det skickas avgränsat inom
+`<data>…</data>` med en systemprompt som säger att innehållet är uppgifter, aldrig
+instruktioner. Före sändning tvättas varje sträng (`classify/underlag.py`,
+`calendar/calendar_text.py`, `text_safety.sanitize_text`): styrtecken och osynliga tecken bort,
+`<`/`>` blir `‹`/`›`, länkar blir "[länk]", mötesblock (Teams/Zoom), inringningsnummer,
+mötes-ID, koder och lösenord tas bort, långa nyckelliknande strängar, chassinummer och
+koordinater tas bort, och texten kapas. Svaret valideras efteråt: ett ärende med ett namn som
+inte finns i underlaget, med länk eller fel form avvisas; ett ärende godkänns aldrig av AI
+själv; AI ensam ger aldrig automatisk klassning.
 
 ### Notiser
 

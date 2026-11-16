@@ -11,9 +11,13 @@ owner is the one responsible for the data in their installation.
   reported position.
 * The trip journal built from that data: trips, places, purposes and exports.
 * The owner's login (e-mail address and a hashed password) and the settings they choose.
-* Only if the owner turns it on: calendar entries from their own calendar, used to suggest the
+* Only if the owner connects a calendar: entries from their own calendar, used to suggest the
   purpose of a trip. For each entry: subject, time, location, free/busy status and whether it
-  is marked private. The body text is only stored if the owner enables it.
+  is marked private. From version 1.3.0 the whole entry is read by default – the description
+  (up to 4,000 characters) and the attendees (name, e-mail address, organizer or attendee) as
+  far as the shared calendar contains them. The owner can turn this off under Settings →
+  Calendar ("Läs hela bokningen"). The owner's work e-mail domain is guessed from the entries
+  (or entered by the owner) to tell colleagues from external attendees.
 
 ## Where it is stored
 
@@ -24,12 +28,13 @@ Nothing is sold, and nothing is used for advertising or profiling.
 ## What leaves the server
 
 * Requests to the Volvo Cars APIs, to read the owner's own vehicle data.
-* Address lookups: a rounded position is sent to OpenStreetMap's Nominatim service to get a
-  street address.
-* Only when the owner presses "Hämta adressen från kartan" (fetch the address from the map) on
-  a saved place: that place's position, rounded to four decimals, is sent once to the same
-  service. This is the only way the position of the owner's home can reach it; it is never
-  looked up automatically.
+* Address lookups: the position of a new stop (six decimals) is sent to OpenStreetMap's
+  Nominatim service to get a street address. From version 1.3.0 this also applies to the
+  owner's confirmed home, which is looked up automatically once. Places that only have an
+  address (for example from an imported journal) are sent as address text to the same service
+  to get a position.
+* When the owner presses "Hämta adressen från kartan" (fetch the address from the map) on a
+  saved place: that place's position is sent once to the same service.
 * Map tiles: when a map is shown, the browser fetches map images from the configured tile
   server (by default OpenStreetMap). The tile server sees the viewer's IP address, the map area
   and the site's origin (for example `https://drivelog.example/`, never the page path).
@@ -37,9 +42,29 @@ Nothing is sold, and nothing is used for advertising or profiling.
   the calendar provider (for Outlook, Microsoft) every 30 minutes and when the owner asks for
   it. The provider sees the server's address and when the file is fetched. Removing the link
   deletes it and all entries fetched from it.
-* Only if the owner turns it on: the minimum information needed is sent to the AI provider the
-  owner has chosen, to suggest a category for a trip, and notifications are sent to the owner's
-  own Home Assistant.
+* Only if the owner has chosen an AI provider (Anthropic or OpenAI) and added an API key:
+  information about a trip is sent to that provider to suggest a category and a written
+  purpose. The owner chooses how much under Settings → AI suggestions:
+  * **Full context (default from version 1.3.0).** Everything that helps the assessment:
+    names and street addresses of the start, destination and stops (including the owner's home
+    and private places), the map's name and type for unknown places, place notes, all trips the
+    same day with times, places, categories and confirmed purposes, the trip before and after,
+    the history for the same destination and route, the owner's own rules, the calendar entries
+    for the day – and for trips to another town the whole stay and the next days – with subject,
+    location, a cleaned description and the attendees' names marked as colleague or external
+    (with the external e-mail domain as a hint), the employer's name and the owner's own
+    description of their work. Entries marked private are sent only as a time ("Privat
+    bokning"), without subject, location, description or attendees.
+  * **Minimal.** The place's name or town, weekday, time, distance, the rule engine's signals
+    and earlier confirmed purposes. Home and private places are sent as "Home" and "Private
+    place". Calendar subjects, calendar body text and street addresses are only sent if the
+    owner turns each of them on.
+  * At both levels, never: coordinates, the vehicle's VIN or registration number, API keys,
+    tokens, passwords, the calendar link, the Home Assistant token or any e-mail address. Codes,
+    meeting IDs and passwords found in descriptions and notes are removed before sending, and
+    links are replaced. The provider processes the data under its own terms; DriveLog keeps
+    nothing at the provider.
+* Notifications are sent to the owner's own Home Assistant when the owner has connected it.
 
 ## Retention and deletion
 

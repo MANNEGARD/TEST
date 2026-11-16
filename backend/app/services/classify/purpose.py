@@ -363,6 +363,9 @@ _FUNCTION_WORDS = frozenset(
         "mellan", "via", "mot", "inom", "utan", "över", "en", "ett", "den", "det", "de", "som", "att", "är", "var",
         "har", "hade", "fick", "nya", "ny", "nytt", "ordinarie", "flera", "andra", "annat", "egen", "eget",
         "vår", "vårt", "våra", "min", "mitt", "mina", "dag", "dagen", "dagens", "samma", "tillbaka", "vidare", "hem",
+        # Veckodagar och tidsord ("Rest till Helsingborg inför möte på måndag").
+        "måndag", "tisdag", "onsdag", "torsdag", "fredag", "lördag", "söndag", "veckan", "imorgon", "morgon",
+        "kväll", "kvällen", "förmiddag", "eftermiddag", "flertalet",
     }
 )
 # Vanliga ord i körjournalssyften. De får också sättas samman och böjas

@@ -144,6 +144,13 @@ def _place(loc: KnownLocation | None, address: str | None) -> dict[str, Any]:
     }
 
 
+def _signal_text(s: Any) -> str | None:
+    """Signalens text. En privat bokning nämns aldrig med rubrik (den används inte till ärendet)."""
+    if s.kind == "calendar_private":
+        return "Matchande kalenderbokning märkt som privat"
+    return _clean(s.label, "subject")
+
+
 def _status(t: LogicalTrip) -> str:
     if t.review_status == ReviewStatus.IMPORTED:
         return "importerad"
@@ -473,7 +480,7 @@ def build_full_document(
             "confidence": rules.confidence,
             "limits": [_clean(c) for c in rules.caps],
             "signals": [
-                {"description": _clean(s.label, "subject"), "direction": s.direction, "weight": round(s.weight, 2)}
+                {"description": _signal_text(s), "direction": s.direction, "weight": round(s.weight, 2)}
                 for s in rules.signals
             ],
         },

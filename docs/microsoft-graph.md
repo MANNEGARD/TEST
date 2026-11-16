@@ -50,10 +50,25 @@ nya i DriveLog med **Byt länk**.
 
 ### Vad som läses
 
-Rubrik, tid, plats, ledig/upptagen och om händelsen är privat. Händelsens brödtext sparas
-bara om du har slagit på *Spara förhandsvisning av brödtext* under *Inställningar → Kalender*
-(av som standard). Allt i kalenderfilen behandlas som opålitlig text – aldrig som
-instruktioner – och tvättas från osynliga tecken och styrtecken innan det sparas.
+Rubrik, tid, plats, ledig/upptagen och om händelsen är privat. Med *Läs hela bokningen*
+under *Inställningar → Kalender* (påslaget från 1.3.0) läses också beskrivningen
+(`DESCRIPTION`, högst 4 000 tecken) och deltagarna (`ORGANIZER`/`ATTENDEE`: namn ur `CN`,
+annars adressens första del, och adressen; högst 50). Med appregistreringen hämtas på samma
+sätt `body` (som ren text), `attendees` och `organizer`. Allt i kalendern behandlas som
+opålitlig text – aldrig som instruktioner – och tvättas från osynliga tecken och styrtecken
+innan det sparas. Möteslänkar, inringningsnummer, mötes-ID, lösenord och signaturer tas bort
+innan något skickas till en AI-leverantör, och e-postadresser skickas aldrig dit.
+
+Kalenderlänken innehåller bara det som delningsnivån i Outlook släpper igenom: med *Kan visa
+rubriker och platser* finns varken beskrivning eller deltagare – dela med **Kan visa all
+information**. Det är inte belagt att Outlooks delade länk alls tar med deltagare även på den
+nivån, därför visar *Integrationer → Kalender* hur många bokningar som har beskrivning
+respektive deltagare efter varje synk.
+
+Deltagare med samma e-postdomän som din arbetsgivare räknas som kollegor (*Min arbetsgivares
+e-postdomän* under *Inställningar → Kalender*; DriveLog fyller i den ur kalendern första
+gången, så länge du inte har sparat fältet själv). Din egen adress känns igen ur bokningarna
+och tas bort ur deltagarlistan; den sparas krypterad och visas aldrig.
 
 Upprepade möten, undantag och flyttade eller inställda tillfällen hanteras, och tiderna
 räknas om rätt även när Outlook skriver sina egna tidszonsnamn. Heldagsposter, inställda
@@ -70,6 +85,8 @@ inställbart). Händelser som har tagits bort i Outlook tas bort i DriveLog vid 
 - *Länken innehåller inga händelser i synkfönstret* – kontrollera att du har delat rätt kalender.
 - *Ingen händelse i länken har någon plats* – förslagen blir svagare, eftersom DriveLog bara
   kan jämföra tider.
+- *Kalenderlänken innehåller inga beskrivningar* (minst 5 bokningar, ingen med beskrivning) –
+  dela kalendern med **Kan visa all information** och kopiera den nya länken.
 
 ### Båda sätten samtidigt
 
@@ -141,10 +158,15 @@ En bokning kopplas till en resa bara när **både** tid och plats talar för det
   inom en halvtimme före), anländer under mötet, eller avgår i anslutning till mötets slut
   (stöd för återresor). Fönstren är inställbara.
 - **Plats:** koordinater om de finns, annars jämförs platsnamn, företag, gata och ort –
-  egna förkortningar (*Inställningar → Förkortningar*) expanderas först.
+  egna förkortningar (*Inställningar → Förkortningar*, t.ex. HBG, JKPG) expanderas först.
+  Bokningen behöver ingen plats (1.3.0): en ort eller ett företag i rubriken eller
+  beskrivningen, eller en extern deltagares e-postdomän som stämmer med resmålets företag
+  (`exempelakeri.se` ↔ "Exempel Åkeri AB"), ger en stark träff. Allmänna e-postdomäner (Gmail,
+  Outlook, Hotmail, iCloud, Telia m.fl.) säger ingenting om företag och räknas inte.
 
-Ett möte samma dag men långt från resan i tid matchas inte. Onlinemöten väger för lätt för
-att ensamma ge en träff. Heldagsposter, inställda möten och poster markerade som *Ledig*
+Ett möte samma dag men långt från resan i tid matchas inte. Tid ensam ger bara en svag träff
+(förslag, aldrig stöd för ett ärende). Onlinemöten (Teams, Zoom, Webex i plats eller
+beskrivning, utan fysisk plats) förklarar aldrig en resa och kopplas inte. Heldagsposter, inställda möten och poster markerade som *Ledig*
 ignoreras. Privata bokningar (känslighet *Privat*) talar för privat resa.
 
 Har en bokning en fysisk plats på en **annan ort** samtidigt som resan ankommer någon

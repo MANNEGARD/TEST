@@ -356,6 +356,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/trips/ai-review/plan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Plan för AI-genomgång: vilka resor som skickas
+         * @description Webben kör planens resor en i taget med ``POST /trips/{id}/classify`` och visar förloppet.
+         *
+         *     Resor som redan är godkända (av ägaren eller automatiskt) eller importerade tas aldrig med.
+         *     Högst 25 resor per körning (de äldsta först).
+         */
+        post: operations["ai_review_plan_api_v1_trips_ai_review_plan_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/trips/{trip_id}/classify": {
         parameters: {
             query?: never;
@@ -365,8 +388,35 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Kör klassificeringen på nytt för resan */
+        /**
+         * Kör klassificeringen på nytt för resan
+         * @description Bedömer resan på nytt (med AI-leverantören när en är vald). Resor som är godkända eller
+         *     importerade rörs aldrig. I självgående läge prövar autopiloten resan direkt efteråt; övriga
+         *     resors förslag räknas om i bakgrunden.
+         */
         post: operations["reclassify_api_v1_trips__trip_id__classify_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/trips/{trip_id}/purpose/reject-calendar": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ärendet ur kalendern stämmer inte
+         * @description Ägarens "Ärendet stämmer inte" på ett ärende som sattes ur kalendern: kalenderträffen
+         *     avvisas (väljs inte igen), ärendet sätts tillbaka till regelns eller historikens förslag och
+         *     blir obekräftat, och ett ärende om syftet öppnas i Granskning.
+         */
+        post: operations["reject_calendar_purpose_api_v1_trips__trip_id__purpose_reject_calendar_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2689,6 +2739,16 @@ export interface components {
             /** City */
             city?: string | null;
         };
+        /** AiReviewPlanIn */
+        AiReviewPlanIn: {
+            /** Trip Ids */
+            trip_ids?: string[] | null;
+            /**
+             * Pending
+             * @default false
+             */
+            pending: boolean;
+        };
         /** AliasIn */
         AliasIn: {
             /** Address */
@@ -3399,6 +3459,10 @@ export interface components {
             stored_events: number;
             /** Events With Location */
             events_with_location: number | null;
+            /** Events With Description */
+            events_with_description?: number | null;
+            /** Events With Attendees */
+            events_with_attendees?: number | null;
             /** Tip */
             tip: string | null;
             /** Stores Body Preview */
@@ -3937,6 +4001,11 @@ export interface components {
             manual_category: string | null;
             /** Manual Purpose */
             manual_purpose: string | null;
+            /**
+             * Purpose Mode
+             * @default unless_calendar
+             */
+            purpose_mode: string;
             /** Origin Name */
             origin_name?: string | null;
             /** Destination Name */
@@ -3950,6 +4019,8 @@ export interface components {
             manual_category?: string | null;
             /** Manual Purpose */
             manual_purpose?: string | null;
+            /** Purpose Mode */
+            purpose_mode?: string | null;
             /**
              * Clear Manual Rule
              * @default false
@@ -4060,6 +4131,8 @@ export interface components {
             category?: string | null;
             /** Purpose */
             purpose?: string | null;
+            /** Purpose Mode */
+            purpose_mode?: string | null;
         };
         /** SelectVehicleIn */
         SelectVehicleIn: {
@@ -5356,6 +5429,43 @@ export interface operations {
             };
         };
     };
+    ai_review_plan_api_v1_trips_ai_review_plan_post: {
+        parameters: {
+            query?: {
+                vehicle_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AiReviewPlanIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     reclassify_api_v1_trips__trip_id__classify_post: {
         parameters: {
             query?: never;
@@ -5376,6 +5486,37 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reject_calendar_purpose_api_v1_trips__trip_id__purpose_reject_calendar_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                trip_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TripOut"];
                 };
             };
             /** @description Validation Error */

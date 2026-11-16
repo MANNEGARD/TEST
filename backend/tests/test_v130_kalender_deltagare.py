@@ -15,7 +15,7 @@ import pytest
 from app.models.enums import IntegrationProvider, LocationType
 from app.services import integrations
 from app.services import settings as settings_svc
-from app.services.calendar import calendar_text, ics, matching
+from app.services.calendar import calendar_text, ics
 from app.services.classify import signals as sig
 from app.services.classify import underlag
 from tests.conftest import reload_trip
@@ -287,3 +287,40 @@ def test_store_body_preview_is_on_by_default():
     assert settings_svc.DEFAULTS["calendar"]["store_body_preview"] is True
     assert settings_svc.DEFAULTS["calendar"]["work_domain"] == ""
     assert LocationType.CUSTOMER  # platstyperna oförändrade
+
+
+def test_graph_reads_body_as_text_and_attendees():
+    from app.services.calendar import sync
+
+    raw = {
+        "id": "g1", "subject": "Kundbesök", "start": {"dateTime": "2026-09-15T08:00:00", "timeZone": "UTC"},
+        "end": {"dateTime": "2026-09-15T09:00:00", "timeZone": "UTC"},
+        "body": {"contentType": "html", "content": "<p>Offert</p><p>Plan &amp; pris</p>" + "x" * 5000},
+        "organizer": {"emailAddress": {"name": "Testa", "address": "Testa@Exempelakeri.se"}},
+        "attendees": [{"emailAddress": {"name": "Kim Kund", "address": "kim@kundbolaget.example.com"}}],
+    }
+    values = sync._event_values(raw, True)
+    assert values["body_preview"].startswith("Offert") and "Plan & pris" in values["body_preview"]
+    assert len(values["body_preview"]) <= 4000 and "<p>" not in values["body_preview"]
+    assert values["attendees"] == [
+        {"name": "Testa", "email": "testa@exempelakeri.se", "role": "organizer"},
+        {"name": "Kim Kund", "email": "kim@kundbolaget.example.com", "role": "attendee"},
+    ]
+    off = sync._event_values(raw, False)
+    assert off["body_preview"] is None and off["attendees"] is None
+
+
+def test_graph_asks_for_body_attendees_and_text():
+    from app.services.calendar import graph
+
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"value": []})
+
+    client = graph.GraphClient("token", transport=httpx.MockTransport(handler))
+    client.calendar_view("cal", W_START, W_END, include_body_preview=True)
+    assert "body" in seen[0].url.params["$select"] and "attendees" in seen[0].url.params["$select"]
+    assert 'outlook.body-content-type="text"' in seen[0].headers["Prefer"]
+    assert 'outlook.timezone="UTC"' in seen[0].headers["Prefer"]

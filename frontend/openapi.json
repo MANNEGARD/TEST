@@ -1332,6 +1332,70 @@
     }
    }
   },
+  "/api/v1/trips/ai-review/plan": {
+   "post": {
+    "tags": [
+     "Trips",
+     "Classification"
+    ],
+    "summary": "Plan för AI-genomgång: vilka resor som skickas",
+    "description": "Webben kör planens resor en i taget med ``POST /trips/{id}/classify`` och visar förloppet.\n\nResor som redan är godkända (av ägaren eller automatiskt) eller importerade tas aldrig med.\nHögst 25 resor per körning (de äldsta först).",
+    "operationId": "ai_review_plan_api_v1_trips_ai_review_plan_post",
+    "parameters": [
+     {
+      "name": "vehicle_id",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string",
+         "format": "uuid"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Vehicle Id"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/AiReviewPlanIn"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "additionalProperties": true,
+         "title": "Response Ai Review Plan Api V1 Trips Ai Review Plan Post"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
   "/api/v1/trips/{trip_id}/classify": {
    "post": {
     "tags": [
@@ -1339,6 +1403,7 @@
      "Classification"
     ],
     "summary": "Kör klassificeringen på nytt för resan",
+    "description": "Bedömer resan på nytt (med AI-leverantören när en är vald). Resor som är godkända eller\nimporterade rörs aldrig. I självgående läge prövar autopiloten resan direkt efteråt; övriga\nresors förslag räknas om i bakgrunden.",
     "operationId": "reclassify_api_v1_trips__trip_id__classify_post",
     "parameters": [
      {
@@ -1361,6 +1426,51 @@
          "type": "object",
          "additionalProperties": true,
          "title": "Response Reclassify Api V1 Trips  Trip Id  Classify Post"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/trips/{trip_id}/purpose/reject-calendar": {
+   "post": {
+    "tags": [
+     "Trips",
+     "Classification"
+    ],
+    "summary": "Ärendet ur kalendern stämmer inte",
+    "description": "Ägarens \"Ärendet stämmer inte\" på ett ärende som sattes ur kalendern: kalenderträffen\navvisas (väljs inte igen), ärendet sätts tillbaka till regelns eller historikens förslag och\nblir obekräftat, och ett ärende om syftet öppnas i Granskning.",
+    "operationId": "reject_calendar_purpose_api_v1_trips__trip_id__purpose_reject_calendar_post",
+    "parameters": [
+     {
+      "name": "trip_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid",
+       "title": "Trip Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/TripOut"
         }
        }
       }
@@ -8602,6 +8712,33 @@
     ],
     "title": "AddressLookupOut"
    },
+   "AiReviewPlanIn": {
+    "properties": {
+     "trip_ids": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string",
+         "format": "uuid"
+        },
+        "type": "array",
+        "maxItems": 500
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Trip Ids"
+     },
+     "pending": {
+      "type": "boolean",
+      "title": "Pending",
+      "default": false
+     }
+    },
+    "type": "object",
+    "title": "AiReviewPlanIn"
+   },
    "AliasIn": {
     "properties": {
      "address": {
@@ -10819,6 +10956,28 @@
       ],
       "title": "Events With Location"
      },
+     "events_with_description": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Events With Description"
+     },
+     "events_with_attendees": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Events With Attendees"
+     },
      "tip": {
       "anyOf": [
        {
@@ -12578,6 +12737,11 @@
       ],
       "title": "Manual Purpose"
      },
+     "purpose_mode": {
+      "type": "string",
+      "title": "Purpose Mode",
+      "default": "unless_calendar"
+     },
      "origin_name": {
       "anyOf": [
        {
@@ -12661,6 +12825,18 @@
        }
       ],
       "title": "Manual Purpose"
+     },
+     "purpose_mode": {
+      "anyOf": [
+       {
+        "type": "string",
+        "pattern": "^(unless_calendar|always)$"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Purpose Mode"
      },
      "clear_manual_rule": {
       "type": "boolean",
@@ -12966,6 +13142,18 @@
        }
       ],
       "title": "Purpose"
+     },
+     "purpose_mode": {
+      "anyOf": [
+       {
+        "type": "string",
+        "pattern": "^(unless_calendar|always)$"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Purpose Mode"
      }
     },
     "type": "object",

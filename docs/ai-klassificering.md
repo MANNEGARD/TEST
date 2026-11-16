@@ -26,9 +26,16 @@ riktning, vikt och en svensk förklaring som visas i resedetaljen.
 | Återresa efter tjänsteärende / privat ärende | Samma som utresan | Även över flera dagar |
 | Hotell under pågående tjänsteresa | Arbete | |
 | Kalenderbokning på annan plats samtidigt | – | Tvingar granskning |
+| Resa mellan hemmet och ett av era kontor, när du valt att det är tjänst | Arbete | Ersätter regeln bostad ↔ tjänsteställe (1.3.0) |
+| Lunchmönster: kort tur från kontoret mitt på dagen | Privat | Bara när hela mönstret stämmer, se Lunchregeln |
+| Bokningar på resmålets ort de närmaste dagarna | Arbete | Resa dagen före, t.ex. söndag till Helsingborg inför måndagens möte |
 
-**Tidpunkt och veckodag används aldrig som privatindikator.** Kvällar och helger är vanliga
-tjänsteresetider i det historiska underlaget.
+**Tidpunkt och veckodag används aldrig som privatindikator – med ett undantag: lunchregeln,
+som kräver hela mönstret (kort tur från kontoret en arbetsdag, ett kort stopp och tillbaka
+till samma kontor inom lunchfönstret). Klockslaget ensamt räcker aldrig.** Kvällar och helger
+är vanliga tjänsteresetider i det historiska underlaget. Kvällsärenden under en tjänsteresa
+(en kort tur från hotellet efter kontorstid) ger alltid en fråga, och resor hem ↔ kontor
+godkänns oavsett tid när du har valt det.
 
 Signalerna vägs samman till en kategori och en *beslutsindikator* (0–1). Den är ett
 kalibrerbart tröskelvärde, inte en statistisk sannolikhet. Indikatorn begränsas uppåt när
@@ -40,29 +47,57 @@ underlaget är svagt:
 
 ### 2. AI-lagret (valfritt)
 
-Är en AI-leverantör ansluten (Anthropic eller OpenAI, utbytbart) anropas den **endast** när
-reglerna inte räcker: kategorin är oavgjord trots att det finns underlag, eller syftet
-saknas. Den anropas aldrig helt utan underlag (då kan den bara gissa) och aldrig för
-skattemässiga gränsfall (de avgör du).
+Är en AI-leverantör ansluten (Anthropic eller OpenAI, utbytbart) anropas den när reglerna
+inte räcker: kategorin är oavgjord, en tjänsteresa saknar ett tillräckligt syfte, eller en
+kalenderbokning stämmer med resan (då formulerar AI ärendet ur bokningen). Den anropas aldrig
+för skattemässiga gränsfall (de avgör du) och aldrig när din regel säger "fråga mig alltid".
 
-Modellen får regelmotorns signaler och ett minimalt underlag och svarar med strukturerad
-JSON. Svaret passerar sedan skyddsräcken:
+**Underlagsnivå** (*Inställningar → Förslag och AI*, `ai.context_level`):
+
+- **Fullständigt underlag** (standard från 1.3.0, gäller direkt efter uppdateringen). Allt som
+  hjälper bedömningen skickas, se tabellen under *Sekretess mot AI-leverantören*. Med den här
+  nivån anropas AI även när reglerna inte hittat något underlag alls.
+- **Minimalt**: det tidigare, avidentifierade underlaget (platsens namn och ort, veckodag,
+  klockslag, sträcka, regelmotorns signaler och dina tidigare ärenden). Valen för
+  kalenderrubrik, brödtext och gatuadresser gäller bara här. AI anropas bara när det finns
+  något underlag att väga.
+
+Modellen svarar med strukturerad JSON: kategori, beslutsindikator, ett **färdigt formulerat
+ärende** för tjänsteresor, om ärendet har direkt stöd i underlaget (`purpose_supported`),
+korta belägg och om resan behöver granskas. Svaret passerar sedan skyddsräcken:
 
 - **AI kan föreslå, aldrig besluta.** Ett rent AI-förslag ger som mest "begär godkännande".
+  Allt AI-ärende sparas som förslag som du godkänner med ett tryck – AI godkänner aldrig något
+  själv.
 - **AI kan inte vända ett regelbeslut.** Avviker bedömningen flaggas resan för granskning.
-- **Inga påhittade uppgifter.** Ett genererat syfte prövas i två steg. (1) Varje namn, ort,
-  företag, förkortning och siffra måste finnas i underlaget (platsnamn, orter, företag,
-  kalenderrubrik, tidigare bekräftade syften); allmänna ord och deras sammansättningar
-  ("Projektmöte", "Avstämningsmöte") är tillåtna. (2) Själva *ärendetypen* – kundbesök, möte,
-  utbildning, personalärende, övernattning och liknande – godtas bara när den har stöd i
-  underlaget: en matchad kalenderbokning, ett tidigare bekräftat syfte för platsen eller
-  rutten, platsens typ (kund, kontor, hotell) eller regelmotorns eget förslag. Särskilda
-  ärenden som "styrelsemöte" eller "upphandling" måste stå i underlaget. Annars förkastas
-  förslaget och regelmotorns försiktiga "… – syfte behöver bekräftas" står kvar; avvisningen
-  syns i resans underlag.
-- **Indata är data, inte instruktioner.** Kalenderrubriker och kommentarer skickas avgränsade
-  och kan inte ändra utfallet även om modellen skulle "lyda" dem – valideringen sker efteråt.
+- **Inga påhittade namn.** Varje namn, ort, företag, förkortning och siffra i ärendet måste
+  finnas i det som skickades: platsnamn, orter, företag, kalenderbokningarnas rubrik, plats,
+  beskrivning och deltagarnas namn, tidigare bekräftade ärenden, "Om mitt arbete",
+  arbetsgivaren och dina förkortningar. En extern deltagares e-postdomän räknas *inte*: ett
+  företagsnamn får aldrig hittas på ur en domän. Allmänna ord, veckodagar och sammansättningar
+  ("Projektmöte") är tillåtna. Ett ärende med ett namn utan stöd **avvisas** och nästa steg i
+  ordningen nedan tas; avvisningen syns i resans underlag.
+- **Form:** en rad, högst 80 tecken, inga länkar eller `<>{}`. Annars avvisas förslaget (det
+  kapas aldrig).
+- **Ärendetyp utan stöd** (t.ex. "Utbildning" utan något i underlaget som säger det), eller en
+  text som bara är "Tjänsteresa"/"Möte": förslaget **behålls** men märks *Förslag att
+  bekräfta* (`supported: false`). Det blir aldrig grund för ett automatiskt godkännande.
+- **Reservmall:** gav AI inget användbart ärende och finns inget regelförslag blir förslaget
+  "Tjänsteresa till <plats>" – aldrig tomt och aldrig "syfte behöver bekräftas".
+- **Indata är data, inte instruktioner.** Underlaget skickas avgränsat inom `<data>…</data>`.
+  Varje sträng tvättas först: styrtecken och osynliga tecken (t.ex. riktningsomkastning) tas
+  bort, `<` och `>` blir `‹` och `›` så att ingen text kan stänga avgränsningen, länkar blir
+  "[länk]", koder och lösenord i fritext ("Lösenord: …", "Portkod 4711", mötes-ID) tas bort,
+  långa nyckelliknande strängar, chassinummer och koordinater tas bort, och allt kapas.
+  Valideringen sker efteråt, så en "lydig" modell kan inte ändra utfallet.
 - **Fel hos leverantören** påverkar inte journalen: reglernas resultat gäller.
+
+**AI-genomgång** (knappen *Bedöm med AI* på resan, *Gå igenom med AI* i körjournalen och *Gå
+igenom väntande med AI* i Granskning): webben kör högst 25 resor per gång, en i taget, med
+`POST /trips/{id}/classify`. Resor som redan är godkända (av dig eller automatiskt) eller
+importerade tas aldrig med. Utan leverantör används bara reglerna och ingenting lämnar
+servern. I självgående läge prövar autopiloten resan direkt efteråt; övriga resors förslag
+räknas om i bakgrunden.
 
 ### 3. Automationsnivå
 
@@ -83,9 +118,10 @@ bedöms aldrig om. För dem föreslås bara ett saknat syfte.
 
 I självgående läge (standard från 1.1.0) blir en automatisk preliminär klassning av en resa
 från bilen i stället ett *Förslag*. Det som godkänns av sig självt avgörs av en egen,
-strängare regeltabell i `classify/autopilot.py`: *Resa till arbetet*, *Privat plats*, *Din
-regel för …*, *Som de 3 senaste gångerna*, *Hemresa efter …* och *Antaget kundbesök*. Allt
-annat blir en fråga. Tabellen och spärrarna beskrivs i
+strängare regeltabell i `classify/autopilot.py`, prövad i den här ordningen: *Resa till
+arbetet*, *Privat plats*, *Din regel för …*, *Hem ↔ kontor i …* (när du valt det), *Lunch*,
+*Kvällsärende under tjänsteresa* (alltid en fråga), *Som de 3 senaste gångerna*, *Hemresa
+efter …* och *Antaget kundbesök*. Allt annat blir en fråga. Tabellen och spärrarna beskrivs i
 [Användning → Självgående läge](anvandning.md#självgående-läge).
 
 - Inget godkänns automatiskt som Arbete när någon signal pekar mot Privat, när reglerna
@@ -98,7 +134,43 @@ annat blir en fråga. Tabellen och spärrarna beskrivs i
   i självgående läge – platsens namn, kartans typ, ort, veckodag och klockslag. Aldrig
   koordinater, gatuadress eller personuppgifter. Bedömer den platsen som arbete, utan avvikelse
   mot reglerna, kan resan antas som kundbesök. Ärendet blir AI:ns text bara om den klarar
-  fabriceringsskyddet ovan, annars "Kundbesök <namn>". Utan leverantör blir det en fråga.
+  fabriceringsskyddet ovan och har stöd i underlaget, annars "Kundbesök <namn>". Utan
+  leverantör blir det en fråga.
+- **Hem ↔ kontor (1.3.0):** under *Tjänsteställe* kan du välja att resor mellan hemmet och
+  vilket som helst av arbetsgivarens kontor (platser markerade som kontor eller ordinarie
+  arbetsplats) är tjänsteresor. Då godkänns de automatiskt – även på kvällar och helger – med
+  skälet "Hem ↔ kontor i <ort>". Övriga spärrar gäller (mätarställning saknas, flera
+  körningar, kalenderkonflikt, "fråga alltid", en privat plats). Skatteverkets huvudregel är
+  att sådana resor är privata; valet är ditt. Avstängt gäller *Resa till arbetet* som förut.
+  Befintliga installationer fick valet påslaget vid uppdateringen till 1.3.0 (ägarens val), nya
+  installationer har det avstängt.
+- **Ärendet ur kalendern utan fråga:** godkänns en resa automatiskt som Arbete av din regel,
+  Hem ↔ kontor, historiken eller hemresan, och en kalenderbokning stämmer starkt med resan
+  (eller vistelsen/dagarna efter), blir ärendet kalenderns (AI-formulerat om det klarat
+  namnkontrollen, annars bokningens rubrik). Resan märks *Ärende ur kalendern* i månadens
+  genomgång och du kan rätta med ett tryck (*Ärendet stämmer inte*): bokningen väljs då inte
+  igen för resan, ärendet blir regelns eller historikens och frågas om.
+
+### 5. Lunchregeln
+
+Korta turer från kontoret mitt på dagen är oftast lunch (`classify/lunch.py`, påslagen som
+standard, *Inställningar → Lunchregeln*). Båda resorna blir privata utan fråga när **hela**
+mönstret stämmer:
+
+1. Utresan börjar vid ett av arbetsgivarens kontor (bekräftad plats) en arbetsdag (dagarna i
+   kontorstiden, inte röda dagar).
+2. Den är kort: högst 10 minuter (när körtiden är känd) och 8 km.
+3. Stoppet varar mellan 20 och 45 minuter på samma ställe (okänt stopp räknas aldrig).
+4. Återresan är lika kort tillbaka till samma kontor, och allt sker mellan 11:00 och 13:00.
+
+Regeln gäller inte om stället är en bekräftad kund, ett kontor, hemmet eller ett hotell, har
+ett företag, om du har en egen regel för det, om du tidigare har sagt (eller importen säger)
+att en resa dit var i tjänsten, om kartan säger kontor/industri/lager, eller om en
+kalenderbokning stämmer med någon av resorna. Kartans restaurang, kafé eller butik stärker
+signalen. Du får ingen fråga om utresan medan regeln väntar på återresan; kommer ingen
+återresa inom 45 + 10 + 10 minuter hanteras utresan som vanligt. I manuellt läge blir
+lunchresorna förslag på Privat. Gränserna ändras under *Inställningar → Lunchregeln*.
+Regeln kräver att minst ett kontor finns som bekräftad plats.
 
 ## Skattemässig bedömning
 
@@ -124,19 +196,37 @@ tillsammans med din arbetsgivare eller rådgivare.
 
 ## Syften
 
-Förslag byggs i den här ordningen, och det första som har stöd används:
+Ärendets text väljs i den här ordningen (kategorin avgörs som ovan):
 
-1. Manuell regel för platsen.
-2. Rubriken på den matchande Outlook-bokningen, kompletterad med platsen vid behov
-   ("Personalmöte på Örebrokontoret.").
-3. Återresa: "Hemresa efter …" med utresans bekräftade syfte, annars "Hemresa från <ort>.".
-4. Hotell under tjänsteresa: din egen standardformulering om en finns.
-5. Ett dominerande, tidigare bekräftat syfte för samma resa.
-6. Känd plats men oklart syfte: "Besök på <plats> – syfte behöver bekräftas."
-7. Annars inget förslag alls.
+0. Din egen regel med fast text i läget **"Använd alltid texten"**.
+1. **Kalendern + AI först:** en bokning som stämmer med resan i tid och plats (stark träff –
+   platsen, företaget, orten i rubriken eller beskrivningen, eller en extern deltagares domän
+   som stämmer med resmålets företag; aldrig tid ensam, aldrig ett onlinemöte, aldrig en privat
+   bokning). För utresan till en ort där du blir kvar får AI bokningarna för hela vistelsen
+   och skriver en sammanfattande kommentar ("Rest till Jönköping för intervjuer och kundbesök
+   med Lennart"), och motsvarande för hemresan. En utresa utan egen bokning samma dag bedöms
+   mot bokningarna de två följande dagarna på resmålets ort ("Rest till Helsingborg inför möte
+   med Lennart på måndag"). Utan AI: bokningens rubrik, kompletterad med platsen vid behov.
+2. Din egen regel med fast text (standardläget **"när kalendern inte säger något annat"**).
+3. Återresa ("Hemresa efter …"), hotell under tjänsteresa, ett dominerande bekräftat ärende.
+4. En bokning där bara tiden stämmer: förslag att bekräfta.
+5. AI:ns fria förslag ur hela underlaget.
+6. Reservmallen "Tjänsteresa till <plats>" (bara när AI har anropats); utan AI "Besök på
+   <plats> – syfte behöver bekräftas."
 
-Alla förslag utom manuella regler kräver bekräftelse. Ett syfte du själv skrivit eller
-godkänt skrivs aldrig över. Motiveringen sparas tillsammans med förslaget.
+Deltagare med samma e-postdomän som din arbetsgivare (*Inställningar → Kalender → Min
+arbetsgivares e-postdomän*, ifylld av DriveLog ur kalendern) räknas som kollegor och skrivs
+"med <namn>"; övriga är externa. Ett företagsnamn skrivs bara när det står i platsen,
+rubriken eller beskrivningen, annars "Kundbesök i <ort>".
+
+Alla förslag utom manuella regler och ärenden ur kalendern på automatiskt godkända resor
+kräver bekräftelse. Ett syfte du själv skrivit eller godkänt skrivs aldrig över – inte heller
+när kalendern ändras i efterhand; ett obekräftat förslag uppdateras vid nästa bedömning.
+
+I telefonen kommer ärendeknapparna i ordningen: resans ärende ur kalendern, platsantagandet
+"Kundbesök <namn>", dina tidigare bekräftade ärenden för rutten och målet, och AI:ns förslag
+bara när du inte har några egna. "Alltid: …" erbjuds aldrig för ett ärende ur kalendern eller
+från AI.
 
 ## Inlärning
 
@@ -159,6 +249,21 @@ gäller först när du godkänt dem.
 
 ## Sekretess mot AI-leverantören
 
+**Fullständigt underlag** (standard):
+
+| Skickas | Skickas aldrig |
+| --- | --- |
+| Namn och gatuadress för start, mål och mellanstopp – även hemmet och privata platser | Koordinater |
+| Kartans namn och typ för okända ställen, platsanteckningar | Chassinummer (VIN), registreringsnummer |
+| Dagens alla resor med tider, platser, kategorier och bekräftade ärenden; resan före och efter | API-nycklar, tokens, lösenord, Home Assistant-token |
+| Historiken för samma mål och rutt, dina regler | Kalenderlänken |
+| Kalenderbokningarna för dagen, och vid resor till en annan ort hela vistelsen och de närmaste dagarna: rubrik, plats, tvättad beskrivning och deltagarnas namn (kollega/extern och den externa e-postdomänen) | E-postadresser |
+| Privata bokningar: bara tiden ("Privat bokning") | Privata bokningars rubrik, plats, beskrivning och deltagare |
+| Arbetsgivarens namn och "Om mitt arbete" | Koder, mötes-ID och lösenord i beskrivningar och anteckningar |
+| Lunchmönstret, regelmotorns signaler och förslag | Obekräftade AI-förslag på andra resor |
+
+**Minimalt:**
+
 | Skickas | Skickas aldrig |
 | --- | --- |
 | Platsetikett eller ort, platstyp | Koordinater |
@@ -179,5 +284,5 @@ modell och klicka *Testa*. Nyckeln lagras krypterad och visas aldrig igen. Statu
   strukturerad JSON-utdata.
 - **OpenAI:** ange den modell du vill använda.
 
-Utan leverantör fungerar allt utom steg 2 – reglerna, syftesförslagen och inlärningen är
-oberoende av AI-leverantören.
+Utan leverantör fungerar allt utom steg 2 – reglerna, syftesförslagen, lunchregeln och
+inlärningen är oberoende av AI-leverantören.
