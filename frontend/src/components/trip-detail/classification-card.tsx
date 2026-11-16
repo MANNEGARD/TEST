@@ -1,20 +1,67 @@
 "use client";
 
 import * as React from "react";
-import { BadgeCheck, Check, Pencil, Sparkles } from "lucide-react";
+import { BadgeCheck, CalendarDays, CalendarX2, Check, Pencil, RefreshCw, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { CategoryPill } from "@/components/trips/category-pill";
 import { CategoryToggle } from "@/components/trips/category-toggle";
+import { AiReviewDialog } from "@/components/trips/ai-review-dialog";
 import { approvalReasonText, ReviewStatusBadge } from "@/components/trips/review-status-badge";
 import { useTripActions } from "@/components/trips/use-trip-actions";
 import { errorMessage } from "@/lib/api";
 import { formatPercent } from "@/lib/format";
 import { DECISION_SOURCE_LABELS, isAutoApproval, label, SUBCATEGORY_LABELS } from "@/lib/labels";
-import { useUpdateTrip } from "@/lib/queries/trips";
-import type { TripDetail } from "@/lib/types";
+import { useSettings } from "@/lib/queries/settings";
+import { useRejectCalendarPurpose, useUpdateTrip } from "@/lib/queries/trips";
+import type { PurposeHistoryEntry, TripDetail } from "@/lib/types";
+
+/** Märke framför ärendet: varifrån det kommer och om det väntar på dig. */
+function PurposeBadge({ tone, icon, children }: { tone: "accent" | "ok"; icon: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <span
+      className={
+        tone === "ok"
+          ? "mr-1.5 inline-flex items-center gap-1 rounded-sm bg-ok-soft px-1.5 py-0.5 align-middle text-[11px] font-semibold text-ok-ink not-italic [&_svg]:size-3"
+          : "mr-1.5 inline-flex items-center gap-1 rounded-sm bg-accent-soft px-1.5 py-0.5 align-middle text-[11px] font-semibold text-accent-ink not-italic [&_svg]:size-3"
+      }
+      data-testid="purpose-badge"
+    >
+      {icon}
+      {children}
+    </span>
+  );
+}
+
+/**
+ * "Ärendet stämmer inte" (beslut A): ett ärende som sattes ur kalendern utan fråga tas bort.
+ * Resan får i stället ett ärende att bekräfta, och bokningen kopplas inte till resan igen.
+ */
+export function RejectCalendarPurposeButton({ tripId, size = "sm" }: { tripId: string; size?: "xs" | "sm" }) {
+  const reject = useRejectCalendarPurpose();
+  return (
+    <Button
+      size={size}
+      variant="secondary"
+      loading={reject.isPending}
+      data-testid="reject-calendar-purpose"
+      onClick={() =>
+        reject.mutate(tripId, {
+          onSuccess: () => toast.success("Kalenderns ärende är borttaget. Resan väntar på ditt ärende i Granskning."),
+          onError: (err) => toast.error(errorMessage(err)),
+        })
+      }
+    >
+      {reject.isPending ? null : <CalendarX2 aria-hidden />} Ärendet stämmer inte
+    </Button>
+  );
+}
+
+function currentPurpose(detail: TripDetail): PurposeHistoryEntry | undefined {
+  return detail.purpose_history.find((p) => p.is_current);
+}
 
 /** Klassning (ett klick), syfte med förslag och godkännande. Överst på resans sida. */
 export function ClassificationCard({ detail }: { detail: TripDetail }) {
@@ -51,6 +98,17 @@ export function ClassificationCard({ detail }: { detail: TripDetail }) {
 
   const pending = t.review_status === "needs_review" || t.review_status === "proposed" || t.review_status === "auto";
   const proposalPurpose = !t.purpose_confirmed && t.purpose;
+  const entry = currentPurpose(detail);
+  const fromCalendar = !!t.purpose && t.purpose_confirmed && !!entry?.from_calendar;
+  const calendarProposal = !!proposalPurpose && !!entry?.calendar;
+  const aiProposal = !!proposalPurpose && !calendarProposal && t.purpose_source === "ai";
+  const unsupported = aiProposal && entry?.supported === false;
+
+  // AI-genomgång för just den här resan. Godkända och importerade resor bedöms aldrig om.
+  const settings = useSettings();
+  const provider = String(settings.data?.settings.ai?.provider ?? "none");
+  const [reviewing, setReviewing] = React.useState(false);
+  const canReview = t.review_status !== "approved" && t.review_status !== "imported";
 
   return (
     <Card>
@@ -98,11 +156,22 @@ export function ClassificationCard({ detail }: { detail: TripDetail }) {
               : ""}
             {t.subcategory ? ` · ${label(SUBCATEGORY_LABELS, t.subcategory)}` : ""}
           </p>
-          {pending ? (
-            <Button className="mt-3" variant="primary" size="sm" onClick={() => void actions.approve(t.id).catch(() => {})} loading={actions.isPending}>
-              <BadgeCheck aria-hidden /> Godkänn klassningen
-            </Button>
+          {pending || canReview ? (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {pending ? (
+                <Button variant="primary" size="sm" onClick={() => void actions.approve(t.id).catch(() => {})} loading={actions.isPending}>
+                  <BadgeCheck aria-hidden /> Godkänn klassningen
+                </Button>
+              ) : null}
+              {canReview ? (
+                <Button variant="secondary" size="sm" onClick={() => setReviewing(true)} data-testid="trip-ai-review">
+                  {provider !== "none" ? <Sparkles aria-hidden /> : <RefreshCw aria-hidden />}
+                  {provider !== "none" ? "Bedöm med AI" : "Bedöm igen"}
+                </Button>
+              ) : null}
+            </div>
           ) : null}
+          {canReview ? <AiReviewDialog open={reviewing} onOpenChange={setReviewing} selection={{ kind: "trips", ids: [t.id] }} trips={[t]} /> : null}
         </div>
 
         <div className="border-t border-border pt-4">
@@ -133,17 +202,44 @@ export function ClassificationCard({ detail }: { detail: TripDetail }) {
           ) : t.purpose ? (
             <div>
               <p className={proposalPurpose ? "text-[15px] text-fg-muted italic" : "text-[15px] font-medium"}>
-                {proposalPurpose ? (
-                  <span className="mr-1.5 inline-flex items-center gap-1 rounded-sm bg-accent-soft px-1.5 py-0.5 align-middle text-[11px] font-semibold text-accent-ink not-italic">
-                    <Sparkles className="size-3" aria-hidden /> Förslag
-                  </span>
+                {calendarProposal ? (
+                  <PurposeBadge tone="accent" icon={<CalendarDays aria-hidden />}>
+                    Förslag ur kalendern
+                  </PurposeBadge>
+                ) : aiProposal ? (
+                  <PurposeBadge tone="accent" icon={<Sparkles aria-hidden />}>
+                    Förslag att bekräfta
+                  </PurposeBadge>
+                ) : proposalPurpose ? (
+                  <PurposeBadge tone="accent" icon={<Sparkles aria-hidden />}>
+                    Förslag
+                  </PurposeBadge>
+                ) : fromCalendar ? (
+                  <PurposeBadge tone="ok" icon={<CalendarDays aria-hidden />}>
+                    Ur kalendern
+                  </PurposeBadge>
                 ) : null}
                 {t.purpose}
               </p>
-              {proposalPurpose ? (
-                <Button className="mt-2" size="sm" variant="secondary" onClick={() => savePurpose(t.purpose as string, true)} loading={update.isPending}>
-                  <Check aria-hidden /> Godkänn syftet
-                </Button>
+              {unsupported ? (
+                <p className="mt-1 text-xs text-warn-ink" data-testid="purpose-unsupported">
+                  AI:s förslag utan direkt stöd i underlaget – kontrollera innan du godkänner.
+                </p>
+              ) : null}
+              {fromCalendar ? (
+                <p className="mt-1 text-xs text-fg-muted">
+                  Ärendet kommer ur en kalenderbokning som stämde med resan och sattes när resan godkändes automatiskt.
+                </p>
+              ) : null}
+              {proposalPurpose || fromCalendar ? (
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {proposalPurpose ? (
+                    <Button size="sm" variant="secondary" onClick={() => savePurpose(t.purpose as string, true)} loading={update.isPending}>
+                      <Check aria-hidden /> Godkänn syftet
+                    </Button>
+                  ) : null}
+                  {fromCalendar ? <RejectCalendarPurposeButton tripId={t.id} /> : null}
+                </div>
               ) : null}
             </div>
           ) : (

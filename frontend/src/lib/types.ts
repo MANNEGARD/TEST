@@ -188,6 +188,25 @@ export interface PurposeSuggestion {
   type: string | null;
 }
 
+/**
+ * Ett ärende i resans historik (routes/trips.py → trip_detail, TripPurpose). Fälten från 1.3.0
+ * är valfria så att typen fungerar mot en äldre server:
+ * - `supported`: AI:s förslag har (true) eller saknar (false) direkt stöd i underlaget; null = inte AI.
+ * - `from_calendar`: ärendet sattes ur en kalenderbokning när resan godkändes automatiskt (beslut A).
+ * - `calendar`: kalenderträffens styrka när ärendet bygger på en bokning ("strong" | "weak").
+ */
+export interface PurposeHistoryEntry {
+  text: string;
+  source: string;
+  rationale: string | null;
+  needs_confirmation: boolean;
+  is_current: boolean;
+  created_at: string;
+  supported?: boolean | null;
+  from_calendar?: boolean;
+  calendar?: "strong" | "weak" | null;
+}
+
 export interface TripDetail {
   trip: Trip;
   segments: TripSegment[];
@@ -208,14 +227,7 @@ export interface TripDetail {
   } | null;
   decision: { source: string; category: string; created_at: string; created_by: string | null } | null;
   evidence: Evidence[];
-  purpose_history: {
-    text: string;
-    source: string;
-    rationale: string | null;
-    needs_confirmation: boolean;
-    is_current: boolean;
-    created_at: string;
-  }[];
+  purpose_history: PurposeHistoryEntry[];
   purpose_suggestions: PurposeSuggestion[];
   calendar_matches: CalendarMatch[];
   similar_trips: Trip[];
@@ -485,4 +497,40 @@ export interface AppSettings {
 export interface SettingsResponse {
   settings: AppSettings;
   defaults: AppSettings;
+}
+
+// ----------------------------------------------------------------------------- AI-genomgång
+// backend/app/api/routes/trips.py → POST /trips/ai-review/plan och POST /trips/{id}/classify (1.3.0)
+
+/** Tak för en genomgång (AI_REVIEW_MAX i backend). */
+export const AI_REVIEW_MAX = 25;
+
+export interface AiReviewPlanInput {
+  trip_ids: string[] | null;
+  pending: boolean;
+}
+
+export interface AiReviewPlan {
+  /** Resorna som bedöms nu, äldst först (högst `cap`). */
+  trip_ids: string[];
+  total_eligible: number;
+  /** Godkända eller importerade resor bland de valda – de rörs inte. */
+  skipped_decided: number;
+  skipped_other: number;
+  cap: number;
+  provider: "anthropic" | "openai" | null;
+  provider_label: string | null;
+  context_level: "full" | "minimal";
+}
+
+export type ReclassifyOutcome = "updated" | "unchanged" | "auto_approved" | "skipped_decided" | "ai_unavailable";
+
+export interface ReclassifyResult {
+  changed: boolean;
+  note: string | null;
+  /** Saknas mot en äldre server – tolkas då ur `changed`. */
+  outcome?: ReclassifyOutcome;
+  ai_used?: boolean;
+  trip?: Trip | null;
+  assessment?: unknown;
 }

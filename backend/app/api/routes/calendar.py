@@ -69,6 +69,8 @@ class IcsStatus(BaseModel):
     last_error_at: datetime | None
     stored_events: int
     events_with_location: int | None
+    events_with_description: int | None = None
+    events_with_attendees: int | None = None
     tip: str | None
     stores_body_preview: bool
     sync_days_back: int
@@ -135,9 +137,21 @@ def status(principal: PrincipalDep, db: DbDep) -> dict[str, Any]:
             "selected_calendar_ids": cal["calendar_ids"],
             "stored_events": len(events),
             "stores_body_preview": cal["store_body_preview"],
+            # Hur många av Outlooks bokningar som har beskrivning respektive deltagare.
+            "events_with_description": _graph_count(db, principal.user.id, CalendarEvent.body_preview),
+            "events_with_attendees": _graph_count(db, principal.user.id, CalendarEvent.attendees),
         }
     )
     return view
+
+
+def _graph_count(db, user_id, column) -> int:
+    return int(db.execute(
+        select(func.count(CalendarEvent.id)).where(
+            CalendarEvent.user_id == user_id, CalendarEvent.is_demo.is_(False), CalendarEvent.removed_at.is_(None),
+            CalendarEvent.calendar_id != ics.ICS_CALENDAR_ID, column.is_not(None),
+        )
+    ).scalar_one())
 
 
 @router.put("/integrations/microsoft/credentials", summary="Spara Microsoft-appens uppgifter", tags=["Integration health"])

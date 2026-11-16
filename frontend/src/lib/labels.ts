@@ -123,10 +123,21 @@ export const APPROVAL_SOURCE_LABELS: Record<string, string> = {
   commute: "Resa till arbetet",
   private_place: "Privat plats",
   assumed: "Antaget kundbesök",
+  home_office: "Hem ↔ kontor",
+  lunch: "Lunch",
 };
 
 /** Källor där automatiken – inte ägaren – godkände resan (models/enums.py AUTO_APPROVAL_SOURCES). */
-export const AUTO_APPROVAL_SOURCES: ReadonlySet<string> = new Set(["rule", "history", "return_trip", "commute", "private_place", "assumed"]);
+export const AUTO_APPROVAL_SOURCES: ReadonlySet<string> = new Set([
+  "rule",
+  "history",
+  "return_trip",
+  "commute",
+  "private_place",
+  "assumed",
+  "home_office",
+  "lunch",
+]);
 
 export function isAutoApproval(source: string | null | undefined): boolean {
   return !!source && AUTO_APPROVAL_SOURCES.has(source);
@@ -147,6 +158,16 @@ export const MONTH_STATE_LABELS: Record<string, string> = {
   exported: "Klart",
   stale: "Ändrad efter underlaget",
   empty: "Inga tjänsteresor",
+};
+
+/**
+ * Upplysning i månadens genomgång (month_close._notes, 1.3.0): resor som godkändes automatiskt
+ * och fick sitt ärende ur en kalenderbokning utan fråga. Ägaren rättar med "Ärendet stämmer inte".
+ */
+export const PURPOSE_FROM_CALENDAR = "purpose_from_calendar";
+
+export const MONTH_NOTE_LABELS: Record<string, string> = {
+  [PURPOSE_FROM_CALENDAR]: "Ärende ur kalendern",
 };
 
 /** Hur en exportfil kom till (ExportOut.origin). */

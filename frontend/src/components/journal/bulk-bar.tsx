@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { BadgeCheck, Briefcase, Download, Home, Merge, PenLine, Star, Trash2, X } from "lucide-react";
+import { BadgeCheck, Briefcase, Download, Home, Merge, PenLine, Sparkles, Star, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -16,6 +16,8 @@ export interface BulkHandlers {
   onExport: () => void;
   /** Ta bort valda importerade och manuellt inlagda resor (öppnar en bekräftelse). */
   onDelete?: () => void;
+  /** Gå igenom de valda resorna med AI (öppnar AI-genomgången). */
+  onAiReview?: () => void;
   onClear: () => void;
 }
 
@@ -77,6 +79,11 @@ export function BulkBar({ count, busy, handlers }: { count: number; busy?: boole
       <Button size="sm" variant="secondary" onClick={handlers.onMerge} disabled={busy || count < 2} title={count < 2 ? "Markera minst två resor" : undefined}>
         <Merge /> Slå samman
       </Button>
+      {handlers.onAiReview ? (
+        <Button size="sm" variant="secondary" onClick={handlers.onAiReview} disabled={busy} data-testid="bulk-ai-review">
+          <Sparkles className="text-accent-ink" /> Gå igenom med AI
+        </Button>
+      ) : null}
       <Button size="sm" variant="secondary" onClick={handlers.onExport}>
         <Download /> Exportera valda
       </Button>

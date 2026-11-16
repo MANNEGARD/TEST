@@ -234,6 +234,8 @@ class ApprovalSource(StrEnum):
     COMMUTE = "commute"  # resa mellan bostad och arbetsplats (P)
     PRIVATE_PLACE = "private_place"  # mellan privata platser (P)
     ASSUMED = "assumed"  # antaget kundbesök (A), med vetotid
+    HOME_OFFICE = "home_office"  # resa mellan hemmet och ett av arbetsgivarens kontor (K), ägarens val
+    LUNCH = "lunch"  # lunchregeln (L): kort tur från kontoret och tillbaka mitt på dagen
 
 
 # Automatiska godkännanden: räknas aldrig som ägarbekräftad historik.

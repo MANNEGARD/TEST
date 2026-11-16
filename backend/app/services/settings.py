@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 import ipaddress
 import logging
+import re
 import uuid
 from datetime import datetime
 from typing import Any
@@ -44,8 +45,19 @@ DEFAULT_OFFICE_HOURS: dict[str, Any] = {"days": [0, 1, 2, 3, 4], "start": "07:00
 
 # Inställningar som bara appen själv sätter (inte via API:t).
 READ_ONLY: frozenset[tuple[str, str]] = frozenset(
-    {("automation", "active_since"), ("system", "last_version"), ("merge", "category_rules_since")}
+    {
+        ("automation", "active_since"), ("system", "last_version"), ("merge", "category_rules_since"),
+        ("calendar", "work_domain_source"),
+    }
 )
+
+# AI-underlagets nivå (1.3.0): allt som hjälper bedömningen, eller det tidigare minimala.
+CONTEXT_FULL = "full"
+CONTEXT_MINIMAL = "minimal"
+CONTEXT_LEVELS = (CONTEXT_FULL, CONTEXT_MINIMAL)
+MAX_ABOUT_WORK = 1000
+MAX_WORK_DOMAIN = 120
+_WORK_DOMAIN_RE = re.compile(r"^[a-z0-9.-]+\.[a-z]{2,}$")
 
 # Skatteverkets schablonbelopp för tjänsteresor med egen bil, inkomståren 2025 och 2026.
 DEFAULT_RATE_PER_MIL = 25.0
@@ -58,6 +70,10 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "active_since": "",
         "office_hours": DEFAULT_OFFICE_HOURS,  # kontorstid för platsantagandet
         "assumption_veto_hours": 24,  # 0 = "Fråga mig först"
+        # Resor mellan hemmet och arbetsgivarens kontor är tjänsteresor och godkänns automatiskt
+        # (regel K). Av för nya installationer (Skatteverkets huvudregel); migreringen 0004
+        # sätter på för befintliga användare (ägarens val).
+        "home_office_is_work": False,
     },
     "general": {
         "timezone": "Europe/Stockholm",
@@ -94,6 +110,11 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "send_calendar_body": False,
         "send_street_addresses": False,  # annars endast platsnamn/ort
         "use_llm_for_purpose": True,
+        # full = fullständigt underlag (classify/underlag.py); minimal = det tidigare,
+        # avidentifierade underlaget (engine.build_llm_document). De tre send_*-valen gäller
+        # bara minimal.
+        "context_level": CONTEXT_FULL,
+        "about_work": "",  # "Om mitt arbete" (fritext, skickas med fullständigt underlag)
     },
     "tax": {
         "car_benefit": False,  # bilförmån/förmånsbil (standard: egen bil)
@@ -140,7 +161,23 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "arrival_window_before_minutes": 120,
         "arrival_window_after_minutes": 45,
         "min_match_score": 0.45,
-        "store_body_preview": False,
+        # Läs hela bokningen: beskrivning (upp till 4 000 tecken) och deltagare.
+        "store_body_preview": True,
+        # "Min arbetsgivares e-postdomän": deltagare med samma domän räknas som kollegor.
+        "work_domain": "",
+        # auto = ifylld av DriveLog ur kalendern, user = sparad av ägaren. Sätts bara av appen.
+        "work_domain_source": "",
+    },
+    "lunch": {
+        # Lunchregeln: kort tur från ett av arbetsgivarens kontor, ett kort stopp och tillbaka
+        # till samma kontor inom lunchfönstret en arbetsdag → båda resorna privata.
+        "enabled": True,
+        "window_start": "11:00",
+        "window_end": "13:00",
+        "max_drive_minutes": 10,
+        "max_distance_km": 8,
+        "min_stop_minutes": 20,
+        "max_stop_minutes": 45,
     },
     "privacy": {
         # Slår upp adresser för bilens stopp och bostaden (platsens position skickas) och
@@ -205,6 +242,10 @@ _BOUNDS: dict[tuple[str, str], tuple[float, float]] = {
     ("calendar", "sync_days_forward"): (0, 365),
     ("privacy", "observation_retention_days"): (0, 3650),
     ("export", "rate_per_mil"): (0, 1000),
+    ("lunch", "max_drive_minutes"): (1, 60),
+    ("lunch", "max_distance_km"): (0.5, 50),
+    ("lunch", "min_stop_minutes"): (0, 180),
+    ("lunch", "max_stop_minutes"): (1, 240),
 }
 
 # Inställningar som bara får anta vissa värden.
@@ -212,6 +253,7 @@ _CHOICES: dict[tuple[str, str], tuple[str, ...]] = {
     ("automation", "mode"): AUTOMATION_MODES,
     ("general", "journal_scope"): JOURNAL_SCOPES,
     ("export", "layout"): EXPORT_LAYOUTS,
+    ("ai", "context_level"): CONTEXT_LEVELS,
 }
 
 
@@ -384,6 +426,12 @@ def _validate(section: str, values: dict[str, Any]) -> None:
             _parse_iso(values["active_since"], "automation.active_since")
     if section == "merge" and values.get("category_rules_since"):
         _parse_iso(values["category_rules_since"], "merge.category_rules_since")
+    if section == "ai" and isinstance(values.get("about_work"), str) and len(values["about_work"]) > MAX_ABOUT_WORK:
+        raise SettingsError(f"ai.about_work får vara högst {MAX_ABOUT_WORK} tecken.")
+    if section == "calendar" and isinstance(values.get("work_domain"), str):
+        domain = values["work_domain"].strip().lower()
+        if domain and (len(domain) > MAX_WORK_DOMAIN or not _WORK_DOMAIN_RE.match(domain)):
+            raise SettingsError("Ange bara domänen, till exempel exempelakeri.se.")
     if section == "import" and values.get("default_coverage") not in (None, "selection", "complete", "unknown"):
         raise SettingsError("import.default_coverage måste vara selection, complete eller unknown.")
 
@@ -477,6 +525,21 @@ def update_section(
         merged = {**DEFAULTS["ai"], **current}
         if merged["review_threshold"] > merged["auto_threshold"]:
             raise SettingsError("Granskningströskeln får inte överstiga tröskeln för automatisk klassning.")
+        if isinstance(values.get("about_work"), str):
+            from app.services.text_safety import sanitize_text
+
+            current["about_work"] = sanitize_text(values["about_work"], limit=MAX_ABOUT_WORK) or ""
+    if section == "calendar" and isinstance(values.get("work_domain"), str):
+        current["work_domain"] = values["work_domain"].strip().lower()
+        if not allow_read_only:
+            # Ägaren har sparat fältet: DriveLog fyller aldrig i det igen av sig själv.
+            current["work_domain_source"] = "user"
+    if section == "lunch":
+        merged = {**DEFAULTS["lunch"], **current}
+        if merged["window_start"] >= merged["window_end"]:
+            raise SettingsError("lunch: fönstrets början måste ligga före slutet.")
+        if merged["min_stop_minutes"] > merged["max_stop_minutes"]:
+            raise SettingsError("lunch: kortaste stoppet får inte vara längre än det längsta.")
     if row is None:
         row = Setting(user_id=user_id, key=section, value=current)
         db.add(row)

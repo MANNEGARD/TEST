@@ -14,6 +14,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { Pagination } from "@/components/ui/pagination";
 import { SegmentedControl } from "@/components/ui/segmented-control";
 import { Skeleton } from "@/components/ui/skeleton";
+import { AiReviewDialog } from "@/components/trips/ai-review-dialog";
 import { TripCard } from "@/components/trips/trip-card";
 import { DEFAULT_VISIBLE } from "@/components/trips/trip-columns";
 import { TotalsLine, TripTable, type TripRowHandlers } from "@/components/trips/trip-table";
@@ -71,6 +72,7 @@ export function JournalView() {
   // Resorna bakom markeringen (även från andra sidor) – borttagningen behöver deras källa och sträcka.
   const [known, setKnown] = React.useState<Record<string, Trip>>({});
   const [deleting, setDeleting] = React.useState(false);
+  const [aiReview, setAiReview] = React.useState<string[] | null>(null);
 
   // ⌘K-sökningen navigerar hit med ?q= – följ URL:en när den ändras utifrån.
   const urlQ = params.get("q") ?? "";
@@ -255,6 +257,7 @@ export function JournalView() {
               router.push("/export?selected=1");
             },
             onDelete: () => setDeleting(true),
+            onAiReview: () => setAiReview(ids),
             onClear: () => setSelected(new Set()),
           }}
         />
@@ -319,6 +322,14 @@ export function JournalView() {
       </Card>
       {mergeFlow.dialog}
       <BulkDeleteDialog trips={selectedTrips} open={deleting} onOpenChange={setDeleting} onDone={() => setSelected(new Set())} />
+      <AiReviewDialog
+        open={aiReview !== null}
+        onOpenChange={(o) => {
+          if (!o) setAiReview(null);
+        }}
+        selection={{ kind: "trips", ids: aiReview ?? [] }}
+        trips={selectedTrips}
+      />
     </>
   );
 }

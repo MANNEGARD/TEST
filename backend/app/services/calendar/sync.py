@@ -17,7 +17,7 @@ from app.models import CalendarEvent, IntegrationConnection
 from app.models.enums import IntegrationProvider, IntegrationStatus
 from app.services import integrations, oauth_state
 from app.services import settings as settings_svc
-from app.services.calendar import graph
+from app.services.calendar import calendar_text, graph
 from app.services.calendar.ics import ICS_CALENDAR_ID
 
 logger = logging.getLogger(__name__)
@@ -178,9 +178,55 @@ def _event_values(raw: dict[str, Any], include_body: bool) -> dict[str, Any] | N
         "location_city": address.get("city") or None,
         "latitude": float(lat) if isinstance(lat, (int, float)) else None,
         "longitude": float(lon) if isinstance(lon, (int, float)) else None,
-        "body_preview": (raw.get("bodyPreview") or None) if include_body else None,
+        "body_preview": _body(raw) if include_body else None,
+        "attendees": _attendees(raw) if include_body else None,
         "series_master_id": raw.get("seriesMasterId"),
     }
+
+
+def _body(raw: dict[str, Any]) -> str | None:
+    """Hela beskrivningen som text (upp till 4 000 tecken), annars förhandsvisningen."""
+    body = raw.get("body") or {}
+    content = body.get("content") if isinstance(body, dict) else None
+    if isinstance(content, str) and content.strip():
+        if (body.get("contentType") or "text").lower() == "html":
+            content = _strip_html(content)
+        return calendar_text.store_body(content)
+    preview = raw.get("bodyPreview")
+    return calendar_text.store_body(preview) if isinstance(preview, str) and preview.strip() else None
+
+
+def _strip_html(text: str) -> str:
+    import html
+    import re
+
+    text = re.sub(r"(?is)<(script|style).*?</\1>", " ", text)
+    text = re.sub(r"(?i)<br\s*/?>|</p>|</div>", "\n", text)
+    return html.unescape(re.sub(r"<[^>]+>", " ", text))
+
+
+def _attendees(raw: dict[str, Any]) -> list[dict[str, str]] | None:
+    """Arrangör och deltagare ur Graph (namn och adress, adressen i gemener)."""
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+    people: list[tuple[Any, str]] = [(raw.get("organizer"), "organizer")]
+    people += [(a, "attendee") for a in (raw.get("attendees") or []) if isinstance(a, dict)]
+    for item, role in people:
+        email_obj = (item or {}).get("emailAddress") if isinstance(item, dict) else None
+        if not isinstance(email_obj, dict):
+            continue
+        address = str(email_obj.get("address") or "")
+        person = calendar_text.parse_person(address, {"CN": email_obj.get("name")} if email_obj.get("name") else None)
+        if person is None:
+            continue
+        key = person["email"] or person["name"].casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({**person, "role": role})
+        if len(out) >= calendar_text.MAX_ATTENDEES:
+            break
+    return out or None
 
 
 def sync_user(
@@ -197,6 +243,7 @@ def sync_user(
     end = now + timedelta(days=int(cal["sync_days_forward"]))
     include_body = bool(cal["store_body_preview"])
     stats = {"created": 0, "updated": 0, "removed": 0, "calendars": 0}
+    seen_values: list[dict[str, Any]] = []
     try:
         client = graph.GraphClient(access_token(db, conn, transport=transport), transport=transport)
         try:
@@ -207,6 +254,8 @@ def sync_user(
                 raw_events = client.calendar_view(cal_id, start, end, include_body_preview=include_body)
                 stats["calendars"] += 1
                 _upsert_events(db, user_id, conn, cal_id, raw_events, start, end, include_body, stats)
+                if include_body:
+                    seen_values += [v for v in (_event_values(r, True) for r in raw_events) if v is not None]
             stats["removed"] += retire_unselected(db, user_id, calendar_ids)
         finally:
             client.close()
@@ -231,6 +280,10 @@ def sync_user(
         raise CalendarError(str(exc), "graph_error") from exc
     integrations.mark_success(conn, now)
     integrations.finish_run(run, "ok", stats=stats)
+    if seen_values:
+        from app.services.calendar import ics
+
+        ics.learn_owner(db, user_id, conn, seen_values)  # egen adress och jobbdomän ur deltagarna
     db.flush()
     return {"status": "ok", **stats}
 

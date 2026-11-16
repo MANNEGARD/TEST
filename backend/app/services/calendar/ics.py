@@ -40,7 +40,7 @@ from app.models import CalendarEvent, CalendarMatch, IntegrationConnection
 from app.models.enums import IntegrationProvider, IntegrationStatus
 from app.services import integrations
 from app.services import settings as settings_svc
-from app.services.calendar import ics_fetch
+from app.services.calendar import calendar_text, ics_fetch
 from app.services.calendar.ics_fetch import IcsError
 from app.services.text_safety import sanitize_text
 
@@ -80,6 +80,12 @@ TIP_NO_LOCATION = (
 TIP_TRUNCATED = (
     "Kalendern har fler händelser än DriveLog läser i synkfönstret (högst 5 000). De senare hoppades över."
 )
+TIP_NO_DETAILS = (
+    "Kalenderlänken innehåller inga beskrivningar. Dela kalendern i Outlook med Kan visa all information och "
+    "kopiera den nya länken, så kan DriveLog läsa hela bokningen."
+)
+# Tipset om saknade beskrivningar visas först när det finns så här många bokningar.
+NO_DETAILS_MIN_EVENTS = 5
 
 _BUSY_WORDS = frozenset({
     "busy", "upptagen", "tentative", "preliminär", "preliminärt", "free", "ledig", "out of office",
@@ -108,6 +114,8 @@ class ParseResult:
     truncated: bool = False
     busy_only: bool = False
     with_location: int = 0
+    with_description: int = 0
+    with_attendees: int = 0
     occurrences: int = 0  # ej inställda förekomster i fönstret (före ev. busy_only-rensning)
 
 
@@ -139,6 +147,41 @@ def _text(component: Any, name: str, limit: int) -> str | None:
         if value is None:
             return None
     return sanitize_text(str(value), limit)
+
+
+def _description(component: Any) -> str | None:
+    """Bokningens beskrivning med radbrytningarna kvar (tvättas vid sändning, se calendar_text)."""
+    value = component.get("DESCRIPTION")
+    if isinstance(value, list):
+        value = value[0] if value else None
+    if value is None:
+        return None
+    return calendar_text.store_body(str(value))
+
+
+def _attendees(component: Any) -> list[dict[str, str]] | None:
+    """Arrangör och deltagare: namn ur CN (annars adressens lokala del) och adressen (gemener)."""
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for name, role in (("ORGANIZER", "organizer"), ("ATTENDEE", "attendee")):
+        values = component.get(name)
+        if values is None:
+            continue
+        if not isinstance(values, list):
+            values = [values]
+        for value in values:
+            params = dict(getattr(value, "params", {}) or {})
+            person = calendar_text.parse_person(value, params)
+            if person is None:
+                continue
+            key = person["email"] or person["name"].casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append({**person, "role": role})
+            if len(out) >= calendar_text.MAX_ATTENDEES:
+                return out
+    return out or None
 
 
 def _flag(component: Any, name: str) -> str:
@@ -549,7 +592,8 @@ def _event_values(
         "location_city": None,
         "latitude": None,
         "longitude": None,
-        "body_preview": _text(comp, "DESCRIPTION", 255) if include_body else None,
+        "body_preview": _description(comp) if include_body else None,
+        "attendees": _attendees(comp) if include_body else None,
         "series_master_id": uid if uid and uid in recurring else None,
     }
 
@@ -617,6 +661,8 @@ def parse(
     active = [v for v in events if not v["is_cancelled"]]
     result.occurrences = len(active)
     result.with_location = sum(1 for v in active if v["location_name"])
+    result.with_description = sum(1 for v in active if v.get("body_preview"))
+    result.with_attendees = sum(1 for v in active if v.get("attendees"))
     result.busy_only = bool(events) and all(_is_busy_text(v) for v in events)
     result.events = [] if result.busy_only else events
     return result
@@ -737,6 +783,8 @@ def _summary(parsed: ParseResult) -> dict[str, Any]:
     return {
         "events": parsed.occurrences,
         "with_location": parsed.with_location,
+        "with_description": parsed.with_description,
+        "with_attendees": parsed.with_attendees,
         "busy_only": parsed.busy_only,
         "skipped": parsed.skipped,
         "truncated": parsed.truncated,
@@ -753,6 +801,7 @@ def _apply(
     summary = _summary(parsed)
     summary["skipped"] = stats["skipped"]
     conn.capabilities = summary
+    learn_owner(db, user_id, conn, parsed.events)
     integrations.finish_run(run, "ok", stats={**stats, "events": summary["events"]})
     db.flush()
     return {
@@ -765,6 +814,35 @@ def _apply(
         "truncated": summary["truncated"],
         "tip": tip_for(conn, settings_svc.get_section(db, user_id, "calendar")),
     }
+
+
+def learn_owner(db: Session, user_id: uuid.UUID, conn: IntegrationConnection, events: list[dict[str, Any]]) -> None:
+    """Ägarens egen adress (dold, bland anslutningens hemligheter) och jobbdomänen ur deltagarna.
+
+    Domänen skrivs till ``calendar.work_domain`` bara när fältet är tomt och ägaren aldrig
+    har sparat det själv (``work_domain_source`` != "user"). Bara antal loggas, aldrig adresser.
+    """
+    self_email, domain = calendar_text.learn_owner(events)
+    if self_email:
+        integrations.set_secrets(conn, {"self_email": self_email})
+    if not domain:
+        return
+    cal = settings_svc.get_section(db, user_id, "calendar")
+    if cal.get("work_domain") or cal.get("work_domain_source") == "user":
+        return
+    settings_svc.update_section(
+        db, user_id, "calendar", {"work_domain": domain, "work_domain_source": "auto"}, allow_read_only=True
+    )
+
+
+def self_email(db: Session, user_id: uuid.UUID) -> str | None:
+    """Ägarens egen adress enligt kalendern (kalenderlänken, annars Outlook), eller None."""
+    for provider in (PROVIDER, IntegrationProvider.MICROSOFT):
+        conn = integrations.get(db, user_id, provider)
+        value = integrations.secrets(conn).get("self_email") if conn is not None else None
+        if isinstance(value, str) and value:
+            return value
+    return None
 
 
 def _link(conn: IntegrationConnection | None) -> str | None:
@@ -856,6 +934,9 @@ def tip_for(conn: IntegrationConnection | None, cal_settings: dict[str, Any] | N
         return TIP_NO_LOCATION
     if caps.get("truncated"):
         return TIP_TRUNCATED
+    store = bool((cal_settings or {}).get("store_body_preview", True))
+    if store and int(caps.get("events") or 0) >= NO_DETAILS_MIN_EVENTS and caps.get("with_description") == 0:
+        return TIP_NO_DETAILS
     return None
 
 
@@ -866,6 +947,8 @@ def status(db: Session, user_id: uuid.UUID) -> dict[str, Any]:
     has_link = _link(conn) is not None
     caps = (conn.capabilities or {}) if conn is not None else {}
     with_location = caps.get("with_location") if has_link else None
+    with_description = caps.get("with_description") if has_link else None
+    with_attendees = caps.get("with_attendees") if has_link else None
     host = (conn.config or {}).get("host") if conn is not None and has_link else None
     return {
         "provider": PROVIDER.value,
@@ -878,6 +961,8 @@ def status(db: Session, user_id: uuid.UUID) -> dict[str, Any]:
         "last_error_at": conn.last_error_at if conn is not None else None,
         "stored_events": stored_events(db, user_id),
         "events_with_location": int(with_location) if isinstance(with_location, int) else None,
+        "events_with_description": int(with_description) if isinstance(with_description, int) else None,
+        "events_with_attendees": int(with_attendees) if isinstance(with_attendees, int) else None,
         "tip": tip_for(conn, cal),
         "stores_body_preview": bool(cal["store_body_preview"]),
         "sync_days_back": int(cal["sync_days_back"]),

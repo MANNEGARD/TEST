@@ -171,11 +171,15 @@ class GraphClient:
     def close(self) -> None:
         self._client.close()
 
-    def _get(self, url: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+    def _get(
+        self, url: str, params: dict[str, Any] | None = None, *, headers: dict[str, str] | None = None
+    ) -> dict[str, Any]:
         attempt = 0
         while True:
             try:
-                resp = self._client.get(url, params=params)
+                resp = self._client.get(url, params=params, headers=headers) if headers else self._client.get(
+                    url, params=params
+                )
             except httpx.HTTPError as exc:
                 if attempt < self._max_retries:
                     attempt += 1
@@ -231,7 +235,8 @@ class GraphClient:
         self, calendar_id: str, start: datetime, end: datetime, *, include_body_preview: bool = False
     ) -> list[dict[str, Any]]:
         """Alla händelser (återkommande expanderade) i intervallet. Följer sidindelningen."""
-        fields = list(EVENT_FIELDS) + (["bodyPreview"] if include_body_preview else [])
+        # Hela bokningen (1.3.0): beskrivningen som text, deltagarna och arrangören.
+        fields = list(EVENT_FIELDS) + (["bodyPreview", "body", "attendees", "organizer"] if include_body_preview else [])
         params: dict[str, Any] | None = {
             "startDateTime": start.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "endDateTime": end.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -241,8 +246,12 @@ class GraphClient:
         url: str | None = f"{GRAPH_BASE}/me/calendars/{calendar_id}/calendarView"
         out: list[dict[str, Any]] = []
         pages = 0
+        # Prefer-huvudet ersätter klientens: tidszonen UTC och beskrivningen som ren text.
+        headers = (
+            {"Prefer": 'outlook.timezone="UTC", outlook.body-content-type="text"'} if include_body_preview else None
+        )
         while url and pages < MAX_PAGES:
-            body = self._get(url, params)
+            body = self._get(url, params, headers=headers) if headers else self._get(url, params)
             out.extend(body.get("value", []))
             url, params = body.get("@odata.nextLink"), None
             pages += 1

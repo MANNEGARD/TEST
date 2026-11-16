@@ -2,9 +2,23 @@
 
 import { keepPreviousData, useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { api, DECISION_TIMEOUT_MS, type Query } from "../api";
-import type { BulkUpdate, CategoryCode, ManualTrip, Trip, TripDetail, TripList, TripUpdate } from "../types";
+import type {
+  AiReviewPlan,
+  AiReviewPlanInput,
+  BulkUpdate,
+  CategoryCode,
+  ManualTrip,
+  ReclassifyResult,
+  Trip,
+  TripDetail,
+  TripList,
+  TripUpdate,
+} from "../types";
 import { useVehicle } from "../vehicle";
 import { invalidateJournalData, qk } from "./keys";
+
+/** En bedömning med AI kan ta en stund; hänger leverantören ger webbappen upp och går vidare. */
+const AI_TIMEOUT_MS = 90_000;
 
 /** Parametrar för GET /trips (se backend/app/api/routes/trips.py → list_trips). */
 export interface TripListParams {
@@ -245,11 +259,42 @@ export function useCalendarMatchChoice(tripId: string) {
   });
 }
 
-export function useReclassify() {
+/**
+ * Bedöm en resa på nytt (POST /trips/{id}/classify): reglerna och, om en leverantör är vald, AI.
+ * Godkända och importerade resor rörs aldrig av servern (`outcome: "skipped_decided"`).
+ * `invalidate: false` används av AI-genomgången, som hämtar om allt först när den är klar.
+ */
+export function useReclassify({ invalidate = true }: { invalidate?: boolean } = {}) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: string) => api.post<{ changed: boolean; note: string | null }>(`/trips/${id}/classify`),
-    onSuccess: () => invalidateJournalData(qc),
+    mutationFn: (id: string) => api.post<ReclassifyResult>(`/trips/${id}/classify`, undefined, { timeoutMs: AI_TIMEOUT_MS }),
+    onSuccess: () => {
+      if (invalidate) void invalidateJournalData(qc);
+    },
+  });
+}
+
+/**
+ * Planen för en AI-genomgång (POST /trips/ai-review/plan): vilka resor som bedöms, hur många
+ * som hoppas över och vilken leverantör som används. Ändrar ingenting.
+ */
+export function useAiReviewPlan() {
+  const { vehicleId } = useVehicle();
+  return useMutation({
+    mutationFn: (body: AiReviewPlanInput) => api.post<AiReviewPlan>("/trips/ai-review/plan", body, { query: { vehicle_id: vehicleId } }),
+  });
+}
+
+/**
+ * "Ärendet stämmer inte" (POST /trips/{id}/purpose/reject-calendar): ett ärende som sattes ur
+ * kalendern utan fråga tas bort, kalenderträffen väljs inte igen och resan får ett ärende att
+ * bekräfta i Granskning.
+ */
+export function useRejectCalendarPurpose() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.post<Trip>(`/trips/${id}/purpose/reject-calendar`, undefined, { timeoutMs: DECISION_TIMEOUT_MS }),
+    onSettled: () => invalidateJournalData(qc),
   });
 }
 
