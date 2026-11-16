@@ -268,16 +268,22 @@ export function ReviewView() {
   const current = queue[0];
   if ((current?.id ?? null) !== shown) setShown(current?.id ?? null);
 
-  /** Tar ärendet ur kön. Returnerar false om det redan är besvarat. */
-  const finish = React.useCallback((item: ReviewItem) => {
+  /** Resans övriga ärenden där man klassar resan: de döljs med svaret och kommer tillbaka
+   *  när listan har hämtats om, om de fortfarande är öppna (t.ex. syftet efter Arbete). */
+  const sameTrip = (item: ReviewItem) =>
+    all.filter((i) => i.id !== item.id && !!item.trip && i.trip?.id === item.trip.id && TRIP_DECISION_KINDS.has(i.kind)).map((i) => i.id);
+
+  /** Tar ärendet (och `also`) ur kön. Returnerar false om det redan är besvarat. */
+  const finish = React.useCallback((item: ReviewItem, also: string[] = []) => {
     if (answered.current.has(item.id)) return false;
     answered.current.add(item.id);
     const keys = [item.id, item.trip?.id].filter(Boolean) as string[];
-    setDone((d) => new Set(d).add(item.id));
+    const ids = [item.id, ...also];
+    setDone((d) => new Set([...d, ...ids]));
     setSaved((s) => {
-      if (!(item.id in s)) return s;
+      if (!ids.some((id) => id in s)) return s;
       const n = { ...s };
-      delete n[item.id];
+      for (const id of ids) delete n[id];
       return n;
     });
     setSkipped((s) => s.filter((x) => x !== item.id));
@@ -293,12 +299,12 @@ export function ReviewView() {
 
   /** Lägger tillbaka ärendet (eller resans nya ärende) först i kön – efter ett fel från
    *  servern (med felet synligt) eller vid Ångra. */
-  const restore = React.useCallback((item: ReviewItem, error?: unknown) => {
+  const restore = React.useCallback((item: ReviewItem, error?: unknown, also: string[] = []) => {
     answered.current.delete(item.id);
     const keys = [item.id, item.trip?.id].filter(Boolean) as string[];
     setDone((d) => {
       const n = new Set(d);
-      n.delete(item.id);
+      for (const id of [item.id, ...also]) n.delete(id);
       return n;
     });
     setFront((f) => [...keys, ...f.filter((x) => !keys.includes(x))]);
@@ -310,9 +316,10 @@ export function ReviewView() {
 
   /** Servern har sparat svaret på ärendet: listan som hämtas härefter avgör om det är kvar. */
   const confirm = React.useCallback(
-    (item: ReviewItem) => {
+    (item: ReviewItem, also: string[] = []) => {
       answered.current.delete(item.id);
-      setSaved((s) => ({ ...s, [item.id]: Date.now() }));
+      const at = Date.now();
+      setSaved((s) => ({ ...s, ...Object.fromEntries([item.id, ...also].map((id) => [id, at])) }));
       void qc.invalidateQueries({ queryKey: qk.review.all });
     },
     [qc],
@@ -339,29 +346,33 @@ export function ReviewView() {
   const decideCategory = React.useCallback(
     (c: "work" | "private") => {
       const item = current;
-      if (!item?.trip || !finish(item)) return;
-      actions.setCategory(item.trip.id, c, { onUndone: () => restore(item) }).then(
-        () => confirm(item),
-        (e) => restore(item, e),
+      const also = item ? sameTrip(item) : [];
+      if (!item?.trip || !finish(item, also)) return;
+      actions.setCategory(item.trip.id, c, { onUndone: () => restore(item, undefined, also) }).then(
+        () => confirm(item, also),
+        (e) => restore(item, e, also),
       );
     },
-    [current, actions, finish, restore, confirm],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [current, all, actions, finish, restore, confirm],
   );
 
   const approve = React.useCallback(() => {
     const item = current;
-    if (!item?.trip || !hasProposal(item.trip) || !finish(item)) return;
+    const also = item ? sameTrip(item) : [];
+    if (!item?.trip || !hasProposal(item.trip) || !finish(item, also)) return;
     // Förslaget som visades: har det hunnit räknas om sedan dess godkänns ingenting.
     actions
       .approve(item.trip.id, {
         expected: { category: item.trip.category as CategoryCode, purpose: item.trip.purpose ?? null },
-        onUndone: () => restore(item),
+        onUndone: () => restore(item, undefined, also),
       })
       .then(
-        () => confirm(item),
-        (e) => restore(item, e),
+        () => confirm(item, also),
+        (e) => restore(item, e, also),
       );
-  }, [current, actions, finish, restore, confirm]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current, all, actions, finish, restore, confirm]);
 
   const savePurpose = (text: string) => {
     const item = current;
