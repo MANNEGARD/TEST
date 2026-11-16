@@ -9,6 +9,7 @@ Två layouter finns (inställningen ``export.layout``):
 from __future__ import annotations
 
 import hashlib
+import json
 import uuid
 from collections.abc import Iterable
 from datetime import datetime
@@ -32,6 +33,7 @@ from app.models import (
     User,
     Vehicle,
 )
+from app.models.enums import ExportOrigin
 from app.security import crypto
 from app.services import audit
 from app.services import settings as settings_svc
@@ -131,6 +133,17 @@ def simple_summary(journal: SimpleJournal) -> dict[str, Any]:
         "period_label": journal.period_label,
         "excluded": excluded,
     }
+
+
+def rows_fingerprint(journal: SimpleJournal) -> str:
+    """sha256 över underlagets rader (``SimpleRow.as_dict``) och summor.
+
+    Avtrycket ändras bara när något som står i filen ändras; månadsskiftet skapar aldrig en
+    ny fil för ett oförändrat avtryck.
+    """
+    payload = {"rows": [r.as_dict() for r in journal.rows], "totals": journal.totals()}
+    text = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"), default=str)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def build_context(
@@ -293,12 +306,16 @@ def create_export(
     tz: ZoneInfo | None = None,
     now: datetime | None = None,
     layout: str | None = None,
+    origin: str = ExportOrigin.MANUAL,
 ) -> ExportJob:
     """Skapar en Excel-körjournal för perioden (eller för valda resor).
 
     ``layout`` är ``simple`` eller ``detailed``; utelämnas den används inställningen
-    ``export.layout``.
+    ``export.layout``. ``origin`` är ``manual`` eller ``month_close`` (skapad av
+    månadsskiftet). Exporten får också underlagets avtryck (``rows_fingerprint``).
     """
+    if origin not in {o.value for o in ExportOrigin}:
+        raise ExportError("Okänt ursprung för exporten.", "invalid_origin")
     if vehicle.owner_user_id != user_id:
         raise ExportError("Fordonet hittades inte.", "not_found")
     layout = resolve_layout(db, user_id, layout)
@@ -333,6 +350,7 @@ def create_export(
             "layout": layout,
         },
         status="pending",
+        origin=str(origin),
     )
     db.add(job)
     db.flush()
@@ -348,6 +366,7 @@ def create_export(
             )
             simple_mod.write_workbook(path, journal)
             summary = simple_summary(journal)
+            job.rows_fingerprint = rows_fingerprint(journal)
         else:
             ctx = build_context(db, vehicle=vehicle, period=period, tz=tz, trip_ids=ids, now=now)
             if ids is not None and len(ctx.trips) != len(set(ids)):
@@ -360,6 +379,8 @@ def create_export(
                 "odometer_end": ctx.odometer_end.value,
                 "open_gap_km": round(sum(g.km for g in ctx.gaps if g.status == "open"), 1),
             }
+            journal, _ = build_simple_journal(db, vehicle=vehicle, start=start, end=end, tz=tz, trip_ids=ids)
+            job.rows_fingerprint = rows_fingerprint(journal)
         path.chmod(0o600)
         job.file_path = str(path)
         job.sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
@@ -387,7 +408,8 @@ def create_export(
         raise
     audit.record(
         db, actor, "export.create", "export_job", job.id,
-        after={"label": label, "layout": layout, "trips": job.summary.get("trips"), "is_complete": job.is_complete},
+        after={"label": label, "layout": layout, "trips": job.summary.get("trips"), "is_complete": job.is_complete,
+               "origin": job.origin},
         user_id=user_id,
     )
     db.flush()

@@ -567,10 +567,27 @@ def test_quality_remarks_only_concern_reported_business_trips(db, user, vehicle,
     off.odometer_end = off.odometer_start + 40  # 10 km enligt resan, 40 km enligt mätaren
     db.flush()
     codes = by_code(run(db, vehicle))
-    assert set(codes) == {"uncertain_quality", "odometer_distance_mismatch"}
-    assert all(c["severity"] == "warning" for c in codes.values())
-    assert codes["uncertain_quality"]["trip_ids"] == [str(api.id)]
+    # 1.1.0: en resa från bilen med kända tider och adresser ger ingen anmärkning bara för
+    # att den kommer från bilen (den tidigare samlade "uncertain_quality" är borttagen).
+    assert set(codes) == {"odometer_distance_mismatch"}
+    assert codes["odometer_distance_mismatch"]["severity"] == "warning"
     assert codes["odometer_distance_mismatch"]["trip_ids"] == [str(off.id)]
+
+    # Okänd starttid, uträknad tid, saknad adress och möjliga missade resor anmärks var för sig.
+    raw = api.segments[0].raw_trip
+    api.started_at = raw.started_at = None
+    api.start_time_quality = raw.start_time_quality = "bounded"
+    api.end_time_quality = raw.end_time_quality = "estimated"
+    api.end_address = raw.end_address = None
+    api.quality_flags = ["possible_missed_trips"]
+    db.flush()
+    codes = by_code(run(db, vehicle))
+    assert {c: codes[c]["severity"] for c in codes if c != "odometer_distance_mismatch"} == {
+        "missing_start_time": "warning", "estimated_times": "info", "missing_address": "warning",
+        "possible_missed_trips": "warning",
+    }
+    assert all(codes[c]["trip_ids"] == [str(api.id)] for c in codes if c != "odometer_distance_mismatch")
+    assert "uncertain_quality" not in codes and checks_mod.is_complete(run(db, vehicle))
 
 
 def test_empty_and_demo_underlag(db, user, vehicle, trips):

@@ -24,15 +24,26 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import ImportBatch, LogicalTrip, Vehicle
-from app.models.enums import Category, Coverage, GapStatus, ReviewStatus, TimeQuality, TripSource
+from app.models import ImportBatch, KnownLocation, LogicalTrip, Vehicle
+from app.models.enums import (
+    Category,
+    Coverage,
+    GapStatus,
+    LocationType,
+    ReviewStatus,
+    TimeQuality,
+    TripSource,
+)
 from app.services import settings as settings_svc
+from app.services.places.normalize import clean
 from app.services.stats import common
 from app.services.stats.reports import purpose_missing, purpose_unconfirmed
 from app.services.trips import segments as seg
 
 ERROR, WARNING, INFO = "error", "warning", "info"
 MAX_IDS = 200
+LIVE_SOURCES = (TripSource.VOLVO_API, TripSource.DEMO)
+_UNKNOWN_START = (TimeQuality.BOUNDED, TimeQuality.UNKNOWN)
 
 
 def _check(
@@ -140,7 +151,7 @@ def _has_work(t: LogicalTrip) -> bool:
     return t.work_km > common.KM_EPS or any(seg.segment_category(t, s) == Category.WORK for s in t.segments)
 
 
-def _business_only_checks(vehicle: Vehicle, trips: list[LogicalTrip]) -> list[dict[str, Any]]:
+def _business_only_checks(db: Session, vehicle: Vehicle, trips: list[LogicalTrip]) -> list[dict[str, Any]]:
     """Kontroller när endast tjänsteresor redovisas (egen bil, milersättning).
 
     Underlaget består av tjänsteresor som är godkända eller importerade. Luckor i
@@ -242,14 +253,70 @@ def _business_only_checks(vehicle: Vehicle, trips: list[LogicalTrip]) -> list[di
                    f"{len(odo_diff)} tjänsteresor har en körsträcka som avviker tydligt från skillnaden i "
                    "mätarställning.", odo_diff)
         )
-    uncertain = [t for t in reported if not common.is_gap_fill(t) and _uncertain(t)]
-    if uncertain:
+    out += reported_quality_checks(db, reported)
+    return out
+
+
+def reported_quality_checks(db: Session, reported: list[LogicalTrip]) -> list[dict[str, Any]]:
+    """Upplysningar och fel om de redovisade raderna (byggkontraktet C.6).
+
+    Ersätter den tidigare samlade anmärkningen om osäker datakvalitet, som flaggade varje
+    resa från bilen. Varje kontroll säger nu vad som faktiskt saknas eller är uträknat.
+    """
+    out: list[dict[str, Any]] = []
+    rows = [t for t in reported if not common.is_gap_fill(t)]
+    missed = [t for t in rows if not t.is_complete or "possible_missed_trips" in (t.quality_flags or [])]
+    if missed:
         out.append(
-            _check("uncertain_quality", WARNING, "Resor med osäker datakvalitet",
-                   f"{len(uncertain)} tjänsteresor är rekonstruerade eller har osäkra tidpunkter/uppgifter.",
-                   uncertain)
+            _check("possible_missed_trips", WARNING, "Kan vara flera körningar",
+                   f"{len(missed)} tjänsteresor kan innehålla fler körningar än en, eller saknar uppgifter från "
+                   "bilen under resan.", missed)
+        )
+    no_start = [t for t in rows if t.started_at is None or t.start_time_quality in _UNKNOWN_START]
+    if no_start:
+        out.append(
+            _check("missing_start_time", WARNING, "Starttid saknas",
+                   f"{len(no_start)} tjänsteresor saknar starttid. Underlaget visar då bara sluttiden "
+                   "(till exempel –08:52). Du kan ange starttiden på resan.", no_start)
+        )
+    estimated = [t for t in rows if TimeQuality.ESTIMATED in (t.start_time_quality, t.end_time_quality)]
+    if estimated:
+        out.append(
+            _check("estimated_times", INFO, "Uträknade tider",
+                   f"{len(estimated)} tjänsteresor har en tid som är uträknad ur bilens egna uppgifter. "
+                   "Den står som \"ca\" i underlaget.", estimated)
+        )
+    no_address = [t for t in rows if not clean(t.start_address) or not clean(t.end_address)]
+    if no_address:
+        out.append(
+            _check("missing_address", WARNING, "Adress saknas",
+                   f"{len(no_address)} tjänsteresor saknar adress för start eller mål.", no_address)
+        )
+    private = _private_address_trips(db, rows)
+    if private:
+        out.append(
+            _check("private_address_in_report", ERROR, "Privat adress i underlaget",
+                   f"{len(private)} tjänsteresor startar eller slutar vid en plats som du markerat som privat. "
+                   "Ändra resan eller platsen innan underlaget skapas.", private)
         )
     return out
+
+
+def _private_address_trips(db: Session, trips: list[LogicalTrip]) -> list[LogicalTrip]:
+    """Resor från bilen vars start eller mål är en privat plats (hemmet får stå i underlaget).
+
+    Gäller bara resor från bilen: importerade och manuellt inlagda resor bedöms som i dag.
+    """
+    live = [t for t in trips if t.source in LIVE_SOURCES]
+    ids = {i for t in live for i in (t.start_location_id, t.end_location_id) if i is not None}
+    if not ids:
+        return []
+    private_ids = set(
+        db.execute(
+            select(KnownLocation.id).where(KnownLocation.id.in_(ids), KnownLocation.type == LocationType.PRIVATE)
+        ).scalars()
+    )
+    return [t for t in live if t.start_location_id in private_ids or t.end_location_id in private_ids]
 
 
 def _sorted(checks: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -282,7 +349,7 @@ def run_checks(
     selection = trip_ids is not None
     trips = common.load_trips(db, vehicle.id, start, end, trip_ids=trip_ids)
     if scope == settings_svc.SCOPE_BUSINESS_ONLY:
-        return _sorted(_business_only_checks(vehicle, trips))
+        return _sorted(_business_only_checks(db, vehicle, trips))
 
     tol = float(settings_svc.get_section(db, user_id, "merge")["odometer_tolerance_km"])
     physical = [t for t in trips if not common.is_gap_fill(t)]

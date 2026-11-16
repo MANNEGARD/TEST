@@ -22,17 +22,37 @@ _BEARER = re.compile(r"(?i)(bearer\s+)([A-Za-z0-9._~+/\-]{12,}=*)")
 # VIN: 17 tecken (utan I, O, Q) med både siffror och bokstäver. Sista fyra visas.
 _VIN = re.compile(r"\b(?=[A-HJ-NPR-Z0-9]{17}\b)(?=[A-HJ-NPR-Z0-9]*\d)(?=[A-HJ-NPR-Z0-9]*[A-HJ-NPR-Z])"
                   r"[A-HJ-NPR-Z0-9]{13}([A-HJ-NPR-Z0-9]{4})\b")
+# Nedladdningslänken till underlaget: själva token är behörigheten och får aldrig loggas.
+_PUBLIC_LINK = re.compile(r"(/public/exports/)[^\s\"'?#]+")
 
 
 def redact(text: str) -> str:
     """Maskerar hemligheter och VIN i en loggtext."""
     out = _SECRET_KV.sub(r"\1\2[DOLD]", text)
     out = _BEARER.sub(r"\1[DOLD]", out)
+    out = _PUBLIC_LINK.sub(r"\1[DOLD]", out)
     return _VIN.sub(r"[VIN …\1]", out)
 
 
+def _redact_arg(value: object) -> object:
+    """Maskerar ett enskilt loggargument. Tal och None lämnas orörda (formatet kan vara %d)."""
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    text = value if isinstance(value, str) else str(value)
+    redacted = redact(text)
+    if redacted == text:
+        return value
+    return redacted
+
+
 class RedactingFilter(logging.Filter):
-    """Tar bort uppenbara hemligheter ur loggrader (tokens, nycklar, lösenord, VIN)."""
+    """Tar bort uppenbara hemligheter ur loggrader (tokens, nycklar, lösenord, VIN, länkar).
+
+    ``record.args`` nollas aldrig när det är en tupel: uvicorns ``AccessFormatter`` packar
+    upp fem fält ur den. Varje element maskeras i stället för sig. Räcker inte det (hemligheten
+    uppstår först när texten sätts ihop) ersätts formatsträngen med den maskerade texten och
+    argumenten förbrukas utan att skrivas ut, så att tupeln behåller sin längd.
+    """
 
     def filter(self, record: logging.LogRecord) -> bool:
         try:
@@ -40,8 +60,32 @@ class RedactingFilter(logging.Filter):
         except Exception:
             return True
         redacted = redact(msg)
-        if redacted != msg:
-            record.msg, record.args = redacted, ()
+        if redacted == msg:
+            return True
+        args = record.args
+        if isinstance(args, tuple) and args:
+            record.args = tuple(_redact_arg(a) for a in args)
+            if isinstance(record.msg, str):
+                record.msg = redact(record.msg)
+            try:
+                still = record.getMessage()
+            except Exception:
+                still = None
+            if still is None or redact(still) != still:
+                # "%.0s" förbrukar ett argument av vilken typ som helst utan att skriva ut det.
+                record.msg = redacted.replace("%", "%%") + "%.0s" * len(args)
+        elif isinstance(args, dict) and args:
+            record.args = {k: _redact_arg(v) for k, v in args.items()}
+            if isinstance(record.msg, str):
+                record.msg = redact(record.msg)
+            try:
+                still = record.getMessage()
+            except Exception:
+                still = None
+            if still is None or redact(still) != still:
+                record.msg, record.args = redacted, None
+        else:
+            record.msg, record.args = redacted, None
         return True
 
 
