@@ -52,7 +52,7 @@ class CollectionGapOut(BaseModel):
 
     from_: datetime = Field(alias="from")
     to: datetime
-    odometer_km: float | None = None
+    odometer_km: float | None
 
 
 class TripOut(ORM):

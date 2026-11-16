@@ -325,8 +325,14 @@ export interface paths {
         get: operations["trip_detail_api_v1_trips__trip_id__get"];
         put?: never;
         post?: never;
-        /** Ta bort en manuellt inlagd resa */
-        delete: operations["delete_manual_trip_api_v1_trips__trip_id__delete"];
+        /**
+         * Ta bort en importerad eller manuellt inlagd resa
+         * @description Resan makuleras (originalraden och historiken finns kvar). Resor från bilen,
+         *     sammanslagna resor och resor i en tjänsteresa nekas med en begriplig text. Luckor,
+         *     förslag och ärenden räknas om efter svaret. En borttagen importerad resa kommer
+         *     tillbaka om samma fil importeras igen.
+         */
+        delete: operations["delete_trip_api_v1_trips__trip_id__delete"];
         options?: never;
         head?: never;
         /** Ändra kategori, syfte m.m. (lär systemet) */
@@ -412,6 +418,23 @@ export interface paths {
         put?: never;
         /** Lägg in en resa manuellt */
         post: operations["create_manual_trip_api_v1_trips_manual_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/trips/bulk-delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Ta bort flera importerade eller manuellt inlagda resor */
+        post: operations["bulk_delete_api_v1_trips_bulk_delete_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -991,8 +1014,7 @@ export interface paths {
          * Hämta platsens adress från kartan (en gång, efter ägarens tryck)
          * @description Slår upp just den här platsens adress hos användarens geokodare (standard OpenStreetMap).
          *
-         *     Bara platsens position (avrundad till fyra decimaler) skickas, och bara när ägaren trycker
-         *     på knappen. Samma skydd som uppslagen i bakgrunden: svaret sparas per ruta (ett nytt tryck
+         *     Bara platsens position skickas, och bara när ägaren trycker på knappen. Samma skydd som uppslagen i bakgrunden: svaret sparas per ruta (ett nytt tryck
          *     skickar ingenting) och anropet räknas mot dygnets gräns. Förslaget sparas inte på platsen:
          *     ägaren ser det i adressfältet och sparar platsen.
          */
@@ -2758,6 +2780,27 @@ export interface components {
             /** Vehicle Id */
             vehicle_id?: string | null;
         };
+        /** BulkDelete */
+        BulkDelete: {
+            /** Trip Ids */
+            trip_ids: string[];
+        };
+        /** BulkDeleteError */
+        BulkDeleteError: {
+            /** Trip Id */
+            trip_id: string;
+            /** Code */
+            code: string;
+            /** Message */
+            message: string;
+        };
+        /** BulkDeleteOut */
+        BulkDeleteOut: {
+            /** Deleted */
+            deleted: number;
+            /** Errors */
+            errors: components["schemas"]["BulkDeleteError"][];
+        };
         /** BulkUpdate */
         BulkUpdate: {
             /** Trip Ids */
@@ -2894,6 +2937,24 @@ export interface components {
             location?: string | null;
             /** Note */
             note?: string | null;
+        };
+        /**
+         * CollectionGapOut
+         * @description Uppehåll i hämtningen från Volvo före resan: när och hur mycket mätaren ökade.
+         */
+        CollectionGapOut: {
+            /**
+             * From
+             * Format: date-time
+             */
+            from: string;
+            /**
+             * To
+             * Format: date-time
+             */
+            to: string;
+            /** Odometer Km */
+            odometer_km: number | null;
         };
         /** CommitRequest */
         CommitRequest: {
@@ -3429,6 +3490,8 @@ export interface components {
             latitude?: number | null;
             /** Longitude */
             longitude?: number | null;
+            /** Position Lookup */
+            position_lookup?: ("pending" | "not_found" | "ambiguous") | null;
         };
         /** LocationIn */
         LocationIn: {
@@ -3504,6 +3567,8 @@ export interface components {
             confirmed: boolean;
             /** Is Demo */
             is_demo: boolean;
+            /** Position Lookup */
+            position_lookup?: ("pending" | "not_found" | "ambiguous") | null;
             /** Suggested Type */
             suggested_type: string | null;
             /** Suggested Name */
@@ -3613,6 +3678,13 @@ export interface components {
             notes: components["schemas"]["BlockerOut"][];
             /** Export Id */
             export_id: string | null;
+            /**
+             * Closed Early
+             * @default false
+             */
+            closed_early: boolean;
+            /** Export Created At */
+            export_created_at?: string | null;
             /**
              * Review Rows
              * @default []
@@ -4310,6 +4382,9 @@ export interface components {
             approval_source?: string | null;
             /** Approval Reason */
             approval_reason?: string | null;
+            collection_gap?: components["schemas"]["CollectionGapOut"] | null;
+            /** Deletable */
+            deletable?: ("imported" | "manual") | null;
         };
         /** TripSummary */
         TripSummary: {
@@ -5182,7 +5257,7 @@ export interface operations {
             };
         };
     };
-    delete_manual_trip_api_v1_trips__trip_id__delete: {
+    delete_trip_api_v1_trips__trip_id__delete: {
         parameters: {
             query?: never;
             header?: never;
@@ -5400,6 +5475,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TripOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    bulk_delete_api_v1_trips_bulk_delete_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BulkDelete"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkDeleteOut"];
                 };
             };
             /** @description Validation Error */

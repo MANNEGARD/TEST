@@ -30,6 +30,7 @@ from app.models.enums import (
     ReviewStatus,
     TripSource,
 )
+from app.services import audit
 from app.services import settings as settings_svc
 from app.services.classify import autopilot
 from app.services.export import service as export_svc
@@ -440,10 +441,27 @@ def test_s25_fetch_failing_alert_mentions_volvos_journal(db, user, vehicle):
 
 
 def test_rule_based_classification_marks_requires_review(db, user, vehicle, trips):
-    """F2 direkt i regelmotorn."""
+    """F2 direkt i regelmotorn: även med en egen regel som stöd kräver resan granskning."""
+    from app.services.classify import engine
     from app.services.classify import signals as sig
+    from app.services.learning import patterns
 
-    trip = trips.trip(HOME, OFFICE, source=TripSource.VOLVO_API, quality_flags=["possible_missed_trips"])
-    ctx = sig.build_context(db, trip, user_id=user.id, tz=TZ, tax=settings_svc.get_section(db, user.id, "tax"),
-                            ai=settings_svc.get_section(db, user.id, "ai"), abbreviations={})
-    assert sig.evaluate(ctx).requires_review is True
+    office = trips.location(OFFICE, name="Kontoret", type=LocationType.CUSTOMER, company="Kontoret AB")
+    patterns.set_manual_rule(db, user.id, origin_id=None, dest_id=office.id, category=Category.WORK,
+                             purpose="Kundbesök")
+    settings_svc.update_section(db, user.id, "ai", {"auto_threshold": 0.6, "review_threshold": 0.5})
+    clean = trips.trip(ACME, OFFICE, source=TripSource.VOLVO_API)
+    flagged = trips.trip(ACME, OFFICE, source=TripSource.VOLVO_API, quality_flags=["possible_missed_trips"],
+                         possible_missed_trips=True)
+
+    def evaluate(trip):
+        ctx = sig.build_context(db, trip, user_id=user.id, tz=TZ, tax=settings_svc.get_section(db, user.id, "tax"),
+                                ai=settings_svc.get_section(db, user.id, "ai"), abbreviations={})
+        return sig.evaluate(ctx)
+
+    assert evaluate(clean).requires_review is False  # utan flaggan avgör regeln
+    assert evaluate(flagged).requires_review is True
+    for trip in (clean, flagged):
+        engine.classify_trip(db, trip, user_id=user.id, actor=audit.SYSTEM, provider=None, use_llm=False)
+    assert reload_trip(db, clean.id).review_status == ReviewStatus.AUTO
+    assert reload_trip(db, flagged.id).review_status != ReviewStatus.AUTO

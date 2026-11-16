@@ -1240,8 +1240,9 @@
     "tags": [
      "Trips"
     ],
-    "summary": "Ta bort en manuellt inlagd resa",
-    "operationId": "delete_manual_trip_api_v1_trips__trip_id__delete",
+    "summary": "Ta bort en importerad eller manuellt inlagd resa",
+    "description": "Resan makuleras (originalraden och historiken finns kvar). Resor från bilen,\nsammanslagna resor och resor i en tjänsteresa nekas med en begriplig text. Luckor,\nförslag och ärenden räknas om efter svaret. En borttagen importerad resa kommer\ntillbaka om samma fil importeras igen.",
+    "operationId": "delete_trip_api_v1_trips__trip_id__delete",
     "parameters": [
      {
       "name": "trip_id",
@@ -1491,6 +1492,47 @@
        "application/json": {
         "schema": {
          "$ref": "#/components/schemas/TripOut"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/trips/bulk-delete": {
+   "post": {
+    "tags": [
+     "Trips"
+    ],
+    "summary": "Ta bort flera importerade eller manuellt inlagda resor",
+    "operationId": "bulk_delete_api_v1_trips_bulk_delete_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/BulkDelete"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/BulkDeleteOut"
         }
        }
       }
@@ -3396,7 +3438,7 @@
      "Locations"
     ],
     "summary": "Hämta platsens adress från kartan (en gång, efter ägarens tryck)",
-    "description": "Slår upp just den här platsens adress hos användarens geokodare (standard OpenStreetMap).\n\nBara platsens position (avrundad till fyra decimaler) skickas, och bara när ägaren trycker\npå knappen. Samma skydd som uppslagen i bakgrunden: svaret sparas per ruta (ett nytt tryck\nskickar ingenting) och anropet räknas mot dygnets gräns. Förslaget sparas inte på platsen:\nägaren ser det i adressfältet och sparar platsen.",
+    "description": "Slår upp just den här platsens adress hos användarens geokodare (standard OpenStreetMap).\n\nBara platsens position skickas, och bara när ägaren trycker på knappen. Samma skydd som uppslagen i bakgrunden: svaret sparas per ruta (ett nytt tryck\nskickar ingenting) och anropet räknas mot dygnets gräns. Förslaget sparas inte på platsen:\nägaren ser det i adressfältet och sparar platsen.",
     "operationId": "lookup_address_api_v1_locations__location_id__lookup_address_post",
     "parameters": [
      {
@@ -8782,6 +8824,69 @@
     ],
     "title": "Body_preview_api_v1_imports_preview_post"
    },
+   "BulkDelete": {
+    "properties": {
+     "trip_ids": {
+      "items": {
+       "type": "string",
+       "format": "uuid"
+      },
+      "type": "array",
+      "maxItems": 500,
+      "minItems": 1,
+      "title": "Trip Ids"
+     }
+    },
+    "type": "object",
+    "required": [
+     "trip_ids"
+    ],
+    "title": "BulkDelete"
+   },
+   "BulkDeleteError": {
+    "properties": {
+     "trip_id": {
+      "type": "string",
+      "title": "Trip Id"
+     },
+     "code": {
+      "type": "string",
+      "title": "Code"
+     },
+     "message": {
+      "type": "string",
+      "title": "Message"
+     }
+    },
+    "type": "object",
+    "required": [
+     "trip_id",
+     "code",
+     "message"
+    ],
+    "title": "BulkDeleteError"
+   },
+   "BulkDeleteOut": {
+    "properties": {
+     "deleted": {
+      "type": "integer",
+      "title": "Deleted"
+     },
+     "errors": {
+      "items": {
+       "$ref": "#/components/schemas/BulkDeleteError"
+      },
+      "type": "array",
+      "title": "Errors"
+     }
+    },
+    "type": "object",
+    "required": [
+     "deleted",
+     "errors"
+    ],
+    "title": "BulkDeleteOut"
+   },
    "BulkUpdate": {
     "properties": {
      "trip_ids": {
@@ -9255,6 +9360,39 @@
     },
     "type": "object",
     "title": "ChargingPatch"
+   },
+   "CollectionGapOut": {
+    "properties": {
+     "from": {
+      "type": "string",
+      "format": "date-time",
+      "title": "From"
+     },
+     "to": {
+      "type": "string",
+      "format": "date-time",
+      "title": "To"
+     },
+     "odometer_km": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Odometer Km"
+     }
+    },
+    "type": "object",
+    "required": [
+     "from",
+     "to",
+     "odometer_km"
+    ],
+    "title": "CollectionGapOut",
+    "description": "Uppehåll i hämtningen från Volvo före resan: när och hur mycket mätaren ökade."
    },
    "CommitRequest": {
     "properties": {
@@ -10938,6 +11076,22 @@
        }
       ],
       "title": "Longitude"
+     },
+     "position_lookup": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "pending",
+         "not_found",
+         "ambiguous"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Position Lookup"
      }
     },
     "type": "object",
@@ -11208,6 +11362,22 @@
      "is_demo": {
       "type": "boolean",
       "title": "Is Demo"
+     },
+     "position_lookup": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "pending",
+         "not_found",
+         "ambiguous"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Position Lookup"
      },
      "suggested_type": {
       "anyOf": [
@@ -11527,6 +11697,23 @@
        }
       ],
       "title": "Export Id"
+     },
+     "closed_early": {
+      "type": "boolean",
+      "title": "Closed Early",
+      "default": false
+     },
+     "export_created_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Export Created At"
      },
      "review_rows": {
       "items": {
@@ -13707,6 +13894,31 @@
        }
       ],
       "title": "Approval Reason"
+     },
+     "collection_gap": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/CollectionGapOut"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "deletable": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "imported",
+         "manual"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Deletable"
      }
     },
     "type": "object",
