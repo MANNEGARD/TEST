@@ -60,7 +60,8 @@ MAX_WINDOW_ESTIMATE = 20_000
 MAX_OCCURRENCES = 5_000
 # Hårt tak under själva expansionen (förekomster som byggs i minnet), oavsett uppskattningen.
 MAX_EXPANDED = 20_000
-# Tidsbudget för expansionen (sekunder processortid är svårt att mäta per tråd; väggtid räcker).
+# Tidsbudget (sekunder väggtid) för expansionen. Prövas mellan serierna, så en enskild serie
+# kan dra över något; stegtaken ovan håller varje serie liten.
 EXPAND_SECONDS = 15.0
 
 MSG_NOT_ICS = "Filen bakom länken är ingen kalender (ICS)."

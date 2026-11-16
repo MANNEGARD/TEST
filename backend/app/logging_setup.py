@@ -35,21 +35,18 @@ _WORD_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_-")
 
 
 def _is_calendar_link(url: str) -> bool:
+    """Hela ordet döljs om det någonstans innehåller en kalenderadress – även en som ligger
+    inbäddad i en annan adress (``https://x/?u=https://…/owa/calendar/…``). Hellre en adress för
+    mycket dold än en hemlighet i loggen."""
     lower = url.lower()
-    if lower.startswith("webcal"):
+    if "webcal://" in lower or "webcals://" in lower or any(m in lower for m in _CALENDAR_PATHS):
         return True
-    rest = lower.split("://", 1)[1]
-    cut = min((i for i in (rest.find("?"), rest.find("#")) if i >= 0), default=len(rest))
-    head = rest[:cut]
-    host_end = head.find("/")
-    if host_end > 0 and any(marker in head[host_end:] for marker in _CALENDAR_PATHS):
-        return True
-    i = head.find(".ics")
+    i = lower.find(".ics")
     while i >= 0:
-        nxt = head[i + 4:i + 5]
+        nxt = lower[i + 4:i + 5]
         if i > 0 and (not nxt or nxt not in _WORD_CHARS):
             return True
-        i = head.find(".ics", i + 1)
+        i = lower.find(".ics", i + 1)
     return False
 
 

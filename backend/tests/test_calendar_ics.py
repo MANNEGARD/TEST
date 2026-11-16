@@ -469,6 +469,8 @@ def test_total_deadline(monkeypatch):
     f"webcal://calendar.example.com/a/{TOKEN}/basic.ics",
     f"https://calendar.example.com/calendar/published/{TOKEN}/index.html",
     f"Location: {LINK}",
+    f"GET /x?u=https://calendar.example.com/owa/calendar/a/{TOKEN}/c HTTP/1.1",
+    f"https://example.com/?next=https://calendar.example.com/owa/calendar/a/{TOKEN}/c",
 ])
 def test_redact_hides_calendar_links(text):
     out = redact(text)
