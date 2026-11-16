@@ -498,3 +498,92 @@ form {
 .footnote a {
   color: inherit;
 }
+
+/* ---------- Installation ---------- */
+
+.logo-sm {
+  width: min(70vw, 360px);
+}
+
+.card-wide {
+  width: min(100%, 460px);
+}
+
+.muted {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--ink-2);
+}
+
+.steps {
+  display: grid;
+  gap: 22px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: step;
+}
+
+.steps > li {
+  display: grid;
+  gap: 12px;
+  padding-left: 40px;
+  position: relative;
+  counter-increment: step;
+}
+
+.steps > li::before {
+  content: counter(step);
+  position: absolute;
+  left: 0;
+  top: -2px;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-family: var(--font-display);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.step-title {
+  margin: 0;
+  font-weight: 600;
+}
+
+.qr {
+  width: 200px;
+  max-width: 100%;
+  aspect-ratio: 1;
+  padding: 8px;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.qr svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.manual summary {
+  cursor: pointer;
+  font-size: 0.875rem;
+  color: var(--ink-2);
+}
+
+.secret {
+  display: block;
+  margin-top: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--bg-hi);
+  border: 1px solid var(--line);
+  font-size: 0.95rem;
+  letter-spacing: 0.08em;
+  word-break: break-all;
+  user-select: all;
+}

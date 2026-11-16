@@ -83,6 +83,67 @@ export function loginPage(): string {
   );
 }
 
+export function setupPage(): string {
+  return layout(
+    "SMGD · Installera inloggning",
+    "page-login",
+    `<main class="stage">
+  <div class="brand">
+    <h1 class="sr-only">SMGD</h1>
+    <img class="logo logo-sm" src="/smgd-logo.svg" alt="SMGD – Volvo V90" width="960" height="320">
+  </div>
+
+  <section class="card card-wide" aria-labelledby="setup-title">
+    <h2 id="setup-title" class="card-title">${LOCK}<span>Installera inloggning</span></h2>
+    <noscript><p class="alert">Installationen kräver JavaScript.</p></noscript>
+
+    <div id="setup-loading" class="muted">Kontrollerar installationslänken…</div>
+
+    <form id="setup-form" novalidate hidden>
+      <ol class="steps">
+        <li>
+          <p class="step-title">Välj lösenord</p>
+          <input type="text" name="username" value="smgd" autocomplete="username" hidden aria-hidden="true" tabindex="-1">
+          <label class="field">
+            <span>Lösenord <small>minst 12 tecken</small></span>
+            <input id="password" type="password" autocomplete="new-password" required minlength="12" maxlength="256" spellcheck="false">
+          </label>
+          <label class="field">
+            <span>Upprepa lösenordet</span>
+            <input id="password2" type="password" autocomplete="new-password" required minlength="12" maxlength="256" spellcheck="false">
+          </label>
+        </li>
+        <li>
+          <p class="step-title">Skanna QR-koden med din autentiseringsapp</p>
+          <p class="muted">T.ex. Google Authenticator, Microsoft Authenticator, 1Password eller Bitwarden.</p>
+          <div id="qr" class="qr" aria-label="QR-kod för tvåstegsverifiering" role="img"></div>
+          <details class="manual">
+            <summary>Kan du inte skanna? Skriv in nyckeln</summary>
+            <code id="secret" class="secret"></code>
+          </details>
+        </li>
+        <li>
+          <p class="step-title">Skriv koden som appen visar</p>
+          <label class="field">
+            <span>Engångskod</span>
+            <input id="code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="7" required placeholder="000 000" spellcheck="false">
+          </label>
+        </li>
+      </ol>
+      <p id="setup-error" class="alert" role="alert" aria-live="assertive" hidden></p>
+      <button id="setup-submit" class="btn" type="submit">
+        <span class="btn-label">Spara och logga in</span>
+        <span class="spinner" aria-hidden="true"></span>
+      </button>
+    </form>
+  </section>
+
+  <p class="footnote">Länken fungerar bara en gång</p>
+</main>`,
+    "setup.js",
+  );
+}
+
 export function portalPage(sites: Site[], expiresAt: number): string {
   const cards = sites
     .map((s) => {

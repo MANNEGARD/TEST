@@ -1,15 +1,14 @@
 // POST /api/login – kontrollerar lösenord + engångskod och sätter sessionskakan.
 import type { Config, Context } from "@netlify/edge-functions";
-import { getStore } from "@netlify/blobs";
 import {
   createSessionToken,
   isSameOrigin,
   json,
-  readAuthConfig,
   sessionCookie,
   verifyPassword,
   verifyTotp,
 } from "./lib/security.ts";
+import { authStore, loadAuthConfig } from "./lib/store.ts";
 
 const GENERIC_ERROR = "Fel lösenord eller engångskod.";
 
@@ -18,7 +17,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 /** Senaste använda TOTP-steg sparas så att samma kod inte kan användas två gånger. */
 async function claimTotpStep(step: number): Promise<boolean> {
   try {
-    const store = getStore({ name: "smgd-portal-auth", consistency: "strong" });
+    const store = authStore();
     const last = Number((await store.get("totp-last-step")) ?? "0");
     if (step <= last) return false;
     await store.set("totp-last-step", String(step));
@@ -37,10 +36,10 @@ export default async (request: Request, context: Context) => {
     return json({ error: "Ogiltig begäran." }, 415);
   }
 
-  const cfg = readAuthConfig();
+  const cfg = await loadAuthConfig();
   if (!cfg) {
-    console.error("Portalen saknar PORTAL_PASSWORD_HASH, PORTAL_TOTP_SECRET eller PORTAL_SESSION_SECRET.");
-    return json({ error: "Inloggningen är inte konfigurerad ännu." }, 503);
+    console.error("Inloggningen är inte installerad – öppna /setup med installationslänken.");
+    return json({ error: "Inloggningen är inte installerad ännu." }, 503);
   }
 
   const raw = await request.text();

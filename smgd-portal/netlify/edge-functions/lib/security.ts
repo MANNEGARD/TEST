@@ -58,6 +58,46 @@ export async function verifyPassword(password: string, stored: string): Promise<
   return timingSafeEqual(derived, expected);
 }
 
+export const PASSWORD_ITERATIONS = 100_000; // ryms inom edge-funktionernas CPU-gräns
+
+/** Skapar en hash i samma format som verifyPassword läser. */
+export async function hashPassword(password: string): Promise<string> {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const key = await crypto.subtle.importKey("raw", enc.encode(password.normalize("NFC")), "PBKDF2", false, [
+    "deriveBits",
+  ]);
+  const hash = new Uint8Array(
+    await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt, iterations: PASSWORD_ITERATIONS }, key, 256),
+  );
+  const b64 = (u: Uint8Array) => btoa(String.fromCharCode(...u));
+  return `pbkdf2-sha256$${PASSWORD_ITERATIONS}$${b64(salt)}$${b64(hash)}`;
+}
+
+export function randomBase64(bytes: number): string {
+  return btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(bytes))));
+}
+
+export function base32Encode(buf: Uint8Array): string {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  let bits = 0;
+  let value = 0;
+  let out = "";
+  for (const b of buf) {
+    value = (value << 8) | b;
+    bits += 8;
+    while (bits >= 5) {
+      out += alphabet[(value >>> (bits - 5)) & 31];
+      bits -= 5;
+    }
+  }
+  if (bits > 0) out += alphabet[(value << (5 - bits)) & 31];
+  return out;
+}
+
+export function safeStringEqual(a: string, b: string): boolean {
+  return timingSafeEqual(enc.encode(a), enc.encode(b));
+}
+
 // ---------- TOTP (RFC 6238, SHA-1, 6 siffror, 30 s) ----------
 
 export function base32Decode(input: string): Uint8Array {

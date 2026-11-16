@@ -7,12 +7,12 @@ import {
   clearSessionCookie,
   isSameOrigin,
   json,
-  readAuthConfig,
   readSessionToken,
   SESSION_COOKIE,
   securityHeaders,
 } from "./lib/security.ts";
 import { SITES } from "./lib/sites.ts";
+import { loadAuthConfig } from "./lib/store.ts";
 
 function html(body: string, status = 200): Response {
   return new Response(body, { status, headers: securityHeaders({ "Content-Type": "text/html; charset=utf-8" }) });
@@ -29,7 +29,7 @@ async function checkSite(url: string): Promise<"up" | "down"> {
 
 export default async (request: Request, context: Context) => {
   const url = new URL(request.url);
-  const cfg = readAuthConfig();
+  const cfg = await loadAuthConfig();
   const session = cfg
     ? await readSessionToken(context.cookies.get(SESSION_COOKIE), cfg.sessionSecret, cfg.sessionVersion)
     : null;
