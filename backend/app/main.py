@@ -129,6 +129,10 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     except BootstrapError as exc:
         logger.error("Första kontot kunde inte skapas: %s API:t startas inte.", exc)
         raise
+    # Ny version sedan förra starten: en notis till telefonen (aldrig mer än en per version).
+    from app.services import release
+
+    release.on_startup()
     _scheduler = start_scheduler()
     try:
         yield

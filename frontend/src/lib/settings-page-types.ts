@@ -127,3 +127,23 @@ export interface DeleteHistoryInput {
 export interface DeleteHistoryResult {
   removed: Record<string, number>;
 }
+
+// ----------------------------------------------------------------------------- företagslogga (1.3.0)
+
+/**
+ * Företagsloggan i underlagets sidhuvud (GET/POST/DELETE /settings/export-logo). Bara PNG eller
+ * JPEG; servern kontrollerar filens innehåll, storlek och mått. `url` är adressen till bilden
+ * (bara för den inloggade ägaren) – demot svarar med en data-adress som aldrig sparas.
+ */
+export interface ExportLogo {
+  has_logo: boolean;
+  content_type: "image/png" | "image/jpeg" | null;
+  width: number | null;
+  height: number | null;
+  size_bytes: number | null;
+  uploaded_at: string | null;
+  url: string | null;
+}
+
+/** Tak för loggans filstorlek (samma som servern). */
+export const EXPORT_LOGO_MAX_BYTES = 1024 * 1024;

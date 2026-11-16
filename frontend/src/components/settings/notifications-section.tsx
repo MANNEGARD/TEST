@@ -6,6 +6,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input, Label } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { useHaStatus } from "@/lib/queries/integrations";
 import type { SettingsPayload } from "@/lib/settings-page-types";
 import { cn } from "@/lib/utils";
 import { useReportDirty } from "./dirty-context";
@@ -66,6 +67,10 @@ export function NotificationsSection({ data }: { data: SettingsPayload }) {
   const dailyOn = kinds.daily === true;
   const quietError = form.error("notifications.quiet_start") ?? form.error("notifications.quiet_end");
   const weeklyError = form.error("notifications.weekly_day") ?? form.error("notifications.weekly_time");
+  const releaseOn = kinds.release !== false;
+  // Notisen om en ny version går bara genom Home Assistant-integrationen (ingen kanal = ingen notis).
+  const ha = useHaStatus();
+  const noHaChannel = !!ha.data && !ha.data.channel;
 
   return (
     <section aria-labelledby="settings-notiser">
@@ -203,12 +208,38 @@ export function NotificationsSection({ data }: { data: SettingsPayload }) {
             </div>
           ) : null}
 
+          {form.has("notifications.kinds") ? (
+            <div className="flex items-start justify-between gap-4 px-5 py-4 sm:gap-8">
+              <div className="min-w-0 sm:max-w-md">
+                <Label htmlFor="ntf-release" className="block cursor-pointer">
+                  Notis när DriveLog har uppdaterats
+                </Label>
+                <p id="ntf-release-hint" className="mt-1 text-xs leading-relaxed text-fg-muted">
+                  En notis per ny version, med de viktigaste nyheterna.
+                  {noHaChannel ? (
+                    <span className="mt-1 block font-medium text-warn-ink" data-testid="ntf-release-no-ha">
+                      Kräver att telefonen är ansluten via Home Assistant-integrationen.
+                    </span>
+                  ) : null}
+                </p>
+              </div>
+              <Switch
+                id="ntf-release"
+                checked={releaseOn}
+                onCheckedChange={(v) => setKind("release", v)}
+                disabled={!enabled}
+                aria-describedby="ntf-release-hint"
+                className="mt-0.5"
+              />
+            </div>
+          ) : null}
+
           <BoolRow
             form={form}
             path="notifications.hide_locations_on_lock_screen"
             id="ntf-lock"
             label="Dölj platser på låsskärmen"
-            hint="Notisen visar bara dag och sträcka – bra om andra kan se din skärm. Avstängt visas platser du inte bekräftat ändå bara med namn eller gata utan husnummer, och hemmet som ”Hemmet”."
+            hint="Notiserna visar hela adressen för platser utan namn. Slå på för att dölja platserna på låsskärmen."
           />
         </div>
 

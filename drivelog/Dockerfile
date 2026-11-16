@@ -76,6 +76,9 @@ WORKDIR /app
 COPY backend/alembic.ini ./
 COPY backend/alembic ./alembic
 COPY backend/app ./app
+# Ändringsloggen: notisen om en ny version och "Om DriveLog" visar versionens nyheter ur den
+# (app/services/release.py). Saknas den visas versionen utan nyheter.
+COPY drivelog/CHANGELOG.md /app/CHANGELOG.md
 COPY backend/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 COPY --from=webb /ut /opt/drivelog/web
 COPY drivelog/rootfs/ /

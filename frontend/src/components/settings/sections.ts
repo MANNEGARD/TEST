@@ -5,6 +5,7 @@ import {
   Car,
   DatabaseBackup,
   HandCoins,
+  Info,
   KeyRound,
   Merge,
   ShieldCheck,
@@ -32,7 +33,8 @@ export type SectionKey =
   | "forkortningar"
   | "sekretess"
   | "sakerhet"
-  | "sakerhetskopia";
+  | "sakerhetskopia"
+  | "om";
 
 export interface SectionDef {
   key: SectionKey;
@@ -57,6 +59,7 @@ export const SECTIONS: SectionDef[] = [
   { key: "sekretess", label: "Sekretess", short: "Sekretess", icon: ShieldCheck, group: "data" },
   { key: "sakerhet", label: "Säkerhet", short: "Säkerhet", icon: KeyRound, group: "data" },
   { key: "sakerhetskopia", label: "Säkerhetskopia", short: "Säkerhetskopia", icon: DatabaseBackup, group: "data" },
+  { key: "om", label: "Om DriveLog", short: "Om DriveLog", icon: Info, group: "data" },
 ];
 
 export const SECTION_GROUP_LABELS: Record<SectionDef["group"], string> = {

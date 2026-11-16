@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { LogOut, Settings, User } from "lucide-react";
+import { Info, LogOut, Settings, User } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -10,11 +10,15 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { sectionHref } from "@/components/settings/sections";
+import { useAbout, versionLabel } from "@/lib/queries/about";
 import { useLogout, useMe } from "@/lib/queries/auth";
 
 export function UserMenu() {
   const { data } = useMe();
   const logout = useLogout();
+  const about = useAbout();
+  const version = about.data?.version;
   const user = data?.user;
   const initials = (user?.display_name || user?.email || "?")
     .split(/[\s@.]+/)
@@ -44,6 +48,16 @@ export function UserMenu() {
         <DropdownMenuItem onSelect={() => logout.mutate()}>
           <LogOut /> Logga ut
         </DropdownMenuItem>
+        {version ? (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem asChild className="text-xs text-fg-muted">
+              <Link href={sectionHref("om")} data-testid="user-menu-version">
+                <Info /> <span className="num">{versionLabel(version)}</span>
+              </Link>
+            </DropdownMenuItem>
+          </>
+        ) : null}
       </DropdownMenuContent>
     </DropdownMenu>
   );

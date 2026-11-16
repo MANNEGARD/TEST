@@ -11,6 +11,7 @@ import { useSettingsPage } from "@/lib/queries/settings-page";
 import type { SettingsPayload } from "@/lib/settings-page-types";
 import { cn } from "@/lib/utils";
 import { AbbreviationsSection } from "./abbreviations-section";
+import { AboutSection } from "./about-section";
 import { AiSection } from "./ai-section";
 import { AutomationSection } from "./automation-section";
 import { BackupSection } from "./backup-section";
@@ -40,6 +41,7 @@ const PANELS: Record<SectionKey, React.ComponentType<{ data: SettingsPayload }>>
   sekretess: PrivacySection,
   sakerhet: SecuritySection,
   sakerhetskopia: BackupSection,
+  om: AboutSection,
 };
 
 const DESKTOP = "(min-width: 1024px)";

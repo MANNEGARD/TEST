@@ -3,7 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Check, ExternalLink, HelpCircle, Info, KeyRound, LogIn, Minus, Play, RefreshCw, Unplug, X } from "lucide-react";
+import { Check, Download, ExternalLink, HelpCircle, Info, KeyRound, LogIn, Minus, Play, RefreshCw, Unplug, X } from "lucide-react";
 import { toast } from "sonner";
 import { Badge, type BadgeProps } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -18,6 +18,7 @@ import { errorMessage } from "@/lib/api";
 import { formatDate, plural } from "@/lib/format";
 import type { CapabilityState, VolvoEndpoint, VolvoLinkedVehicle, VolvoStatus } from "@/lib/integrations-types";
 import {
+  useDownloadVolvoDiagnostics,
   useRefreshVolvoVehicles,
   useSaveVolvoCredentials,
   useSelectVolvoVehicle,
@@ -28,6 +29,7 @@ import {
   useVolvoSimulate,
   useVolvoSync,
   useVolvoTestToken,
+  VOLVO_DIAGNOSTICS_DAYS,
 } from "@/lib/queries/integrations";
 import { useSaveSettings, useSettingsPage } from "@/lib/queries/settings-page";
 import { useVehicle } from "@/lib/vehicle";
@@ -515,6 +517,34 @@ function PollInterval() {
   );
 }
 
+// ----------------------------------------------------------------------------- felsökningsfil
+
+/** "Ladda ner felsökningsfil" (1.3.0, GET /volvo/diagnostics) – en fil ägaren kan skicka vidare. */
+function DiagnosticsDownload() {
+  const download = useDownloadVolvoDiagnostics();
+  return (
+    <Section
+      title="Felsökning"
+      description={`Bilens avläsningar och hämtningar de senaste ${VOLVO_DIAGNOSTICS_DAYS} dygnen, utan chassinummer, registreringsnummer, positioner och adresser. Skicka filen till den som hjälper dig felsöka.`}
+    >
+      <Button
+        size="sm"
+        variant="secondary"
+        loading={download.isPending}
+        data-testid="volvo-diagnostics"
+        onClick={() =>
+          download.mutate(VOLVO_DIAGNOSTICS_DAYS, {
+            onSuccess: () => toast.success("Felsökningsfilen är nedladdad."),
+            onError: notifyError,
+          })
+        }
+      >
+        <Download aria-hidden /> Ladda ner felsökningsfil
+      </Button>
+    </Section>
+  );
+}
+
 // ----------------------------------------------------------------------------- panel
 
 export function VolvoPanel({ status }: { status: VolvoStatus }) {
@@ -652,6 +682,8 @@ export function VolvoPanel({ status }: { status: VolvoStatus }) {
           </p>
         </Note>
       </Section>
+
+      {linked || status.demo.enabled ? <DiagnosticsDownload /> : null}
 
       <VolvoDemo status={status} />
 

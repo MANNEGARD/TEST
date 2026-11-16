@@ -285,13 +285,16 @@ def test_core_has_no_homeassistant_imports():
 def test_manifest_translations_and_hacs():
     manifest = json.loads((COMPONENT / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["domain"] == const.DOMAIN == "smgd_drivelog"
-    assert manifest["name"] == "SMGD DriveLog" and manifest["version"] == const.INTEGRATION_VERSION == "1.1.0"
+    # Ett versionsnummer överallt (1.3.0): integrationen följer drivelog/VERSION, som höjs vid utgivningen.
+    version = (REPO_ROOT / "drivelog" / "VERSION").read_text(encoding="utf-8").strip()
+    assert manifest["name"] == "SMGD DriveLog" and manifest["version"] == const.INTEGRATION_VERSION == version
     assert manifest["config_flow"] is True and manifest["integration_type"] == "service"
     assert manifest["iot_class"] in ("local_polling", "cloud_polling")
     for key in ("codeowners", "documentation", "issue_tracker"):
         assert manifest[key]
     hacs = json.loads((REPO_ROOT / "hacs.json").read_text(encoding="utf-8"))
-    assert hacs == {"name": "SMGD DriveLog", "homeassistant": "2024.11.0"}
+    # Utgåvor styr versionen i HACS; standardgrenen erbjuds inte som "uppdatering".
+    assert hacs == {"name": "SMGD DriveLog", "homeassistant": "2024.11.0", "hide_default_branch": True}
 
     strings = json.loads((COMPONENT / "strings.json").read_text(encoding="utf-8"))
 
@@ -308,3 +311,18 @@ def test_manifest_translations_and_hacs():
     assert sv["entity"]["sensor"]["review_count"]["name"] == "Resor att granska"
     assert sv["issues"]["no_phone"]["title"] == "DriveLog har frågor men ingen telefon är vald"
     assert "flush_queue" in (COMPONENT / "services.yaml").read_text(encoding="utf-8")
+
+
+def _png_size(path: Path) -> tuple[int, int]:
+    data = path.read_bytes()[:24]
+    assert data[:8] == b"\x89PNG\r\n\x1a\n" and data[12:16] == b"IHDR", path.name
+    return int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big")
+
+
+def test_brand_images_for_home_assistant_and_hacs():
+    """Loggan i HA 2026.3+ och HACS: custom_components/<domän>/brand/ med brands-arkivets mått."""
+    brand = COMPONENT / "brand"
+    assert _png_size(brand / "icon.png") == (256, 256)
+    assert _png_size(brand / "icon@2x.png") == (512, 512)
+    assert _png_size(brand / "logo.png") == (250, 100)
+    assert _png_size(brand / "logo@2x.png") == (500, 200)

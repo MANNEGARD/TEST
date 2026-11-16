@@ -218,6 +218,7 @@ class NotificationKind(StrEnum):
     COMPANY = "company"  # "Vilket företag var det?"
     ALERT = "alert"  # larm om kopplingarna (Volvo, kalender, bilen tyst)
     MONTHLY = "monthly"  # månadsskiftet: klart eller väntar
+    RELEASE = "release"  # DriveLog har startat med en ny version
 
 
 class ApprovalSource(StrEnum):

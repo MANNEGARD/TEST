@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.api.routes import (
+    about,
     auth,
     calendar,
     dashboard,
@@ -47,5 +48,6 @@ for module in (
     integrations,
     volvo,
     settings,
+    about,
 ):
     api_router.include_router(module.router)

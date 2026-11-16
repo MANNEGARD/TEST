@@ -2,9 +2,11 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useAbout, versionLabel } from "@/lib/queries/about";
 import { useOpenReviewCount } from "@/lib/queries/review";
 import { formatNumber } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { sectionHref } from "@/components/settings/sections";
 import { Logo } from "./logo";
 import { isActive, NAV_GROUP_LABELS, NAV_ITEMS, type NavItem } from "./nav-items";
 
@@ -65,6 +67,27 @@ export function NavList({ onNavigate }: { onNavigate?: () => void }) {
   );
 }
 
+/** Diskret "DriveLog 1.3.0" som leder till Inställningar → Om DriveLog. Visas inte förrän versionen är känd. */
+export function VersionLink({ className, onNavigate }: { className?: string; onNavigate?: () => void }) {
+  const about = useAbout();
+  const version = about.data?.version;
+  if (!version) return null;
+  return (
+    <Link
+      href={sectionHref("om")}
+      onClick={onNavigate}
+      data-testid="version-link"
+      className={cn(
+        "block w-fit rounded-sm text-[11px] text-fg-subtle underline-offset-2 transition-colors hover:text-fg-muted hover:underline focus-visible:outline-2 focus-visible:outline-ring num",
+        className,
+      )}
+      title="Vad är nytt i den här versionen"
+    >
+      {versionLabel(version)}
+    </Link>
+  );
+}
+
 export function Sidebar() {
   return (
     <aside className="hidden w-60 shrink-0 border-r border-border bg-surface lg:block">
@@ -81,6 +104,7 @@ export function Sidebar() {
         Självhostad körjournal
         <br />
         för tjänsteresor med egen bil.
+        <VersionLink className="mt-1.5" />
       </div>
       </div>
     </aside>

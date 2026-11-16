@@ -81,13 +81,24 @@ vanlig takt, så att "i dag", vetotiden och månadskortet stämmer med uppgifter
 - *Ärendet stämmer inte* på resan Hemmet → Exempel Åkeri AB den 3 november, vars ärende kom ur en
   (påhittad) kalenderbokning när resan godkändes av en regel – på resans sida, i månadskortet
   (*Ärende ur kalendern: 1 resa*) och i månadens genomgång.
+- *Ladda ner felsökningsfil* under *Integrationer → Volvo* ger en liten påhittad fil med demobilens
+  resor och avläsningar (samma form som serverns fil, utan chassinummer, registreringsnummer,
+  positioner och adresser).
+- *Företagslogga i underlaget* under *Inställningar → Milersättning och export*: en logga kan
+  laddas upp, visas, bytas och tas bort, men den sparas inte – den finns bara tills sidan laddas
+  om, och exempelfilen får ingen logga.
+- *Notis när DriveLog har uppdaterats* under *Inställningar → Notiser* går att slå av och på.
+- Längst ned i sidomenyn står *DriveLog demo*; den leder till *Inställningar → Om DriveLog*, som i
+  demot inte har något versionsnummer eller ändringslogg.
 
 Utöver inspelningen lägger demot till det som 1.3.0 visar: tre importerade resor i början av
 oktober (Exempel Snickeri AB och Exempel Lager AB) med adresser men utan positioner – kartan
 visar *Positionen slås upp*, och Exempel Lager AB saknar adress i underlaget – samt ett uppehåll
 i hämtningen från Volvo på resan till Ekvägen 14 den 14 november. Omgången AI lägger till de nya
 inställningarna (underlagsnivå, lunchregeln, hela bokningen, hem ↔ kontor) och ärendet ur
-kalendern med en påhittad bokning på resan den 3 november. De importerade resorna har de
+kalendern med en påhittad bokning på resan den 3 november. Omgången drift ger de tolv senaste
+resorna från bilen en uppskattad bensinförbrukning (≈), som servern räknar fram ur bilens
+avläsningar, och slår på valen för uppdateringsnotisen och loggan. De importerade resorna har de
 tre sista av de 40 reserverade id:na, så att deras sidor är förbyggda.
 
 Följderna syns som i appen: listor, granskningens räknare, översikten (sträckor, ersättning, att

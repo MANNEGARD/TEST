@@ -428,6 +428,21 @@ def alert(title: str, message: str, uri: str = "/settings") -> dict[str, Any]:
     }
 
 
+RELEASE_URI = "/settings?sektion=om"
+
+
+def release(old: str, new: str, items: list[str]) -> dict[str, Any]:
+    """"DriveLog är uppdaterad till 1.3.0" med de första nyheterna ur ändringsloggen."""
+    news = [i.strip().rstrip(".").strip() for i in items if i and i.strip()][:3]
+    message = f"Från {old}." + (f" Nytt: {'; '.join(news)}." if news else "")
+    return {
+        "title": f"DriveLog är uppdaterad till {new}",
+        "message": message,
+        "actions": [{"key": A.OPEN, "title": "Öppna", "uri": RELEASE_URI}],
+        "context": {"detail_message": message, "version": new, "previous_version": old},
+    }
+
+
 def _count(n: int, one: str, many: str) -> str:
     return f"{n} {one if n == 1 else many}"
 

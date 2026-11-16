@@ -180,7 +180,7 @@ const ALL_PAGES = [
   ["/settings/", "installningar"], ["/integrations/", "integrationer"], ["/energy/", "energi"], ["/import/", "import"],
   ["/m/month/2026-10/", "manad-oktober"], ["/m/month/2026-11/", "manad-november"],
 ];
-const SETTINGS = ["fordon", "ersattning", "sammanslagning", "automatik", "lunch", "forslag", "notiser", "kalender", "tjanstestalle", "forkortningar", "sekretess", "sakerhet", "sakerhetskopia"];
+const SETTINGS = ["fordon", "ersattning", "sammanslagning", "automatik", "lunch", "forslag", "notiser", "kalender", "tjanstestalle", "forkortningar", "sekretess", "sakerhet", "sakerhetskopia", "om"];
 const trips = Object.values(seed.trips).map((d) => d.trip);
 const questions = Object.values(seed.notifications);
 // Demots importerade resor (1.3.0) har de sista id:na i den förbyggda uppsättningen (state.ts).
@@ -823,6 +823,97 @@ try {
     if (!d.purpose_history.length || d.purpose_history.find((p) => p.is_current)?.from_calendar) fail("ärendet står kvar som ur kalendern");
   });
 
+  await section("version", async () => {
+    step("Versionen: DriveLog demo längst ned i sidomenyn leder till Inställningar → Om DriveLog");
+    await visit(page, "/journal/");
+    const link = page.getByTestId("version-link").locator("visible=true");
+    await link.first().waitFor({ timeout: 8000 });
+    if ((await link.first().innerText()).trim() !== "DriveLog demo") fail(`sidomenyn visar "${await link.first().innerText()}"`);
+    await link.first().click();
+    await page.waitForURL(/\/settings\/?\?sektion=om/, { timeout: 8000 });
+    await settled(page, "Om DriveLog");
+    await page.getByTestId("about-card").waitFor({ timeout: 8000 });
+    if ((await page.getByTestId("about-version").innerText()).trim() !== "DriveLog demo") fail("Om DriveLog visar inte demots version");
+    if (!(await page.getByText("Hela ändringsloggen finns på tilläggets sida i Home Assistant.").count())) fail("Om DriveLog saknar raden om ändringsloggen");
+    await page.screenshot({ path: path.join(SHOTS, "om-drivelog.png"), fullPage: true });
+  });
+
+  await section("felsökningsfil", async () => {
+    step("Integrationer → Volvo: Ladda ner felsökningsfil ger en fil utan VIN, regnr, positioner och adresser");
+    await visit(page, "/integrations/");
+    await page.getByTestId("configure-volvo").click();
+    const btn = page.getByTestId("volvo-diagnostics");
+    await btn.waitFor({ timeout: 8000 });
+    if (!(await page.getByText(/utan chassinummer, registreringsnummer, positioner och adresser/).count())) fail("texten om vad filen saknar visas inte");
+    const [download] = await Promise.all([page.waitForEvent("download", { timeout: 10000 }), btn.click()]);
+    if (!/^drivelog-felsokning-\d{4}-\d{2}-\d{2}\.json$/.test(download.suggestedFilename())) fail(`filnamnet blev ${download.suggestedFilename()}`);
+    const text = readFileSync(await download.path(), "utf8");
+    const file = JSON.parse(text);
+    if (!Array.isArray(file.observations) || !file.observations.length || !Array.isArray(file.trips)) fail("felsökningsfilen saknar avläsningar eller resor");
+    if (/latitude|longitude|vin|registration|address/i.test(text)) fail("felsökningsfilen innehåller positioner, VIN, regnr eller adresser");
+    const v = seed.vehicles?.[0] ?? {};
+    for (const secret of [v.registration_number, v.vin].filter(Boolean)) if (text.includes(secret)) fail("felsökningsfilen innehåller fordonets uppgifter");
+    await expectText(page, "Felsökningsfilen är nedladdad.");
+    await page.screenshot({ path: path.join(SHOTS, "volvo-felsokning.png"), fullPage: true });
+    await page.keyboard.press("Escape");
+  });
+
+  await section("förbrukning", async () => {
+    step("Resans sida: uppskattad bensinförbrukning med ≈ och förklaringen");
+    const est = (await api(page, "GET", "/trips?page_size=500")).items.find((t) => t.fuel_quality === "estimated" && t.fuel_liters != null);
+    if (!est) fail("ingen demoresa har uppskattad förbrukning");
+    else {
+      await visit(page, `/journal/${est.id}/`, "resa-forbrukning");
+      const value = page.locator(".value-estimated", { hasText: / l$/ }).locator("visible=true").first();
+      await value.waitFor({ timeout: 8000 });
+      if (!(await value.innerText()).startsWith("≈")) fail(`förbrukningen visas utan ≈: ${await value.innerText()}`);
+      await value.focus();
+      await expectText(page, "Uppskattad ur bilens egna avläsningar – inte uppmätt per resa.");
+    }
+  });
+
+  await section("notis om ny version", async () => {
+    step("Inställningar → Notiser: Notis när DriveLog har uppdaterats, av och på igen; hela adressen på låsskärmen");
+    await visit(page, "/settings/?sektion=notiser", "notiser-ny-version");
+    const sw = page.locator("#ntf-release");
+    await sw.waitFor({ timeout: 8000 });
+    if ((await sw.getAttribute("aria-checked")) !== "true") fail("notisen om ny version är inte påslagen");
+    if (!(await page.getByText("En notis per ny version, med de viktigaste nyheterna.").count())) fail("förklaringen till notisen om ny version saknas");
+    if (!(await page.getByText("Notiserna visar hela adressen för platser utan namn.", { exact: false }).count())) fail("låsskärmens förklaring nämner inte hela adressen");
+    await sw.click();
+    const panel = page.getByTestId("settings-panel-notiser");
+    await panel.getByRole("button", { name: "Spara" }).click();
+    await expectText(page, "Inställningarna för notiser är sparade.");
+    if ((await api(page, "GET", "/settings")).settings.notifications.kinds.release !== false) fail("valet sparades inte");
+    await sw.click();
+    await panel.getByRole("button", { name: "Spara" }).click();
+    await page.waitForTimeout(400);
+    if ((await api(page, "GET", "/settings")).settings.notifications.kinds.release !== true) fail("valet gick inte att slå på igen");
+  });
+
+  await section("företagslogga", async () => {
+    step("Inställningar → Milersättning och export: ladda upp loggan, fel filtyp avvisas, byt och ta bort");
+    await visit(page, "/settings/?sektion=ersattning");
+    const card = page.getByTestId("export-logo");
+    await card.waitFor({ timeout: 8000 });
+    if (!(await page.getByText("Visa loggan i underlaget").count())) fail("valet Visa loggan i underlaget saknas");
+    const input = page.getByTestId("export-logo-input");
+    await input.setInputFiles({ name: "logga.svg", mimeType: "image/svg+xml", buffer: Buffer.from("<svg xmlns='http://www.w3.org/2000/svg'/>") });
+    await card.getByTestId("export-logo-error").waitFor({ timeout: 8000 });
+    // Rätt namn och typ men fel innehåll: servern (demot) kontrollerar filens innehåll.
+    await input.setInputFiles({ name: "logga.png", mimeType: "image/png", buffer: Buffer.from("<html>inte en bild</html>") });
+    await expectText(page, "Filen är inte en PNG- eller JPEG-bild.");
+    await input.setInputFiles({ name: "logga.png", mimeType: "image/png", buffer: PNG });
+    await card.getByTestId("export-logo-preview").waitFor({ timeout: 8000 });
+    await expectText(page, "Loggan är uppladdad.");
+    if (await card.getByTestId("export-logo-error").count()) fail("felet står kvar efter en lyckad uppladdning");
+    await page.screenshot({ path: path.join(SHOTS, "foretagslogga.png"), fullPage: true });
+    await card.getByRole("button", { name: "Ta bort företagsloggan" }).click();
+    await card.getByRole("button", { name: "Ja, ta bort loggan" }).click();
+    await card.getByTestId("export-logo-upload").waitFor({ timeout: 8000 });
+    if ((await api(page, "GET", "/settings/export-logo")).has_logo) fail("loggan finns kvar efter Ta bort");
+  });
+
   await section("återställ", async () => {
     step("Återställ demot: tillbaka till startdatat");
     await visit(page, "/");
@@ -851,6 +942,14 @@ try {
     await visit(p, "/settings/?sektion=forslag", "mork-forslag");
     await visit(p, "/settings/?sektion=lunch", "mork-lunch");
     await visit(p, `/journal/${CALENDAR_TRIP}/`, "mork-resa-ur-kalendern");
+    await visit(p, "/settings/?sektion=om", "mork-om-drivelog");
+    await visit(p, "/settings/?sektion=notiser", "mork-notiser");
+    await visit(p, "/settings/?sektion=ersattning", "mork-ersattning-logga");
+    await p.getByTestId("export-logo-input").setInputFiles({ name: "logga.png", mimeType: "image/png", buffer: PNG });
+    await p.getByTestId("export-logo-preview").waitFor({ timeout: 8000 });
+    await p.screenshot({ path: path.join(SHOTS, "mork-foretagslogga.png"), fullPage: true });
+    const estDark = (await api(p, "GET", "/trips?page_size=500")).items.find((t) => t.fuel_quality === "estimated");
+    if (estDark) await visit(p, `/journal/${estDark.id}/`, "mork-resa-forbrukning");
     await visit(p, "/review/");
     await p.getByTestId("review-ai-review").click();
     await p.getByTestId("ai-review-intro").waitFor({ timeout: 8000 });
@@ -888,6 +987,9 @@ try {
       ["/settings/?sektion=lunch", "mobil-lunch"],
       ["/settings/?sektion=kalender", "mobil-kalender"],
       [`/journal/${CALENDAR_TRIP}/`, "mobil-resa-ur-kalendern"],
+      ["/settings/?sektion=om", "mobil-om-drivelog"],
+      ["/settings/?sektion=notiser", "mobil-notiser"],
+      ["/settings/?sektion=ersattning", "mobil-ersattning-logga"],
     ]) {
       await visit(p, route, name);
       const wide = await p.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
@@ -898,6 +1000,16 @@ try {
       await visit(p, `/journal/${gapTrip.id}/`, "mobil-resa-uppehall");
       if (!(await p.getByTestId("collection-gap-note").locator("visible=true").count())) fail("mobil: uppehållet visas inte på resan");
     }
+    // Versionen i användarmenyn (sidomenyn visas inte på mobilen).
+    await visit(p, "/");
+    await p.getByRole("button", { name: "Användarmeny" }).click();
+    const mv = p.getByTestId("user-menu-version");
+    await mv.waitFor({ timeout: 8000 });
+    if (!(await mv.innerText()).includes("DriveLog demo")) fail("mobil: användarmenyn visar inte versionen");
+    await p.screenshot({ path: path.join(SHOTS, "mobil-anvandarmeny-version.png") });
+    await mv.click();
+    await p.waitForURL(/sektion=om/, { timeout: 8000 });
+    await settled(p, "mobil: Om DriveLog");
     const q = questions.find((n) => n.kind === "classify");
     await visit(p, `/m/q/${q.public_id}/`, "mobil-snabbfraga");
     await p.getByRole("button", { name: "Privat", exact: true }).first().click();

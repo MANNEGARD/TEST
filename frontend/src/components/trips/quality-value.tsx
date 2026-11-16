@@ -69,7 +69,7 @@ export function QualityValue({
           tabIndex={0}
           className={cn("value-estimated cursor-help whitespace-nowrap outline-none focus-visible:outline-2 focus-visible:outline-ring", mono && "num", className)}
         >
-          <span aria-hidden>≈</span>
+          <span aria-hidden>≈{"\u00a0"}</span>
           <span className="sr-only">ungefär </span>
           {value}
         </span>

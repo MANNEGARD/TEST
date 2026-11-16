@@ -24,6 +24,8 @@ on:
       - "deploy/server.sh"
       - ".github/workflows/addon.yml"
       - ".github/scripts/**"
+      - "custom_components/**"
+      - "hacs.json"
   workflow_dispatch:
 
 concurrency:
@@ -47,6 +49,8 @@ jobs:
         run: python -m pip install pytest pyyaml cryptography
       - name: Tester (startprogram, nycklar, Caddyfile, DynDNS, YAML)
         run: python -m pytest drivelog/tests -q -p no:cacheprovider
+      - name: Utgåvans text för HACS går att ta fram (utan nätverk)
+        run: python3 .github/scripts/utgava.py --anteckningar
 
   amd64:
     name: amd64 – bygg och provstarta som Supervisor
@@ -838,3 +842,29 @@ jobs:
           done
           echo "::error::Kunde inte checka in den höjda versionen. Avbilden $VERSION är publicerad; kör arbetsflödet igen eller höj version i drivelog/config.yaml för hand."
           exit 1
+
+  utgava:
+    name: GitHub-utgåva för HACS
+    # HACS visar senaste utgåvans tagg som integrationens version ("1.2.3 → 1.3.0") och erbjuder
+    # en uppdatering bara när en ny utgåva finns. Körs först när versionen erbjuds i Home
+    # Assistant. En misslyckad utgåva stoppar aldrig avbilden, erbjudandet eller uppdateringen
+    # på servern, och en befintlig tagg eller utgåva skrivs aldrig över (.github/scripts/utgava.py).
+    needs: erbjud
+    if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    continue-on-error: true
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+
+      - name: Utgåvans text ur CHANGELOG.md
+        run: python3 .github/scripts/utgava.py --anteckningar > "$RUNNER_TEMP/notes.md"
+
+      - name: Skapa utgåvan om den inte redan finns
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/utgava.py --skapa "$RUNNER_TEMP/notes.md"

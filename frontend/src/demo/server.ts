@@ -59,6 +59,7 @@ function boot(): Promise<void> {
     state.odometer ??= rec(`/vehicles/${state.vehicleId}/odometer`);
     if (!state.v130) applyV130(state);
     if (!state.v130ai) applyV130Ai(state);
+    if (!state.v130drift) applyV130Drift(state);
     // Körtiden saknas på de rekonstruerade resorna i inspelningen; räkna den ur start- och sluttid.
     // Med en uträknad starttid lämnas den tom som i den riktiga servern, så resans sida visar "≈".
     for (const d of Object.values(state.trips)) {
@@ -888,6 +889,37 @@ function applyV130Ai(s: DemoState): void {
     }
   }
   s.v130ai = true;
+}
+
+/**
+ * Det som omgång drift i 1.3.0 tillför: uppskattad bensinförbrukning (≈) på några resor från bilen,
+ * som servern räknar fram ur bilens trippmätare och snittförbrukning, valet "Notis när DriveLog har
+ * uppdaterats" och "Visa loggan i underlaget". Körs en gång per tillstånd.
+ */
+function applyV130Drift(s: DemoState): void {
+  const set = s.settings.settings;
+  const def = s.settings.defaults;
+  set.notifications = { ...set.notifications, kinds: { release: true, ...(set.notifications?.kinds ?? {}) } };
+  def.notifications = { ...def.notifications, kinds: { ...(def.notifications?.kinds ?? {}), release: true } };
+  set.export = { show_logo: true, ...set.export };
+  def.export = { ...def.export, show_logo: true };
+
+  // Ungefär 0,65 l/10 km – bara på resor från bilen som saknar värde (som consumption.py).
+  const fromCar = Object.values(s.trips)
+    .filter((d) => d.trip.source === "volvo_api" && d.trip.fuel_quality === "unknown" && Number(d.trip.distance_km) >= 3)
+    .sort((a, b) => (a.trip.sort_time < b.trip.sort_time ? 1 : -1))
+    .slice(0, 12);
+  const litres = (km: unknown) => Math.round(Number(km) * 0.065 * 100) / 100;
+  for (const d of fromCar) {
+    d.trip.fuel_liters = litres(d.trip.distance_km);
+    d.trip.fuel_quality = "estimated";
+    for (const r of [...(d.raw_trips ?? []), ...(d.segments ?? [])]) {
+      if (r.fuel_quality !== "unknown" || r.distance_km == null) continue;
+      r.fuel_liters = litres(r.distance_km);
+      r.fuel_quality = "estimated";
+    }
+  }
+  s.v130drift = true;
 }
 
 /** Ärendet kom ur kalendern och står kvar som det sattes (ägaren har inte rättat det). */
@@ -2030,6 +2062,113 @@ function destinations(base: Json): Json {
   return out;
 }
 
+// ----------------------------------------------------------------------------- drift (1.3.0)
+
+/** Felsökningsfilen: demobilens resor de senaste dygnen med påhittade avläsningar runt varje resa. */
+function diagnosticsFile(days: number): Json {
+  const since = Date.now() - days * 86400_000;
+  const rows = allTrips()
+    .filter((t) => (t.source === "volvo_api" || t.source === "demo") && t.ended_at && Date.parse(t.ended_at) >= since)
+    .sort((a, b) => (a.sort_time < b.sort_time ? -1 : 1))
+    .slice(-20);
+  const observations: Json[] = [];
+  const trips: Json[] = [];
+  let fuel = 42;
+  rows.forEach((t, i) => {
+    const ids: string[] = [];
+    for (const [at, odo] of [
+      [t.started_at ?? t.ended_at, t.odometer_start],
+      [t.ended_at, t.odometer_end],
+    ]) {
+      const id = `obs-${observations.length + 1}`;
+      ids.push(id);
+      observations.push({
+        id,
+        fetched_at: at,
+        last_seen_at: at,
+        seen_count: 1,
+        odometer_km: odo ?? null,
+        odometer_reported_at: at,
+        fuel_liters: Math.round(fuel * 10) / 10,
+        fuel_reported_at: at,
+        battery_percent: null,
+        battery_reported_at: null,
+        electric_range_km: null,
+        fuel_range_km: Math.round(fuel * 14),
+        charging_status: null,
+        engine_running: false,
+        engine_reported_at: at,
+        avg_fuel_consumption: 6.5,
+        avg_energy_consumption: null,
+        avg_speed: 54,
+        avg_speed_auto: 51,
+        trip_meter_auto_km: Math.round(Number(t.distance_km) * 10) / 10,
+        trip_meter_manual_km: null,
+        statistics_reported_at: at,
+        errors_keys: [],
+      });
+      fuel = Math.max(8, fuel - Number(t.distance_km) * 0.065);
+    }
+    trips.push({
+      id: `trip-${i + 1}`,
+      started_at: t.started_at,
+      ended_at: t.ended_at,
+      distance_km: t.distance_km,
+      odometer_start: t.odometer_start,
+      odometer_end: t.odometer_end,
+      fuel_liters: t.fuel_liters ?? null,
+      fuel_quality: t.fuel_quality ?? "unknown",
+      energy_kwh: t.energy_kwh ?? null,
+      energy_quality: t.energy_quality ?? "unknown",
+      quality_flags: t.quality_flags ?? [],
+      observations: ids,
+    });
+  });
+  const v = S().vehicles.find((x) => x.id === S().vehicleId) ?? {};
+  return {
+    generated_at: nowIso(),
+    app_version: "demo",
+    days,
+    vehicle: { model: v.model ?? null, fuel_type: v.fuel_type ?? null },
+    observations,
+    sync_runs: rows.slice(-5).map((t) => ({ started_at: t.ended_at, finished_at: t.ended_at, status: "ok", error_code: null })),
+    trips,
+  };
+}
+
+let demoLogo: Json | null = null;
+
+function logoOut(): Json {
+  return demoLogo ? clone(demoLogo) : { has_logo: false, content_type: null, width: null, height: null, size_bytes: null, uploaded_at: null, url: null };
+}
+
+/** Som servern: bara PNG eller JPEG, kontrollerat på filens innehåll, högst 1 MB. */
+async function uploadLogo(raw: BodyInit | null | undefined): Promise<Json> {
+  const file = raw instanceof FormData ? raw.get("file") : null;
+  if (!(file instanceof Blob)) throw new HttpError(400, "Välj en bild att ladda upp.", "no_file");
+  if (file.size > 1024 * 1024) throw new HttpError(413, "Bilden är för stor. Välj en bild på högst 1 MB.", "logo_too_large");
+  const head = new Uint8Array(await file.slice(0, 8).arrayBuffer());
+  const png = head[0] === 0x89 && head[1] === 0x50 && head[2] === 0x4e && head[3] === 0x47;
+  const jpeg = head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff;
+  if (!png && !jpeg) throw new HttpError(400, "Filen är inte en PNG- eller JPEG-bild.", "logo_invalid");
+  const type = png ? "image/png" : "image/jpeg";
+  let width: number | null = null;
+  let height: number | null = null;
+  try {
+    const bmp = await createImageBitmap(file);
+    width = bmp.width;
+    height = bmp.height;
+    bmp.close();
+  } catch {
+    throw new HttpError(400, "Bilden gick inte att läsa. Spara om den som PNG eller JPEG och försök igen.", "logo_invalid");
+  }
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  demoLogo = { has_logo: true, content_type: type, width, height, size_bytes: file.size, uploaded_at: nowIso(), url: `data:${type};base64,${btoa(bin)}` };
+  return clone(demoLogo);
+}
+
 // ----------------------------------------------------------------------------- router
 
 interface Ctx {
@@ -2038,8 +2177,10 @@ interface Ctx {
   query: URLSearchParams;
   body: Json;
   m: RegExpExecArray;
+  /** Rå body när den inte är JSON (multipart-uppladdning). */
+  raw?: BodyInit | null;
 }
-type Handler = (c: Ctx) => unknown;
+type Handler = (c: Ctx) => unknown | Promise<unknown>;
 const routes: [string, RegExp, Handler][] = [];
 const on = (method: string, pattern: string, handler: Handler) =>
   routes.push([method, new RegExp(`^${pattern.replace(/:id/g, "([^/]+)")}$`), handler]);
@@ -2323,6 +2464,33 @@ on("POST", "/integrations/home-assistant/test-notification", () => {
   return { public_id: pid, channel: s.ha.channel ?? "notify", delivered: true, queued: false, demo: false, message: "Testnotisen är skickad till telefonen." };
 });
 
+// Om DriveLog (1.3.0): demot har ingen egen version – sidomenyn visar "DriveLog demo".
+on("GET", "/about", () => ({ version: "demo", whats_new: null }));
+
+// Felsökningsfilen (1.3.0): en liten påhittad fil med samma form som serverns, utan VIN,
+// registreringsnummer, positioner och adresser.
+const diagnostics = ({ query }: Ctx) => {
+  const days = Math.min(31, Math.max(1, Number(query.get("days")) || 14));
+  return new Response(JSON.stringify(diagnosticsFile(days), null, 2), {
+    status: 200,
+    headers: {
+      "content-type": "application/json",
+      "content-disposition": `attachment; filename="drivelog-felsokning-${localDay(nowIso())}.json"`,
+    },
+  });
+};
+on("GET", "/volvo/diagnostics", diagnostics);
+on("GET", "/integrations/volvo/diagnostics", diagnostics);
+
+// Företagsloggan i underlaget (1.3.0): demot visar funktionen men sparar ingenting – loggan
+// finns bara i minnet tills sidan laddas om.
+on("GET", "/settings/export-logo", () => logoOut());
+on("POST", "/settings/export-logo", ({ raw }) => uploadLogo(raw));
+on("DELETE", "/settings/export-logo", () => {
+  demoLogo = null;
+  return ok204;
+});
+
 // Export och månadsskiftet
 on("GET", "/exports", () => clone(S().exports));
 on("POST", "/exports", ({ body }) => createExport(body));
@@ -2364,14 +2532,16 @@ on("POST", "/imports/:id/undo", ({ m }) => {
 
 // ----------------------------------------------------------------------------- ingång
 
-async function dispatch(method: string, url: URL, body: Json): Promise<Response> {
+async function dispatch(method: string, url: URL, body: Json, raw?: BodyInit | null): Promise<Response> {
   const path = url.pathname.slice(API.length).replace(/\/$/, "") || "/";
   for (const [m, re, handler] of routes) {
     if (m !== method) continue;
     const match = re.exec(path);
     if (!match) continue;
-    const out = handler({ method, path, query: url.searchParams, body, m: match });
+    const out = await handler({ method, path, query: url.searchParams, body, m: match, raw });
     if (out === ok204) return json(undefined, 204);
+    // Filer (felsökningsfilen) lämnas som de är.
+    if (out instanceof Response) return out;
     return json(out ?? null, out === null ? 200 : method === "POST" && /^\/(exports|locations|trips\/manual)$/.test(path) ? 201 : 200);
   }
   if (method === "GET") {
@@ -2399,7 +2569,7 @@ export async function handleFetch(input: RequestInfo | URL, init?: RequestInit):
   const method = (init?.method ?? "GET").toUpperCase();
   await new Promise((r) => setTimeout(r, LATENCY_MS));
   try {
-    return await dispatch(method, url, readBody(init));
+    return await dispatch(method, url, readBody(init), init?.body);
   } catch (err) {
     if (err instanceof HttpError) return json({ detail: err.detail, code: err.code, data: err.data }, err.status);
     console.warn("Demots server:", err);

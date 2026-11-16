@@ -79,7 +79,8 @@ import { CollectionGapNote } from "./collection-gap-note";
 import { DeleteTripDialog } from "./delete-trip-dialog";
 
 function energyExplanation(kind: "fuel" | "el", quality: string): string | undefined {
-  if (quality === "estimated") return kind === "fuel" ? "Uppskattad bensinförbrukning – inte uppmätt av bilen." : "Uppskattad elförbrukning – inte uppmätt av bilen.";
+  // 1.3.0: förbrukningen räknas fram ur bilens trippmätare, snittförbrukning och tank-/batterinivå (volvo/consumption.py).
+  if (quality === "estimated") return "Uppskattad ur bilens egna avläsningar – inte uppmätt per resa.";
   if (quality === "unknown") return kind === "fuel" ? "Bensinförbrukning saknas för resan." : "Elförbrukning saknas för resan.";
   return undefined;
 }

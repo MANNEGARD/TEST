@@ -21,6 +21,7 @@ from app.services.ha import connection, messages, notifier
 
 ALERT_VALID = timedelta(days=7)
 MONTHLY_VALID = timedelta(days=7)  # samma som länkens giltighet (links.LINK_VALID)
+RELEASE_VALID = timedelta(days=7)
 
 
 def _channel_ok(db: Session, user_id: uuid.UUID, vehicle_id: uuid.UUID | None = None) -> bool:
@@ -218,3 +219,31 @@ def resolve_alert(db: Session, *, user_id: uuid.UUID, code: str) -> int:
         count += 1
     db.flush()
     return count
+
+
+def release_key(version: str) -> str:
+    return f"release:{version}"[:160]
+
+
+def queue_release(
+    db: Session, user_id: uuid.UUID, old: str, new: str, items: list[str], now: datetime
+) -> NotificationRequest | None:
+    """"DriveLog är uppdaterad till 1.3.0 (från 1.2.3)": en notis per version och användare.
+
+    Dedupe-nyckeln ``release:{version}`` gör att samma version aldrig ger två notiser, även om
+    uppgraderingen görs om. Kräver att notiserna och ``kinds.release`` är på och att en kanal
+    finns; tysta timmar, tak och dubbletter sköts av samma väg som larmen.
+    """
+    cfg = settings_svc.get_section(db, user_id, "notifications")
+    if not (cfg.get("kinds") or {}).get("release", True):
+        return None
+    if not _channel_ok(db, user_id):
+        return None
+    key = release_key(new)
+    if notifier._exists(db, user_id, key):
+        return None
+    built = messages.release(old, new, items)
+    return _create(
+        db, user_id=user_id, kind=NotificationKind.RELEASE, built=built, now=now, valid=RELEASE_VALID,
+        dedupe_key=key,
+    )

@@ -146,6 +146,19 @@ export function useVolvoSimulate() {
   );
 }
 
+/** Hur många dygn felsökningsfilen täcker (GET /volvo/diagnostics tar 1–31). */
+export const VOLVO_DIAGNOSTICS_DAYS = 14;
+
+/**
+ * Felsökningsfilen (1.3.0): bilens avläsningar, hämtningarnas utfall och de resor som byggdes av
+ * dem – utan chassinummer, registreringsnummer, positioner och adresser. Filnamnet kommer från servern.
+ */
+export function useDownloadVolvoDiagnostics() {
+  return useMutation({
+    mutationFn: (days: number = VOLVO_DIAGNOSTICS_DAYS) => api.download(`/volvo/diagnostics?days=${days}`, { timeoutMs: 60_000 }),
+  });
+}
+
 // ----------------------------------------------------------------------------- Microsoft Outlook
 
 export function useMicrosoftStatus() {

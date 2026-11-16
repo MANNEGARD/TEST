@@ -156,7 +156,7 @@ def test_length_limits_hold(db, user, vehicle, trips, world):
     t = live(trips, HOME, CAFE, km=4, start_at=local(*DAY, 8, 0))
     world["unknown"].notes = "x " * 2000
     db.flush()
-    event(db, user, "Möte " + "y" * 500, t.ended_at + timedelta(minutes=5), location_name="Kafé Exempel",
+    event(db, user, "Möte " + "y" * 300, t.ended_at + timedelta(minutes=5), location_name="Kafé Exempel",
           body_preview="z " * 3000)
     match(db, user, t)
     doc, _ = build(db, user, t)

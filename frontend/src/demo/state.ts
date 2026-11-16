@@ -70,6 +70,8 @@ export interface DemoState {
   v130?: boolean;
   /** 1.3.0, omgång AI: underlagsnivå, lunchregeln, hela bokningen, hem ↔ kontor och ett ärende ur kalendern. */
   v130ai?: boolean;
+  /** 1.3.0, omgång drift: uppskattad förbrukning på resor från bilen och notisvalet för nya versioner. */
+  v130drift?: boolean;
 }
 
 type Runtime = "seedNow" | "homeMarked" | "imports" | "linksRevokedAt" | "nextTrip" | "nextQuestion";

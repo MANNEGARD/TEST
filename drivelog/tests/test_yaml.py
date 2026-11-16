@@ -168,7 +168,7 @@ def test_arbetsflodet_ar_giltigt():
     assert set(flode[True]) >= {"push", "workflow_dispatch"}
     assert flode["permissions"] == {"contents": "read"}
     jobb = flode["jobs"]
-    assert set(jobb) == {"tester", "amd64", "aarch64", "publicera", "erbjud"}
+    assert set(jobb) == {"tester", "amd64", "aarch64", "publicera", "erbjud", "utgava"}
     # Bara publiceringsjobbet får skriva paket, och bara jobbet som höjer versionen i
     # drivelog/config.yaml får skriva i repot. Båda körs enbart på standardgrenen.
     for namn, j in jobb.items():
@@ -179,6 +179,12 @@ def test_arbetsflodet_ar_giltigt():
             assert j["permissions"] == {"contents": "write"}
             assert "default_branch" in j["if"] and "github.event_name == 'push'" in j["if"]
             assert j["needs"] == "publicera"
+        elif namn == "utgava":
+            # GitHub-utgåvan för HACS: bara efter att versionen erbjudits, bara på standardgrenen,
+            # och ett fel här stoppar aldrig publiceringen eller erbjudandet.
+            assert j["permissions"] == {"contents": "write"}
+            assert "default_branch" in j["if"] and "github.event_name == 'push'" in j["if"]
+            assert j["needs"] == "erbjud" and j["continue-on-error"] is True
         else:
             assert j.get("permissions", {}) in ({}, {"contents": "read"})
     for j in jobb.values():

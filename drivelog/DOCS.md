@@ -85,6 +85,13 @@ Har du exakt en telefon med Companion-appen väljs den av sig själv. Med flera 
 du en i DriveLog; tills dess visar Home Assistant reparationsärendet *DriveLog har frågor men
 ingen telefon är vald*, och frågorna väntar i DriveLog.
 
+Från 1.3.0 visar notiserna hela adressen för platser utan namn och bostaden med sin adress
+(*Dölj platser på låsskärmen* under *Inställningar → Notiser* döljer dem), och efter en
+uppdatering kommer notisen *DriveLog är uppdaterad till …* med de viktigaste nyheterna – en gång
+per version. HACS visar integrationens version som till exempel *1.3.0* (efter första utgåvan kan
+du behöva trycka *Ladda om* i HACS) och integrationen får DriveLogs logga från Home Assistant
+2026.3.
+
 ## Självgående körjournal
 
 Från 1.1.0 sköter körjournalen sig själv utan Excel-uppladdning när Volvo är anslutet:
@@ -163,7 +170,8 @@ då ur en säkerhetskopia.
 
 **Uppdatera** visas först när en ny version är färdigbyggd och går att hämta – tryck direkt.
 Databasen uppgraderas automatiskt vid start, och Home Assistant tar en säkerhetskopia först om
-du låter rutan för det vara ikryssad.
+du låter rutan för det vara ikryssad. Vilken version som körs står längst ned i DriveLogs
+sidomeny och under *Inställningar → Om DriveLog*.
 
 ## Felsökning
 
@@ -174,3 +182,6 @@ du låter rutan för det vara ikryssad.
 - **Fungerar utifrån men inte hemma:** routern saknar troligen "hårnåls-NAT". Se guiden.
 - **Aviseringen *… leder inte längre hem*:** se *Utan DynDNS: adressvakten* ovan.
 - **Appen startar inte:** loggen börjar med vad som behöver rättas.
+- **Konstiga resor eller förbrukning från bilen:** ladda ner felsökningsfilen under
+  *Integrationer → Volvo* (utan chassinummer, registreringsnummer, positioner och adresser) och
+  skicka den till den som hjälper dig.

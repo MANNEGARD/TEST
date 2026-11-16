@@ -594,6 +594,12 @@ välj månad → Skapa Excel.** Filen
 innehåller ett blad med månadens tjänsteresor och en summering med mil och ersättning.
 Vill du bara redovisa vissa resor markerar du dem i körjournalen och väljer *Exportera valda*.
 
+Vill du ha företagets logga i underlaget laddar du upp den under *Inställningar → Milersättning
+och export → Företagslogga i underlaget* (PNG eller JPEG, högst 1 MB). Den läggs diskret uppe till
+höger i sidhuvudet, i underlag du skapar och i månadens automatiska underlag. *Visa loggan i
+underlaget* stänger av den utan att ta bort den; *Ta bort* tar bort filen från servern. Underlag
+som redan är skapade ändras inte.
+
 ## Notiser i telefonen
 
 Med Home Assistant ansluten kommer frågorna som interaktiva notiser, och svaren sparas direkt
@@ -605,11 +611,35 @@ hit. Obesvarade frågor ligger kvar under *Granskning*. Tysta timmar, max antal 
 dygn och påminnelser ställs in under *Inställningar → Notiser*. Se
 [Home Assistant](home-assistant.md).
 
+För platser utan namn visar notisen hela adressen med husnummer, och bostaden visas med sin
+adress. Slå på *Dölj platser på låsskärmen* under *Inställningar → Notiser* om andra kan se din
+skärm – då visar notisen bara dag och sträcka.
+
+När DriveLog har uppdaterats till en ny version kommer notisen *DriveLog är uppdaterad till …*
+med de viktigaste nyheterna – en gång per version, aldrig vid en vanlig omstart. Den stängs av med
+*Notis när DriveLog har uppdaterats* under *Inställningar → Notiser*.
+
+## Vilken version kör jag?
+
+Längst ned i sidomenyn står till exempel *DriveLog 1.3.0* (på mobilen i användarmenyn uppe till
+höger). Tryck på den för *Inställningar → Om DriveLog*, där det står vad som är nytt i versionen.
+Hela ändringsloggen finns på tilläggets sida i Home Assistant.
+
 ## Bränsle och energi
 
-Under *Mer → Bränsle & energi* visas bensin och el. Förbrukning räknas bara som uppmätt när
-den kommer per resa ur den importerade körjournalen; bilens snittvärden och tanknivå från
-Volvo räknas inte som förbrukning per resa. Här kan du också föra in tankningar och laddningar.
+Under *Mer → Bränsle & energi* visas bensin och el. Förbrukning räknas som uppmätt när den
+kommer per resa ur den importerade körjournalen. För resor från bilen räknar DriveLog fram
+förbrukningen ur bilens egna avläsningar – trippmätaren och snittförbrukningen, annars
+skillnaden i tanken eller batteriet med tankning och laddning borträknade. De värdena är
+uppskattade och står med ≈ på resan. Räcker inte bilens uppgifter står det "–". Här kan du också
+föra in tankningar och laddningar.
+
+### Felsökningsfil
+
+Strular något med bilens data kan du under *Integrationer → Volvo* trycka **Ladda ner
+felsökningsfil**. Filen innehåller bilens avläsningar och hämtningar de senaste 14 dygnen och de
+resor som byggdes av dem, men inte chassinummer, registreringsnummer, positioner, adresser eller
+platsnamn. Skicka den till den som hjälper dig felsöka.
 
 ## Demoläge
 
@@ -622,18 +652,19 @@ blandas med din riktiga journal. *Stäng av demoläge* tar bort demodatan.
 | Sektion | Innehåll |
 | --- | --- |
 | Fordon och förare | Registreringsnummer, bil, ditt namn och arbetsgivare (visas i exporten); tidszon under *Avancerat* |
-| Milersättning och export | Kronor per mil, visa belopp, exportens utseende, vad som redovisas |
+| Milersättning och export | Kronor per mil, visa belopp, mellanstopp, företagslogga i underlaget, exportens utseende, vad som redovisas |
 | Självgående läge | *Självgående* eller *Jag godkänner allt själv*, kontorstid och vetotid för antagna kundbesök, skälen för automatiska godkännanden och länk till dina egna regler |
 | Sammanslagning av resor | Gränserna 15 och 60 minuter (i självgående läge, se ovan) |
 | Lunchregeln | Av/på och gränserna för lunchmönstret (fönster, körtid, sträcka, stopp) |
 | Förslag och AI | Trösklar, strikt läge, underlagsnivå (Fullständigt/Minimalt), Om mitt arbete, AI-förslag på syfte |
-| Notiser | Typer, tysta timmar, max per dygn, påminnelser, veckosammanställning |
+| Notiser | Typer, tysta timmar, max per dygn, påminnelser, veckosammanställning, notis när DriveLog har uppdaterats, dölj platser på låsskärmen |
 | Kalender | Läs hela bokningen, arbetsgivarens e-postdomän, tidsfönster för matchning |
 | Tjänsteställe | Hem ↔ kontor som tjänsteresor, ordinarie tjänsteställe, bostaden som tjänsteställe, förmånsbil och krav på godkännande vid skattemässig osäkerhet |
 | Förkortningar | Egna förkortningar i kommentarer, t.ex. ortsförkortningar |
 | Sekretess | Karta, geokodning (OpenStreetMap, på som standard), gallring, om originalfiler sparas vid import, radering av historik |
 | Säkerhet | Lösenord, API-tokens |
 | Säkerhetskopia | Skapa och hämta kopior |
+| Om DriveLog | Vilken version som körs och vad som är nytt i den |
 
 ### Fullständig körjournal
 

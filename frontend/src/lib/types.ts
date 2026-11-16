@@ -534,3 +534,13 @@ export interface ReclassifyResult {
   trip?: Trip | null;
   assessment?: unknown;
 }
+
+// ----------------------------------------------------------------------------- om DriveLog
+// backend/app/api/routes/about.py → GET /about (1.3.0)
+
+/** Vilken version som körs. Demot svarar `version: "demo"` och `whats_new: null`. */
+export interface AboutInfo {
+  version: string;
+  /** Versionens avsnitt ur ändringsloggen (samma punkter som notisen om ny version). null när den inte följer med. */
+  whats_new: { version: string; items: string[] } | null;
+}

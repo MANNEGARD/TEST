@@ -73,6 +73,34 @@
   gäller även resor som väntar på svar när uppdateringen installeras. Gränserna ändras och regeln
   stängs av under *Inställningar → Lunchregeln*; den kräver att minst ett kontor finns som
   bekräftad plats.
+- **Bensin och el per resa.** Resor från bilen visade tidigare "–" för bensin och el. Nu räknas
+  förbrukningen fram ur bilens egna avläsningar – i första hand trippmätaren och
+  snittförbrukningen, annars skillnaden i tanken eller batteriet (tankning och laddning räknas
+  bort). Värdena är uppskattade och står med ≈ på resan. Räcker inte bilens uppgifter står det
+  fortfarande "–"; inget hittas på.
+- **Felsökningsfil för bilen.** Under *Integrationer → Volvo* laddar *Ladda ner felsökningsfil* ner
+  bilens avläsningar och hämtningar de senaste 14 dygnen och de resor som byggdes av dem – utan
+  chassinummer, registreringsnummer, positioner och adresser – att skicka till den som hjälper
+  dig felsöka.
+- **Notis när DriveLog har uppdaterats.** När en ny version har startat får du en notis i
+  telefonen, "DriveLog är uppdaterad till …", med de viktigaste nyheterna. En notis per version,
+  ingen vid vanlig omstart. Stängs av under *Inställningar → Notiser*; kräver att telefonen är
+  ansluten via Home Assistant-integrationen.
+- **Versionen syns i appen.** Längst ned i sidomenyn (och i användarmenyn på mobilen) står
+  *DriveLog 1.3.0*. Den leder till den nya sektionen *Inställningar → Om DriveLog* med det som är
+  nytt i versionen.
+- **Riktiga versionsnummer och logga i Home Assistant.** Varje version ges ut som en utgåva på
+  GitHub, så HACS visar till exempel *1.2.2 → 1.3.0* i stället för en kod som "97aa56f" och
+  erbjuder bara uppdatering när en ny version finns. Utgåvans text säger när integrationen inte
+  har ändrats, så att omstarten av Home Assistant kan vänta. Integrationen visar DriveLogs logga
+  från Home Assistant 2026.3.
+- **Hela adressen i notiserna.** Notiserna visar nu hela adressen med husnummer för platser utan
+  namn, och bostaden med sin adress. *Dölj platser på låsskärmen* under *Inställningar → Notiser*
+  döljer dem som förut. Underlaget till arbetsgivaren ändras inte.
+- **Företagslogga i underlaget.** Under *Inställningar → Milersättning och export* kan du ladda upp
+  en logga (PNG eller JPEG, högst 1 MB), se den, byta den och ta bort den. Loggan läggs diskret
+  uppe till höger i underlagets sidhuvud; *Visa loggan i underlaget* stänger av den utan att ta
+  bort den.
 
 ## 1.2.3
 
