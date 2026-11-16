@@ -43,3 +43,43 @@ def test_time_column_holds_the_longest_time_on_one_line(text):
 def test_table_still_fills_the_page_width():
     # Bredderna är avvägda mot en liggande A4 i 100 % skala; summan får inte ändras.
     assert sum(width for _, _, width in simple.COLUMNS) == pytest.approx(133)
+
+
+# Filnamnet: "Underlag milersättning - <förare> - <regnr> - november 2026.xlsx" -------------------------
+
+
+def _name(**kwargs):
+    from datetime import UTC, datetime
+    from zoneinfo import ZoneInfo
+
+    from app.services.export import service
+    from app.services.stats.common import Period
+
+    tz = ZoneInfo("Europe/Stockholm")
+    start = kwargs.pop("start", datetime(2026, 10, 31, 23, 0, tzinfo=UTC))  # 1 nov lokal tid
+    end = kwargs.pop("end", datetime(2026, 11, 30, 23, 0, tzinfo=UTC))  # 1 dec lokal tid
+    vehicle = SimpleNamespace(registration_number=kwargs.pop("reg", "ABC123"), is_demo=kwargs.pop("demo", False))
+    return service.download_name(vehicle, Period("export", start, end, ""), tz, **kwargs)
+
+
+def test_filename_has_title_driver_registration_and_month_in_words():
+    assert _name(driver_name="Anna Exempel") == "Underlag milersättning - Anna Exempel - ABC123 - november 2026.xlsx"
+    assert _name(driver_name="Anna Exempel", layout="simple") == (
+        "Underlag milersättning - Anna Exempel - ABC123 - november 2026.xlsx"
+    )
+
+
+def test_filename_without_driver_name_leaves_the_part_out():
+    assert _name(driver_name="") == "Underlag milersättning - ABC123 - november 2026.xlsx"
+    assert _name() == "Underlag milersättning - ABC123 - november 2026.xlsx"
+
+
+def test_filename_never_carries_path_or_control_characters():
+    name = _name(driver_name='  ../Anna\\ "Ex"\n<empel>|:*?  ')
+    assert name == "Underlag milersättning - Anna Ex empel - ABC123 - november 2026.xlsx"
+    assert len(_name(driver_name="A" * 300)) < 120
+
+
+def test_filename_for_selection_and_demo():
+    assert _name(driver_name="Anna Exempel", selection=True) == "Underlag milersättning - Anna Exempel - ABC123 - urval.xlsx"
+    assert _name(driver_name="Anna Exempel", demo=True).startswith("DEMO Underlag milersättning - Anna Exempel - ")

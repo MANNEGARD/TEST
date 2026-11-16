@@ -125,7 +125,7 @@ def test_complete_export_has_all_required_fields(db, user, vehicle, actor, trips
     job, path = export(db, user, vehicle, actor)
 
     assert job.status == "done" and job.is_complete, job.warnings
-    assert job.filename == "Körjournal_ABC123_2026-09.xlsx"
+    assert job.filename == "Underlag milersättning - Test Förare - ABC123 - september 2026.xlsx"
     assert job.summary["trips"] == 3
     assert job.summary["total_km"] == pytest.approx(45.0)
     assert job.summary["work_km"] == pytest.approx(37.4) and job.summary["private_km"] == pytest.approx(7.6)
@@ -372,7 +372,7 @@ def test_demo_vehicle_export_is_watermarked(db, user, vehicle, actor, trips):
     vehicle.is_demo = True
     complete_month(db, trips, vehicle)
     job, path = export(db, user, vehicle, actor)
-    assert not job.is_complete and job.filename.startswith("DEMO_Körjournal_")
+    assert not job.is_complete and job.filename.startswith("DEMO Underlag milersättning - ")
     _, wv = books(path)
     assert "DEMODATA" in str(wv[wbmod.SHEET_OVERVIEW]["A2"].value)
     assert "DEMODATA" in all_text(wv[wbmod.SHEET_JOURNAL].parent)
@@ -455,7 +455,7 @@ def test_selection_export(db, user, vehicle, actor, trips, complete_scope):
     t1, t2, _ = complete_month(db, trips, vehicle)
     job = export_svc.create_export(db, user_id=user.id, vehicle=vehicle, start=None, end=None, trip_ids=[t1.id, t2.id],
                                    actor=actor, tz=TZ, now=NOW, layout="detailed")
-    assert job.filename == "Körjournal_ABC123_urval.xlsx"
+    assert job.filename == "Underlag milersättning - Test Förare - ABC123 - urval.xlsx"
     assert job.summary["trips"] == 2 and job.summary["total_km"] == pytest.approx(20.0)
     assert any(w["code"] == "selection_export" for w in job.warnings)
     with pytest.raises(export_svc.ExportError):

@@ -57,7 +57,9 @@ För hand:
 2. Förhandsvisningen visar exakt de rader och summor som kommer med.
 3. Klicka **Skapa Excel** och hämta filen.
 
-Filen får namnet `Körjournal_<regnr>_<år-månad>.xlsx`. Tidigare skapade filer ligger kvar
+Filen får namnet `Underlag milersättning - <förare> - <regnr> - november 2026.xlsx` (förarens
+namn tas från *Inställningar → Allmänt* och utelämnas om det inte är ifyllt; en period som inte
+är en hel månad skrivs med datum). Tidigare skapade filer ligger kvar
 under *Export* tills du raderar dem.
 
 ### Nedladdningslänken

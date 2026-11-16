@@ -175,7 +175,7 @@ def preview(
         "period": {"start": start, "end": end, "timezone": str(tz), "label": journal.period_label},
         "filename": export_svc.download_name(
             vehicle, Period("export", start, end, journal.period_label), tz, selection=trip_ids is not None,
-            layout=settings_svc.LAYOUT_SIMPLE,
+            layout=settings_svc.LAYOUT_SIMPLE, driver_name=journal.driver_name,
         ),
         **journal.as_dict(),
     }

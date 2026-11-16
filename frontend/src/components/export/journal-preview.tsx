@@ -105,7 +105,7 @@ function DesktopTable({ rows, flaggedIds }: { rows: ExportRow[]; flaggedIds: Rea
         <caption className="sr-only">Tjänsteresor. Välj en rad för att öppna resan.</caption>
         <colgroup>
           <col className="w-[5.6rem]" />
-          <col className="w-[6.1rem]" />
+          <col className="w-[7.9rem]" />
           <col />
           <col />
           <col />
@@ -151,7 +151,7 @@ function DesktopTable({ rows, flaggedIds }: { rows: ExportRow[]; flaggedIds: Rea
                     {r.date ?? "–"}
                   </Link>
                 </td>
-                <td className="px-2 py-2.5 text-fg-muted tabular-nums">{r.time || <span className="text-fg-subtle">okänd</span>}</td>
+                <td className="px-2 py-2.5 whitespace-nowrap text-fg-muted tabular-nums">{r.time || <span className="text-fg-subtle">okänd</span>}</td>
                 <td className="px-2 py-2.5 break-words text-fg">{r.from || <span className="text-fg-subtle">–</span>}</td>
                 <td className="px-2 py-2.5 break-words text-fg">
                   {dest ? <span className="block">{dest}</span> : null}

@@ -53,7 +53,7 @@ def test_create_list_download_delete(client, db, vehicle, trips):
     assert r.status_code == 201, r.text
     job = r.json()
     assert job["status"] == "done" and job["is_complete"]
-    assert job["filename"] == "Körjournal_ABC123_2026-09.xlsx"
+    assert job["filename"] == "Underlag milersättning - Test Förare - ABC123 - september 2026.xlsx"
     assert job["summary"]["total_km"] == 20.0 and job["summary"]["odometer_start"] == 10000
     assert "file_path" not in job
 
@@ -65,8 +65,8 @@ def test_create_list_download_delete(client, db, vehicle, trips):
     assert r.headers["content-type"].startswith("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     cd = r.headers["content-disposition"]
     assert cd.startswith("attachment;")
-    assert 'filename="Korjournal_ABC123_2026-09.xlsx"' in cd
-    assert "filename*=UTF-8''K%C3%B6rjournal_ABC123_2026-09.xlsx" in cd
+    assert 'filename="Underlag milersattning - Test Forare - ABC123 - september 2026.xlsx"' in cd
+    assert "filename*=UTF-8''Underlag%20milers%C3%A4ttning%20-%20Test%20F%C3%B6rare%20-%20ABC123%20-%20september%202026.xlsx" in cd
     wb = openpyxl.load_workbook(io.BytesIO(r.content))
     assert wb.sheetnames[0] == "Översikt"
 
@@ -85,7 +85,7 @@ def test_create_validation_and_selection(complete_scope, client, db, vehicle, tr
     assert client.post("/api/v1/exports", json={"from": "2026-09-30", "to": "2026-09-01"}).status_code == 422
     assert client.post("/api/v1/exports", json={"trip_ids": []}).status_code == 422
     r = client.post("/api/v1/exports", json={"trip_ids": [str(t1.id)]})
-    assert r.status_code == 201 and r.json()["filename"] == "Körjournal_ABC123_urval.xlsx"
+    assert r.status_code == 201 and r.json()["filename"] == "Underlag milersättning - Test Förare - ABC123 - urval.xlsx"
     assert not r.json()["is_complete"] and r.json()["summary"]["trips"] == 1
     missing = "00000000-0000-0000-0000-000000000000"
     r = client.post("/api/v1/exports", json={"trip_ids": [missing]})

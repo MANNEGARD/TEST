@@ -1187,7 +1187,7 @@ function createExport(body: Json): Json {
     origin: "manual",
     superseded_by_id: null,
     link_downloads: 0,
-    filename: `Körjournal_DEM042_${label}.xlsx`,
+    filename: `DEMO Underlag milersättning - Alex Exempel - DEM042 - ${label}.xlsx`,
     params: { start: from || null, end: to || null, trip_ids: ids, label, layout: s.settings.settings.export?.layout ?? "simple" },
   });
   job.summary = {
@@ -1287,7 +1287,7 @@ function exportPreview(q: URLSearchParams): Json {
   const reg = String(S().vehicles[0]?.registration_number ?? "").replace(/\s+/g, "");
   out.period = { ...periodBounds(from, to), label };
   out.period_label = label;
-  out.filename = `Körjournal_${reg}_${from.slice(0, 7) === to.slice(0, 7) ? from.slice(0, 7) : `${from}_${to}`}.xlsx`;
+  out.filename = `DEMO Underlag milersättning - Alex Exempel - ${reg} - ${from.slice(0, 7) === to.slice(0, 7) ? label.toLowerCase() : `${from}_${to}`}.xlsx`;
   if (out.header) {
     out.header.period = label;
     out.header.driver = S().settings.settings.general?.driver_name || out.header.driver;

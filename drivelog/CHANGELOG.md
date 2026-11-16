@@ -19,6 +19,13 @@
   tillbaka. Har ett förslag (kategori eller syfte) hunnit ändras när du trycker *Godkänn
   förslag* får du se det nya förslaget i stället. Samma sak gäller massredigering och svar på
   frågorna i telefonen. Har du AI-bedömning påslagen väntar dina svar inte längre på den.
+- **Underlagets filnamn** är nu *Underlag milersättning - förarens namn - registreringsnummer -
+  november 2026.xlsx*. Förarens namn tas från *Inställningar → Allmänt*.
+- **Ingen dubblerad adress i underlaget.** En plats som heter som sin adress skrevs två gånger
+  ("Gatan 1, Ort, Gatan 1, Ort"). Nu står adressen en gång; platser med eget namn står som
+  förut som *Namn, adress*.
+- **Tiderna får plats på en rad** i Excel-filen ("06:53–08:51" och "ca 12:31–12:46" bröts förut
+  på två rader).
 
 ## 1.2.1
 

@@ -349,7 +349,7 @@ def test_header_for_a_whole_month(db, user, vehicle, actor, trips):
     assert ws["A1"].value == "Körjournal – tjänsteresor"
     assert header_info(ws) == {"Period": "September 2026", "Förare": "Test Förare", "Arbetsgivare": "Exempel AB",
                                "Bil": "Volvo V90, ABC123"}
-    assert job.filename == "Körjournal_ABC123_2026-09.xlsx"
+    assert job.filename == "Underlag milersättning - Test Förare - ABC123 - september 2026.xlsx"
     assert job.summary["period_label"] == "September 2026"
 
 
@@ -362,7 +362,7 @@ def test_employer_row_is_omitted_and_driver_falls_back_to_display_name(db, user,
     assert "Arbetsgivare" not in info
     assert info["Förare"] == user.display_name
     assert info["Period"] == "2026-06-01 – 2026-09-30"
-    assert job.filename == "Körjournal_ABC123_2026-06-01_2026-09-30.xlsx"
+    assert job.filename == "Underlag milersättning - Test Förare - ABC123 - 2026-06-01_2026-09-30.xlsx"
 
 
 def test_period_label_and_filename_helpers():
@@ -381,7 +381,7 @@ def test_demo_vehicle_is_watermarked(db, user, vehicle, actor, trips):
     trips.trip(A, C, category=Category.WORK, purpose="Kundbesök", km=12.4)
     job, path = export(db, user, vehicle, actor)
     assert books(path)[1]["Körjournal"]["A1"].value == "Körjournal – tjänsteresor – DEMODATA"
-    assert job.filename.startswith("DEMO_Körjournal_") and not job.is_complete
+    assert job.filename.startswith("DEMO Underlag milersättning - ") and not job.is_complete
 
 
 def test_formula_injection_is_neutralised(db, user, vehicle, actor, trips):
@@ -452,7 +452,7 @@ def test_preview_has_the_same_rows_and_totals_as_the_file(client, db, user, vehi
     assert r.status_code == 200, r.text
     preview = r.json()
     assert preview["period_label"] == "September 2026"
-    assert preview["filename"] == "Körjournal_ABC123_2026-09.xlsx"
+    assert preview["filename"] == "Underlag milersättning - Test Förare - ABC123 - september 2026.xlsx"
     assert set(preview["rows"][0]) == {"trip_id", "date", "time", "from", "to", "purpose", "odometer_start",
                                        "odometer_end", "km"}
     assert set(preview["totals"]) >= {"trips", "km", "mil", "rate_per_mil", "show_amount", "amount"}

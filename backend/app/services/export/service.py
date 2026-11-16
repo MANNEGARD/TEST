@@ -274,19 +274,38 @@ def _selection_energy(trips: list, tz: ZoneInfo) -> list[dict[str, Any]]:
     return out
 
 
+FILE_TITLE = "Underlag milersättning"
+_BAD_FILENAME_CHARS = set('\\/:*?"<>|')
+
+
+def _filename_text(text: str | None, limit: int = 60) -> str:
+    """Text som får stå i ett filnamn: inga sökvägs- eller styrtecken, ett mellanslag i taget."""
+    cleaned = "".join(" " if (ch in _BAD_FILENAME_CHARS or not ch.isprintable()) else ch for ch in (text or ""))
+    return " ".join(cleaned.split())[:limit].strip(" .-")
+
+
 def download_name(
-    vehicle: Vehicle, period: Period, tz: ZoneInfo, *, selection: bool = False, layout: str = settings_svc.LAYOUT_DETAILED
+    vehicle: Vehicle, period: Period, tz: ZoneInfo, *, selection: bool = False,
+    layout: str = settings_svc.LAYOUT_DETAILED, driver_name: str | None = None,
 ) -> str:
-    """Filnamn: Körjournal_<regnr>_<ÅÅÅÅ-MM>.xlsx för en hel kalendermånad, annars <från>_<till>."""
+    """Filnamn: "Underlag milersättning - <förare> - <regnr> - november 2026.xlsx".
+
+    En hel kalendermånad skrivs med månadens namn och år, andra perioder som <från>_<till> och
+    ett urval som "urval". Förarens namn utelämnas när det inte är ifyllt.
+    """
     reg = "".join(ch for ch in (vehicle.registration_number or "utan-regnr") if ch.isalnum() or ch in "-_") or "utan-regnr"
+    month = None if selection else simple_mod.whole_month(period.start, period.end, tz)
     if selection:
         part = "urval"
+    elif month is not None:
+        part = f"{simple_mod.MONTHS_SV[month.month - 1].lower()} {month.year}"
     elif layout == settings_svc.LAYOUT_SIMPLE:
         part = simple_mod.filename_part(period.start, period.end, tz)
     else:
         part = common.period_filename_part(period, tz)
-    prefix = "DEMO_Körjournal" if vehicle.is_demo else "Körjournal"
-    return f"{prefix}_{reg}_{part}.xlsx"
+    title = f"DEMO {FILE_TITLE}" if vehicle.is_demo else FILE_TITLE
+    parts = [title, _filename_text(driver_name), reg, part]
+    return " - ".join(p for p in parts if p) + ".xlsx"
 
 
 def create_export(
@@ -382,7 +401,9 @@ def create_export(
         job.file_path = str(path)
         job.sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
         naming_period = Period("export", start, end, label)
-        job.filename = download_name(vehicle, naming_period, tz, selection=ids is not None, layout=layout)
+        job.filename = download_name(
+            vehicle, naming_period, tz, selection=ids is not None, layout=layout, driver_name=_driver_name(db, user_id),
+        )
         job.is_complete = checks_mod.is_complete(checks)
         job.warnings = [{k: c[k] for k in ("code", "severity", "title", "message", "count")} for c in checks]
         job.summary = {
