@@ -79,6 +79,27 @@ flaggas i exporten tills de godkänts.
 Resor som du själv avgjort, och resor med källmärkt klassning ur en importerad körjournal,
 bedöms aldrig om. För dem föreslås bara ett saknat syfte.
 
+### 4. Självgående läge
+
+I självgående läge (standard från 1.1.0) blir en automatisk preliminär klassning av en resa
+från bilen i stället ett *Förslag*. Det som godkänns av sig självt avgörs av en egen,
+strängare regeltabell i `classify/autopilot.py`: *Resa till arbetet*, *Privat plats*, *Din
+regel för …*, *Som de 3 senaste gångerna*, *Hemresa efter …* och *Antaget kundbesök*. Allt
+annat blir en fråga. Tabellen och spärrarna beskrivs i
+[Användning → Självgående läge](anvandning.md#självgående-läge).
+
+- Inget godkänns automatiskt som Arbete när någon signal pekar mot Privat, när reglerna
+  noterar motstridiga signaler, för resor mellan bostad och tjänsteställe, eller när målet är
+  hemmet, en privat plats, tjänstestället eller ett hotell.
+- Ett automatiskt godkännande eller antagande räknas aldrig in i mönstren och aldrig som
+  bekräftad historik.
+- **AI och platsantagandet:** för en ny, obekräftad plats som kartan har ett namn för men
+  ingen tydlig typ (art *oklar*) får AI-leverantören – bara om en redan är inkopplad, och bara
+  i självgående läge – platsens namn, kartans typ, ort, veckodag och klockslag. Aldrig
+  koordinater, gatuadress eller personuppgifter. Bedömer den platsen som arbete, utan avvikelse
+  mot reglerna, kan resan antas som kundbesök. Ärendet blir AI:ns text bara om den klarar
+  fabriceringsskyddet ovan, annars "Kundbesök <namn>". Utan leverantör blir det en fråga.
+
 ## Skattemässig bedömning
 
 Att en resa är arbetsrelaterad betyder inte automatiskt att den är en tjänsteresa.
@@ -141,6 +162,7 @@ gäller först när du godkänt dem.
 | Skickas | Skickas aldrig |
 | --- | --- |
 | Platsetikett eller ort, platstyp | Koordinater |
+| För nya obekräftade platser: kartans namn och typ (t.ex. `building=warehouse`) | |
 | Veckodag, klockslag, sträcka, antal stopp | VIN, registreringsnummer |
 | Regelmotorns signaler | Hemadress (visas som "Hemmet") |
 | Kalenderrubrik, tid och plats för matchade bokningar (kan stängas av) | Privata platsers namn ("Privat plats") |

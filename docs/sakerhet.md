@@ -11,7 +11,9 @@ uppgifterna skyddas och vad som lämnar din server.
 - Alla ändrande anrop kräver en CSRF-token i headern `X-CSRF-Token`.
 - Inloggning är hastighetsbegränsad per IP-adress och per konto, och felmeddelandet avslöjar
   inte om kontot finns.
-- Byte av lösenord loggar ut övriga sessioner.
+- Byte av lösenord loggar ut övriga sessioner och stänger alla nedladdningslänkar (se
+  *Export* nedan). En återställning från kommandoraden eller från tilläggets inställningar
+  stänger inte länkarna.
 - Det första kontot skapas vid första besöket; därefter kan konton bara skapas från servern.
 
 ## Maskinåtkomst (Home Assistant)
@@ -22,7 +24,8 @@ användas för kontohantering, säkerhetskopior eller radering.
 
 ## Åtkomstkontroll
 
-Varje API-anrop kräver inloggning eller token (utom hälsokontroll och första-gången-flödet).
+Varje API-anrop kräver inloggning eller token (utom hälsokontroll, första-gången-flödet och
+den signerade nedladdningslänken, se *Export* nedan).
 All data är knuten till en ägare, och varje uppslag kontrollerar ägarskapet – en annan
 användares resor, platser, importer och exporter ger 404.
 
@@ -48,7 +51,26 @@ användares resor, platser, importer och exporter ger 404.
 
 Användartext som börjar med `=`, `+`, `-`, `@`, tabb eller radbrytning skrivs som ren text
 (skydd mot formula injection). Exportfiler får slumpade filnamn på servern och kan bara
-hämtas av ägaren.
+hämtas av ägaren – eller via den signerade länken nedan.
+
+### Nedladdningslänken i månadsnotisen
+
+Månadsnotisen i självgående läge har en länk som hämtar underlaget utan inloggning
+(`/api/v1/public/exports/<token>`).
+
+- Länken är signerad (HMAC) och bunden till exporten, filens innehåll (sha256) och ett
+  räknevärde per konto. Den gäller i **7 dagar** och för högst **10 hämtningar**. En ersatt
+  eller raderad fil ger ett fel i stället för filen.
+- Svaret skickas som nedladdning med `Cache-Control: no-store`, `X-Robots-Tag: noindex` och
+  `Referrer-Policy: no-referrer` (Caddy skriver om den sista till `same-origin`). Anropen är
+  hastighetsbegränsade per IP-adress.
+- Varje hämtning räknas och loggas i ändringsloggen, utan token. Token maskeras som `[DOLD]` i
+  åtkomstloggen.
+- **Risken:** notisen går via Home Assistant. Den som har en Home Assistant-token, eller kommer
+  åt Home Assistants historik eller loggar, kan hämta underlaget så länge länken gäller.
+- **Stäng länkarna** med *Stäng alla nedladdningslänkar* på exportsidan, genom att byta
+  lösenord inne i DriveLog eller genom att radera exporten. Byt aldrig `DRIVELOG_SECRET_KEY`
+  för att stänga länkar – krypteringsnyckeln kan vara härledd ur den.
 
 ## Vad lämnar servern?
 
@@ -59,9 +81,33 @@ hämtas av ägaren.
 | Home Assistant (din egen) | Notistexter | När notiser är påslagna |
 | AI-leverantör | Avidentifierat underlag för en resa, se nedan | Endast om en leverantör är ansluten och reglerna inte räcker |
 | Kartplattor | Vilket kartområde du tittar på | När en karta visas (kan stängas av eller pekas mot egen plattserver) |
-| Geokodare | Adresser | Endast om geokodning uttryckligen slagits på |
+| Geokodare (standard OpenStreetMap Nominatim) | Mittpunkten av en liten ruta (koordinat med fyra decimaler) där bilen stannat på en okänd plats | När geokodningen är på (standard från 1.1.0) och hemmet finns som plats med koordinat |
+| Home Assistant (din egen) | Signerad nedladdningslänk i månadsnotisen | Självgående läge, när underlaget är klart |
 
 Ingen telemetri eller analys skickas någonstans.
+
+### Geokodningen (OpenStreetMap)
+
+När bilen stannar på en plats som inte redan finns i DriveLog slår servern upp gatuadressen,
+som standard hos OpenStreetMaps Nominatim.
+
+- Bara `GET <geokodare>/reverse` med rutans mittpunkt skickas. Resa, tid, id, namn och
+  kalender skickas aldrig. User-Agent är neutral (`SMGD-DriveLog/<version> (self-hosted
+  logbook; reverse geocoding)`) och ingen Referer skickas.
+- **OpenStreetMap ser serverns publika adress och när uppslagen görs.** Tidpunkterna kan säga
+  något om när bilen stannar. Stäng av geokodningen under *Inställningar → Sekretess* om du
+  inte vill det; då får nya platser ingen adress.
+- Samma ruta slås bara upp en gång (svaret sparas), högst ett anrop per 1,1 sekund och 500 per
+  dygn. Stopp vid kända platser och demobilen slås aldrig upp, och inget skickas förrän hemmet
+  finns som plats med koordinat.
+- Adressen till geokodaren måste vara https på port 443, utan användarnamn, frågesträng eller
+  fragment, och får inte peka på `localhost` eller en lokal eller privat IP-adress. Varje
+  DNS-svar och den faktiska motparten kontrolleras vid varje anrop. Klienten följer inga
+  omdirigeringar, avbryter efter 4 sekunder och läser högst 64 kB.
+- Svaret är opålitlig indata: bara gata, husnummer, postnummer, ort, namn och typ sparas, och
+  all text tvättas från styr- och osynliga tecken.
+- Adressdata © OpenStreetMap-bidragsgivare, under licensen ODbL. Erkännandet visas på sidan
+  Platser och i inställningen.
 
 ### AI-leverantören
 
@@ -77,9 +123,13 @@ kalenderrubrik kan inte ändra en klassning eller smyga in påhittade uppgifter.
 
 ### Notiser
 
-Notiser innehåller aldrig gatuadresser. Hemmet visas som "Hemmet" och privata platser som
-"Privat plats". Med *Dölj platser på låsskärmen* (standard) är notistexten helt utan
-platsnamn. iOS har ingen inställning i notisen för detta – välj dessutom *Visa
+Notiser innehåller aldrig husnummer. Hemmet visas som "Hemmet" och privata platser som
+"Privat plats". Obekräftade platser visas bara som "företagsnamn, ort" eller "gata utan
+husnummer, ort"; hela adressen syns först i webben efter inloggning. Med *Dölj platser på
+låsskärmen* är notistexten helt utan platser, bara dag och mil. Från 1.1.0 är den
+inställningen av som standard om du aldrig har ändrat den. Larm och månadsnotiser innehåller
+aldrig platser, VIN eller belopp per resa. Textsvar från telefonen tvättas och får vara
+1–200 tecken. iOS har ingen inställning i notisen för detta – välj dessutom *Visa
 förhandsvisningar: När olåst* för Home Assistant-appen i iPhone-inställningarna.
 
 ## Spårbarhet
@@ -111,7 +161,8 @@ dess hemligheter.
 
 - Ingen tvåfaktorsautentisering. Lägg gärna en extra spärr framför (VPN, IP-filter eller
   autentisering i proxyn) om tjänsten exponeras mot internet.
-- Hastighetsbegränsningen gäller inloggning och första-gången-flödet, inte hela API:t.
+- Hastighetsbegränsningen gäller inloggning, första-gången-flödet och nedladdningslänken, inte
+  hela API:t.
 - Kontospärren räknar misslyckade inloggningar per e-postadress. Den som känner till din
   adress kan därför tillfälligt (fem minuter) spärra inloggningen genom upprepade felaktiga
   försök. Befintliga sessioner påverkas inte.

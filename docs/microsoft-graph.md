@@ -24,6 +24,9 @@ instruktion till systemet.
    `https://<din-domän>/api/v1/integrations/microsoft/callback`.
 5. Registrera. Kopiera **Application (client) ID**.
 6. *Certificates & secrets* → *New client secret*. Kopiera **Value** direkt (visas bara en gång).
+   Hemligheten **går ut** efter den tid du väljer (högst 24 månader i portalen). Skriv upp
+   datumet: när den har gått ut avvisar Microsoft inloggningen, och då räcker det inte att
+   ansluta igen – skapa en ny hemlighet här och spara den i DriveLog.
 7. *API permissions* → *Add a permission* → *Microsoft Graph* → *Delegated permissions* →
    lägg till `Calendars.Read` och `offline_access`. (`openid` och `email` begärs också vid
    inloggningen; de är standardbehörigheter och kräver inget administratörsgodkännande.)
@@ -69,7 +72,15 @@ den föreslagna – ditt val behålls vid senare synk.
 
 ## Drift
 
-- Synk sker var 15:e minut i bakgrunden (60 dagar bakåt, 14 dagar framåt – inställbart).
+- Bakgrundsjobbet körs var 15:e minut, men varje anslutning synkas högst var 30:e minut
+  (60 dagar bakåt, 14 dagar framåt – inställbart). Efter varje lyckad synk i bakgrunden
+  klassas resorna om, precis som efter *Synka nu*.
+- Efter tre fel i rad får anslutningen status *fel*. Den försöks ändå igen av sig själv,
+  högst varannan timme, och blir *ansluten* igen vid första lyckade synk. En anslutning som
+  behöver anslutas på nytt försöks inte.
+- Med Home Assistant ansluten får du larmet *DriveLog: Kalendern synkas inte* i telefonen när
+  anslutningen behöver anslutas på nytt, har fel eller inte har synkats på över ett dygn –
+  en gång per fel och ingen notis när det fungerar igen.
 - Åtkomsttoken förnyas automatiskt; den nya uppdateringstoken sparas varje gång. Tokens
   lagras krypterade.
 - Vid 429 från Microsoft respekteras `Retry-After`.

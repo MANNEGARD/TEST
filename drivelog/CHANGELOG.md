@@ -3,6 +3,68 @@
 > Från 1.0.2 visar Home Assistant **Uppdatera** först när den nya versionen är färdigbyggd och
 > går att hämta – det går bra att trycka direkt.
 
+## 1.1.0
+
+Körjournalen sköter sig själv utan Excel-uppladdning: resorna kommer från bilen, får adress,
+kategori och ärende, och månadens underlag skapas av sig självt. Importen fungerar som förut
+för den som vill använda den.
+
+- **Självgående läge** (nytt, påslaget som standard). Under *Inställningar → Självgående läge*
+  väljer du *Självgående* eller *Jag godkänner allt själv*. Bara resor från bilen som kommer in
+  efter att läget slogs på berörs – importerade, manuellt inlagda och äldre resor rörs aldrig.
+  En resa godkänns bara automatiskt av ett av skälen *Din regel för …*, *Som de 3 senaste
+  gångerna*, *Hemresa efter …*, *Resa till arbetet*, *Privat plats* eller *Antaget kundbesök*.
+  Skälet står på resan. Allt annat blir en fråga i telefonen.
+- **Adresser till nya platser.** När bilen stannar på en okänd plats slår DriveLog upp
+  gatuadressen i OpenStreetMap (Nominatim). Bara mittpunkten av en liten ruta (koordinaten
+  med fyra decimaler) skickas, aldrig resa, tid eller namn. OpenStreetMap ser serverns adress och
+  när uppslagen görs. Geokodningen är nu **på som standard**; den stängs av under
+  *Inställningar → Sekretess*. Går uppslaget inte att göra står adressen tom – ingen adress
+  hittas på.
+- **Antaget kundbesök.** Stannar du på en ny plats som kartan visar som företag eller industri
+  med namn, en vardag inom kontorstid (standard mån–fre 07–18), räknas resan som
+  *Kundbesök &lt;namn&gt;*. Du får en notis första gången per plats och kan säga emot under
+  vetotiden (standard 1 dygn). Ett *Fel* gör att platsen aldrig antas igen och att övriga
+  antagna resor dit frågas om. Antagna rader märks inte i Excel, men du ser dem före
+  nedladdningen.
+- **Starttid ur bilens egna uppgifter.** Räcker bilens avläsningar räknas starttiden fram och
+  visas som *≈ 07:35 (±4 min)* i appen och *ca 07:35* i underlaget, med en fotnot. Annars är
+  starttiden okänd, som förut; du kan ange den själv med *Ange starttid*.
+- **En fråga i taget i telefonen.** Kategori och ärende besvaras i samma tryck (*Tjänst:
+  &lt;ärende&gt;*, *Tjänst – skriv ärende*, *Privat*, *Alltid privat här*, *Senare*).
+  Påminnelse efter 24 h, och efter 48 h läggs frågan undan så att nästa får plats. Vid
+  månadsskiftet ställs månadens undanlagda frågor om en gång. Standardvärdena för påminnelse
+  och utgång har ändrats från 20/72 h till 24/48 h om du inte själv har satt dem.
+- **Platser visas på låsskärmen.** *Dölj platser på låsskärmen* är nu av som standard om du
+  aldrig har ändrat inställningen. Hemmet visas som *Hemmet*, privata platser som *Privat
+  plats* och okända platser bara som namn eller gata utan husnummer och ort.
+- **Månadens underlag av sig självt.** När månaden är slut och allt är besvarat skapas filen,
+  och du får notisen *Oktober klart* med en länk som går att öppna i telefonen utan att logga
+  in. Väntar något säger notisen vad. Ändras något efteråt skapas en ny fil (*Oktober
+  uppdaterad*), och den gamla länken slutar gälla. En saknad starttid stoppar inte underlaget
+  men står i notisen och på exportsidan. Exportsidan har ett nytt månadskort.
+- **Nedladdningslänken** gäller 7 dagar och högst 10 hämtningar. Den stängs med *Stäng alla
+  nedladdningslänkar* på exportsidan och när du byter lösenord inne i DriveLog. Den som har
+  Home Assistants token eller kommer åt Home Assistants historik kan hämta filen så länge
+  länken gäller.
+- **Larm i telefonen** när något har slutat fungera: Volvo-inloggningen går snart ut eller
+  behöver göras om, hämtningen från Volvo fungerar inte, bilen har inte hört av sig på 4 dygn
+  eller kalendern synkas inte. Ett larm per fel, högst två per dygn.
+- **Home Assistant:** finns exakt en telefon väljs den av sig själv. Saknas telefon visas ett
+  reparationsärende i Home Assistant och en banderoll i DriveLog, och frågorna väntar i stället
+  för att försvinna. Når integrationen inte DriveLog på 30 minuter skickas en lokal notis.
+  Integrationen har version 1.1.0.
+- **Kalendern** försöker igen av sig själv (högst varannan timme) efter upprepade fel, och
+  resorna klassas om efter varje synk.
+- **Sammanslagning i självgående läge:** resor slås bara ihop vid ett kort stopp (högst
+  15 minuter) vid en bekräftad tank- eller laddstation, och ingen sammanslagningsfråga ställs.
+  Ett stopp hemma eller vid en privat plats slås aldrig ihop för resor från bilen.
+- Exportens varning *osäker datakvalitet* för varje resa från bilen är ersatt med konkreta
+  kontroller: saknad starttid, saknad adress, möjliga missade resor och privat adress i
+  underlaget.
+- Starttiden ur bilens trippmätare är byggd men avstängd tills den har prövats mot en riktig
+  bil.
+
 ## 1.0.3
 
 - **Adressvakt när STRATO DynDNS är avslaget.** Har du satt domänens A-post för hand (t.ex.

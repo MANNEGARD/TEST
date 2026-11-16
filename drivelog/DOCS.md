@@ -48,6 +48,8 @@ Appen sparar inte lösenordet, bara ett kontrollvärde som inte går att räkna 
 3. Fliken **Logg**: där ska stå `Lösenordet för <din adress> sattes från appens inställningar.`
 4. Logga in med det nya lösenordet. Alla som var inloggade på kontot har loggats ut.
 5. Töm gärna fältet igen och tryck **Spara** (ingen omstart behövs).
+6. Nedladdningslänkar i tidigare notiser gäller fortfarande. Vill du stänga dem: tryck
+   *Stäng alla nedladdningslänkar* på exportsidan.
 
 Står det i stället att lösenordet **inte** ändrades:
 
@@ -79,6 +81,35 @@ Installera integrationen **SMGD DriveLog** via HACS (samma repo) och ange som ad
 `http://<värdnamn>:8000` – värdnamnet från loggen, t.ex. `xxxxxxxx-drivelog`. API-token skapas
 i DriveLog under **Integrationer → Home Assistant**. Port 8000 publiceras inte på maskinen och
 nås inte från internet.
+
+Har du exakt en telefon med Companion-appen väljs den av sig själv. Med flera telefoner väljer
+du en i DriveLog; tills dess visar Home Assistant reparationsärendet *DriveLog har frågor men
+ingen telefon är vald*, och frågorna väntar i DriveLog.
+
+## Självgående körjournal
+
+Från 1.1.0 sköter körjournalen sig själv utan Excel-uppladdning när Volvo är anslutet:
+
+- Resorna kommer från bilen. Nya platser får gatuadress från **OpenStreetMap** (Nominatim).
+  Bara mittpunkten av en liten ruta skickas, aldrig resa, tid eller namn, men OpenStreetMap ser
+  appens publika adress och när uppslagen görs. Adressdata © OpenStreetMap-bidragsgivare
+  (ODbL). Geokodningen stängs av under *Inställningar → Sekretess*.
+- Tydliga resor godkänns av sig själva (egen regel, samma som de tre senaste gångerna,
+  hemresa, resa till arbetet, privat plats, antaget kundbesök). Resten blir en fråga i taget
+  i telefonen via Home Assistant. Välj *Jag godkänner allt själv* under *Inställningar →
+  Självgående läge* om du hellre godkänner allt.
+- När månaden är klar skapas underlaget, och notisen i telefonen har en länk som går att
+  öppna utan inloggning.
+
+**Om nedladdningslänken:** den gäller i 7 dagar och för högst 10 hämtningar. Notisen går via
+Home Assistant, så den som har en Home Assistant-token eller kommer åt Home Assistants
+historik kan hämta underlaget så länge länken gäller. Stäng alla länkar med *Stäng alla
+nedladdningslänkar* på exportsidan. Länkarna stängs också när du byter lösenord inne i
+DriveLog – men **inte** när lösenordet återställs från fliken Konfiguration (se *Glömt
+lösenordet*). Tryck då på knappen efteråt om du vill vara säker.
+
+Mer om läget, platsantagandet och månadsskiftet finns i
+[docs/anvandning.md](https://github.com/SMGD-MP/TEST/blob/HEAD/docs/anvandning.md).
 
 ## STRATO DynDNS
 

@@ -131,6 +131,16 @@ Enheten väljs i DriveLog (listan fylls via Home Assistant i push-läget och via
 integrationens livstecken i pull-läget). Har du inte valt någon enhet i DriveLog
 används den som angetts i integrationen.
 
+- **Exakt en telefon** väljs av sig själv, både i DriveLog och i integrationen. Ett val
+  du redan har gjort ändras aldrig, och bland flera telefoner gissar DriveLog aldrig.
+- **Ingen telefon vald:** frågorna försvinner inte, de väntar i DriveLog. Home Assistant
+  visar reparationsärendet *DriveLog har frågor men ingen telefon är vald*, och DriveLog
+  visar banderollen *Ingen telefon vald*. Ärendet försvinner när en telefon är vald.
+- **DriveLog nås inte:** har integrationen inte nått DriveLog på 30 minuter, eller avvisar
+  DriveLog dess token, skickar integrationen en lokal notis *SMGD DriveLog nås inte* via
+  vald telefon – en gång per avbrott. Hör DriveLog inget livstecken från Home Assistant på
+  över 2 timmar visar webben banderollen *Home Assistant hörs inte*.
+
 ## Testnotis
 
 I DriveLog: **Skicka testnotis**. Tryck på **Fungerar** i notisen – då visas
@@ -149,6 +159,50 @@ Alla texter är på svenska, med mil och decimalkomma.
 | Samlingsnotis | *5 resor behöver granskas i körjournalen.* | Öppna granskning, Senare |
 | Veckosammanställning | *Veckans körjournal: 48,6 mil i tjänsten, 8,2 mil privat och 3 resor som behöver granskas.* | Öppna körjournal |
 | Daglig avstämning (av som standard) | *Dagens körjournal: 3 resor, 12,4 mil. 1 resa behöver granskas.* | Öppna granskning |
+
+Tabellen ovan gäller läget *Jag godkänner allt själv*. I **självgående läge** (standard
+från 1.1.0) ser notiserna ut så här:
+
+| Typ | Exempel | Knappar |
+| --- | --- | --- |
+| Ny resa | *Ny resa · tis 08:10–08:55 · Hemmet → Exempelgatan, Exempelstad · 2,3 mil. Tjänst eller privat?* | Tjänst: &lt;förslag&gt;, Alltid: &lt;förslag&gt;, Tjänst – skriv ärende (textsvar), Privat, Alltid privat här, Senare |
+| Vilket ärende? | *Exempel AB, Exempelstad, 2,3 mil* | Två förslag, Alltid: &lt;förslag&gt;, Skriv ärende (textsvar), Privat, Senare |
+| Vilket företag var det? | *tis 10:15 · Industrivägen, Exempelstad · 2,3 mil* | Skriv företagets namn (textsvar), Privat, Senare |
+| Antaget | *Antaget: Kundbesök Exempel AB · tis 2,3 mil · Räknas som tjänst i morgon 14:05 om du inte säger emot* | Stämmer, Fel – privat, Annat ärende (textsvar) |
+| Larm | *DriveLog: Kalendern synkas inte* | Öppna |
+| Månaden | *Oktober klart* (siffror, inga platser) eller *Oktober väntar* (vad som väntar) | Öppna underlaget, Se antagna |
+
+- Kategori och ärende besvaras i **samma tryck**. Det kommer **en fråga åt gången**; nästa
+  skickas när den förra är besvarad eller undanlagd. Ingen samlingsnotis och ingen
+  sammanslagningsfråga.
+- *Alltid …* sparar en egen regel för platsen och visas bara när det går: målet är inte
+  hemmet, en privat plats, tjänstestället eller ett hotell, och ärendet är kort och något du
+  tidigare har bekräftat för platsen (eller *Kundbesök &lt;företag&gt;*).
+- *Kan vara flera körningar.* står i frågan när resan kan rymma flera körningar. Då finns
+  ingen snabbknapp för Tjänst.
+- Påminnelse efter 24 timmar. Efter 48 timmar läggs frågan undan och finns kvar i webben.
+  Vid månadsskiftet ställs månadens undanlagda frågor om en gång.
+- Antaganden, larm och månadsnotiser räknas inte som frågor. Ett antagande får notis bara
+  första gången per plats. Ett larm skickas en gång per fel (högst två per dygn), och ingen
+  notis skickas när felet är borta. Månadsnotiser kommer högst en gång per dygn.
+- *Öppna underlaget* hämtar filen utan inloggning. Länken gäller i 7 dagar och för högst
+  10 hämtningar; se [Excel-export](excel-export.md#nedladdningslänken). Den som har en Home
+  Assistant-token eller kommer åt Home Assistants historik kan hämta filen så länge länken
+  gäller.
+- Textsvar tvättas från osynliga tecken och får vara 1–200 tecken.
+
+### Larm
+
+| Larm | När |
+| --- | --- |
+| *Volvo-inloggningen går snart ut* | 14 och 3 dygn innan Volvos behörighet går ut |
+| *Volvo behöver ny inloggning* | Volvo har avvisat inloggningen |
+| *Hämtningen från Volvo fungerar inte* | Ingen lyckad hämtning på över 6 timmar |
+| *Bilen har inte hört av sig* | Hämtningen fungerar men bilen har inte rapporterat på 4 dygn. Det är normalt när bilen står |
+| *Kalendern synkas inte* | Outlook behöver anslutas igen, har fel eller har inte synkats på över ett dygn |
+
+Larmen innehåller aldrig platser, VIN eller registreringsnummer. Knappen *Öppna* går till
+inställningarna. Tysta timmar gäller.
 
 Efter **Arbete** frågar DriveLog direkt efter syftet om det saknas.
 **Granska/Öppna** öppnar `…/m/q/<id>` (mobil snabbvy) eller `…/review` och ändrar
@@ -177,10 +231,10 @@ Under **Inställningar → Notiser** i DriveLog:
 | Max per dygn | 6 | Övriga frågor väntar till nästa dygn (0 = obegränsat). |
 | Samlingsfönster | 10 min | Väntetid så att flera frågor kan samlas. |
 | Samlingsnotis vid fler än | 3 | Fler väntande frågor → en samlingsnotis. |
-| Påminnelse efter | 20 h | Påminnelse om obesvarad fråga (ersätter den gamla notisen). |
+| Påminnelse efter | 24 h | Påminnelse om obesvarad fråga (ersätter den gamla notisen). |
 | Max påminnelser | 1 | |
-| Frågan går ut efter | 72 h | Därefter bara i webbappen. |
-| Dölj platser på låsskärmen | på | Låsskärmstexten innehåller inga platsnamn. |
+| Frågan går ut efter | 48 h | Därefter bara i webbappen. |
+| Dölj platser på låsskärmen | av | På: låsskärmstexten innehåller bara dag och mil, inga platser. |
 | Veckosammanställning | söndag 18:00 | I din tidszon. |
 | Daglig avstämning | 20:30 | Skickas bara om något behöver granskas. |
 
@@ -204,11 +258,14 @@ notiser. Användbart efter att DriveLog varit nere.
 
 ## Sekretess
 
-- Notistexter innehåller aldrig gatuadresser. Hemmet visas som *Hemmet*, platser
-  du markerat som privata som *Privat plats*, övriga med platsnamn eller ort.
-- Med **Dölj platser på låsskärmen** (på som standard) innehåller notistexten inga
-  platsnamn alls, t.ex. *Ny resa: 4,2 mil. Var detta arbete eller privat?*.
-  Detaljerna syns först när du öppnar DriveLog.
+- Notistexter innehåller aldrig husnummer. Hemmet visas som *Hemmet*, platser
+  du markerat som privata som *Privat plats*, bekräftade platser med sitt namn och
+  obekräftade platser bara som *företagsnamn, ort* eller *gata utan husnummer, ort*.
+  Hela adressen syns först i `/m/q` efter inloggning.
+- Med **Dölj platser på låsskärmen** innehåller notistexten inga platser alls, bara dag
+  och mil. Från 1.1.0 är inställningen **av** som standard om du aldrig har ändrat den
+  (tidigare på). Har du själv satt den gäller ditt val.
+- Larm och månadsnotiser innehåller aldrig platser, VIN eller belopp per resa.
 - iOS har inget sätt att via notisens innehåll dölja den på låsskärmen. Ställ in
   **Inställningar → Notiser → Home Assistant → Visa förhandsvisningar: När olåst**
   på iPhone. På Android: dölj känsligt innehåll på låsskärmen i systemets
@@ -226,7 +283,8 @@ notiser. Användbart efter att DriveLog varit nere.
 | *Återautentisering krävs* | API-token har återkallats – skapa en ny i DriveLog och ange den. |
 | Notisen kommer men knapparna saknas | Kontrollera att en `notify.mobile_app_*`-tjänst används (inte en notify-entitet), och tryck länge/dra ned på notisen för att se knapparna. |
 | Knapptryck ger ingen effekt | Kontrollera i **Utvecklarverktyg → Händelser** att `mobile_app_notification_action` med `DRIVELOG_…` tas emot. Titta på diagnostiken (kö och senaste fel). Kör `smgd_drivelog.flush_queue`. |
-| Inga notiser alls | Kontrollera notistyper, tysta timmar och max per dygn i DriveLog, att resan är nyare än 48 timmar och att en enhet är vald. |
+| Inga notiser alls | Kontrollera notistyper, tysta timmar och max per dygn i DriveLog, att resan är nyare än 48 timmar och att en enhet är vald. Finns reparationsärendet *DriveLog har frågor men ingen telefon är vald*: välj telefonen. |
+| Bara en fråga i taget | Självgående läge skickar nästa fråga när den förra är besvarad eller undanlagd (48 h). Övriga finns under *Granskning*. |
 | Testnotis i push-läget misslyckas | Kontrollera Home Assistants adress (nås den från DriveLog?) och att long-lived token är giltig. |
 
 Diagnostik: **Enheter och tjänster → SMGD DriveLog → ⋮ → Ladda ned diagnostik**.

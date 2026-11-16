@@ -24,14 +24,14 @@ Koden är uppdelad i tydligt separerade moduler under `backend/app/services/`:
 | Modul | Ansvar |
 | --- | --- |
 | `importer/` | Tolkning av Volvo-exporter, förhandsgranskning, bekräfta, ångra |
-| `trips/` | Journalresor, segment, sammanslagning, dataluckor, tjänsteresor, granskningsärenden |
-| `places/` | Platsregister, adressnormalisering, geofence, förslag |
-| `classify/` | Regelmotor, syftesförslag, AI-lager, fabriceringsskydd |
+| `trips/` | Journalresor, segment, sammanslagning, dataluckor, tjänsteresor, granskningsärenden, uträknad starttid (`start_time.py`) |
+| `places/` | Platsregister, adressnormalisering, geofence, förslag, geokodning mot OpenStreetMap (`geocode.py`) |
+| `classify/` | Regelmotor, syftesförslag, AI-lager, fabriceringsskydd, självgående läge (`autopilot.py`) |
 | `learning/` | Mönster, användarbeslut, ångra |
 | `calendar/` | Microsoft Graph: OAuth, synk, matchning |
 | `volvo/` | OAuth, API-klient, insamlare, resedetektering, demoläge |
-| `ha/` | Notismotor, svarshantering, Home Assistant-klient |
-| `stats/`, `export/` | Dashboard, milersättning, rapporter, avvikelser, Excel (enkel och detaljerad) |
+| `ha/` | Notismotor, svarshantering, Home Assistant-klient, antagande- och månadsnotiser (`notices.py`), larm (`alerts.py`) |
+| `stats/`, `export/` | Dashboard, milersättning, rapporter, avvikelser, Excel (enkel och detaljerad), månadsskiftet (`month_close.py`) och signerade nedladdningslänkar (`links.py`) |
 
 ## Tre nivåer av resedata
 
@@ -63,8 +63,12 @@ Varje fysisk resa bär sin källa och kvalitet:
 | `is_complete`, `possible_missed_trips`, `quality_flags` | luckor och osäkerheter |
 
 När källan saknar en faktisk starttid lagras **ingen** starttid – bara kända gränser
-(`start_earliest`, `start_latest`). Gränssnittet visar då "okänd" och exporten lämnar cellen
-tom med en notering.
+(`start_earliest`, `start_latest`). Gränssnittet visar då "okänd" och exporten skriver bara
+sluttiden ("–08:52"). Räcker bilens egna avläsningar räknas starttiden fram inom gränserna
+(`estimated`, med grunden i `raw_trips.start_estimate_basis`); den visas med "≈" och
+felmarginal och skrivs "ca 07:35" i exporten. En starttid som användaren anger sparas i
+`logical_trips.start_time_override` och ger kvaliteten `exact`; den fysiska resan ändras
+aldrig.
 
 ## Resedetektering ur Volvo-data
 
@@ -112,6 +116,11 @@ rapporteras i efterhand slås ihop retroaktivt. Dessutom gäller:
   regel A slås resorna ihop, annars ställs en fråga som anger intervallet. Helt okända tider
   lämnas för manuell hantering.
 - **Överlapp** i tid eller mätarställning slås aldrig ihop utan blir ett avvikelseärende.
+- **Privata stopp.** Ett stopp hemma eller vid en bekräftad privat plats slås aldrig ihop när
+  någon av resorna kommer från bilen, i något läge.
+- **Självgående läge.** För resor från bilen gäller bara: stopp på högst 15 minuter vid en
+  bekräftad tank- eller laddstation slås ihop. Inga frågor ställs. Platsens bekräftade typ
+  avgör, aldrig kartans förslag.
 
 ## Vad som redovisas: journalomfång
 
@@ -138,6 +147,26 @@ aldrig ensam ge automatisk klassning; AI-förslag (`trip_classifications`, `trip
 `trip_evidence`) lagras skilt från användarens beslut; mönster räknas om från grunden ur
 bekräftade beslut, så en ångrad korrigering försvinner helt ur inlärningen.
 
+## Självgående läge
+
+Med `automation.mode = self_driving` (standard från 1.1.0) avgör `classify/autopilot.py`
+live-resor som kommit in efter `automation.active_since`. Pipelinen kör den efter
+resekedjorna och före granskningsärendena. Regeltabellen (egen regel, historik, hemresa,
+pendling, privat plats och platsantagande) beskrivs i [Användning](anvandning.md#självgående-läge).
+Ett automatiskt godkännande sparas med `approval_source`, `approval_basis` (skäl, regel,
+relaterad resa och vetotid) och `auto_approved_at`. Det skapar ingen `LearningFeedback` och
+räknas aldrig in i mönstren; ägarens beslut sätter `approval_source = user` (eller `bulk`).
+Importerade och manuellt inlagda resor, resor från före `active_since` och läget `manual`
+beter sig som tidigare.
+
+Schemaläggarens `tick` kör i ordning: `autopilot.ensure_active_since`, Volvo-hämtning,
+demobilen, väckning av uppskjutna ärenden, geokodning (`places.geocode.run_pending`, med HTTP
+utan öppen databastransaktion), frågor i telefonen (`ha.notifier.ensure_open_questions`),
+leverans, schemalagda notiser, larm (`ha.alerts.run`) och månadsskiftet
+(`export.month_close.run_due`). Varje steg har egen session, och ett fel i ett steg stoppar
+inte de andra. Geokodningssvar cachas per ruta i `geocode_cache`; månadsskiftets läge
+lagras i `month_closes`.
+
 ## Tid
 
 All tid lagras i UTC och visas i `Europe/Stockholm` (inställbart). Importerade lokala
@@ -161,7 +190,7 @@ moduler utan att kärnan ändras.
 
 ## Databas
 
-37 tabeller, versionshanterade med Alembic (`backend/alembic/versions`). JSON-fält lagras
+40 tabeller, versionshanterade med Alembic (`backend/alembic/versions`). JSON-fält lagras
 som JSONB i PostgreSQL. Migrationerna körs automatiskt när API-containern startar.
 
 ## Enprocessläge

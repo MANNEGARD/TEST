@@ -124,7 +124,7 @@ Bas-URL `https://api.volvocars.com`. Headers: `authorization: Bearer …`,
 | `…/vehicles/{vin}/odometer` | ja | Mätarställning (heltal km) |
 | `/location/v1/vehicles/{vin}/location` | ja | GeoJSON-punkt `[lon, lat, höjd]` + tidsstämpel |
 | `…/vehicles/{vin}/fuel` | ja | Tanknivå (l), batterinivå (%) |
-| `…/vehicles/{vin}/statistics` | ja | Snittförbrukning, trippmätare, räckvidd |
+| `…/vehicles/{vin}/statistics` | ja | Snittförbrukning, trippmätare (`tripMeterAutomatic`), snittfart (`averageSpeedAutomatic`, sparas från 1.1.0), räckvidd |
 | `…/vehicles/{vin}/engine-status` | ja | `RUNNING` / `STOPPED` |
 | `/energy/v2/vehicles/{vin}/state` | ja | Batterinivå, elräckvidd, laddstatus |
 | `/energy/v2/vehicles/{vin}/capabilities` | provas | Vilka energivärden som stöds |
@@ -170,15 +170,34 @@ Resedetekteringen (`detection.process_vehicle`) är en tillståndsmaskin:
 * **Sträcka** = skillnad i mätarställning (`distance_quality = odometer`).
 * **Sluttid** = bilens positionstidsstämpel (`reported`) om den är rimlig, annars en märkt
   uppskattning (`estimated`/`bounded`).
-* **Starttid hittas aldrig på.** `started_at` lämnas tomt och i stället anges
-  `start_earliest`–`start_latest` (`start_time_quality = bounded`).
+* **Starttid hittas aldrig på.** Gränserna `start_earliest`–`start_latest` räknas alltid
+  fram. Räcker bilens egna avläsningar räknas starttiden fram inom dem
+  (`start_time_quality = estimated`, grunden i `start_estimate_basis`):
+  * Senaste möjliga start snävas in av en rapport om att motorn går och av första
+    mätarökningen. En rapport om avstängd motor används aldrig (laddhybriden kan köra på el).
+  * Två mätaravläsningar under färd med 10–130 km/h, när fönstret är högst 15 minuter:
+    starten räknas bakåt från farten. Marginalen är halva fönstret.
+  * Annars, när fönstret är högst 10 minuter: fönstrets mitt, med högst 5 minuters marginal.
+  * Bilens trippmätare och snittfart (`tripMeterAutomatic`, `averageSpeedAutomatic`) är byggt
+    som en tredje väg men **avstängt** tills det har prövats mot en riktig bil att snittfarten
+    räknas över förfluten tid och att trippmätaren nollställs vid resans start.
+  * Tiden avrundas till hel minut och ligger alltid inom gränserna. Räcker inget av detta
+    lämnas `started_at` tomt (`start_time_quality = bounded`).
+
+  Appen visar en uträknad tid som "≈ 07:35 (±4 min)" och underlaget som "ca 07:35". En tid
+  du själv anger märks "angiven av dig".
 * **Möjliga missade resor** flaggas (`possible_missed_trips`, ofullständig resa och ett
   granskningsärende) när mätarsträckan är längre än `detour_factor` × fågelväg +
   `detour_slack_km`, när mätaren ökat men positionen är oförändrad (rundresa), eller efter
   ett insamlingsuppehåll längre än `max_unobserved_minutes`.
 * Bränsle/energi per resa är **okänt** (`unknown`).
-* Nya resor blir oavgjorda journalresor som kräver granskning och går genom samma
-  efterbearbetning som övriga resor (sammanslagning, luckor, klassificering, notiser).
+* **Platsen:** ligger stoppet vid en känd plats används den. Annars skapas en ny obekräftad
+  plats (radie 75 m) vars adress slås upp i OpenStreetMap i bakgrunden – aldrig under själva
+  detekteringen. Se [Användning → Adresser](anvandning.md#adresser).
+* Nya resor blir oavgjorda journalresor och går genom samma efterbearbetning som övriga resor
+  (sammanslagning, luckor, klassificering, notiser). I självgående läge avgörs tydliga resor
+  av sig själva och resten blir en fråga, se [Användning → Självgående
+  läge](anvandning.md#självgående-läge).
 * Föråldrade uppgifter (äldre än `stale_after_minutes`, standard 24 h) flaggas med ett
   granskningsärende ("Fordonet har inte rapporterat nya uppgifter").
 
@@ -190,8 +209,9 @@ blir granskningsärenden.
 
 ## 7. Begränsningar
 
-* **Positionen uppdateras först vid resans slut.** Det går inte att följa bilen under färd,
-  och starttiden för en resa är därför aldrig känd.
+* **Positionen uppdateras först vid resans slut.** Det går inte att följa bilen under färd.
+  Starttiden kan bara räknas fram när mätarställning eller motorstatus har rapporterats under
+  färden; annars är den okänd.
 * **Ingen resejournal** i de publika API:erna. Volvo-appens körjournal kan bara fås via
   export/import.
 * **Ingen förbrukning per resa** – endast tanknivå, batterinivå och bilens löpande snitt.
@@ -220,6 +240,8 @@ Följande är byggt enligt dokumentationen men **inte prövat mot en riktig bil*
 * Om token-endpointens felkoder och `scope` i tokensvaret ser ut exakt som i dokumentationen,
   samt om `Retry-After` skickas vid 429.
 * Tidsstämplarnas noggrannhet (bilens klocka kontra serverns).
+* Om `averageSpeedAutomatic` räknas över förfluten tid och om `tripMeterAutomatic` nollställs
+  vid resans start. Därför är starttid ur trippmätaren avstängd i 1.1.0.
 
 ## 9. Demoläge
 
