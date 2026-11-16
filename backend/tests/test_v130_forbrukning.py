@@ -132,7 +132,7 @@ def test_readings_before_arrival_do_not_count_as_the_arrival():
 
 def observation(db, vehicle, at: datetime, **fields) -> M.VehicleObservation:
     obs = M.VehicleObservation(vehicle_id=vehicle.id, fetched_at=at, last_seen_at=fields.pop("seen", at),
-                               content_hash=f"h-{at.isoformat()}-{fields}", source="volvo_api", **fields)
+                               content_hash=f"h-{at.isoformat()}"[:64], source="volvo_api", **fields)
     db.add(obs)
     db.flush()
     return obs
