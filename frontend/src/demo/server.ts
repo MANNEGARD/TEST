@@ -1426,7 +1426,33 @@ function dashboard(kind: string, path: string, q: URLSearchParams): Json {
     return summarize(rec.json, start ?? "0000", end ?? "9999");
   }
   if (kind === "timeseries") return timeseries(rec.json);
+  if (kind === "destinations") return destinations(rec.json);
   return rec.json;
+}
+
+/** Destinationerna: platsens namn och fördelningen arbete/privat följer ägarens ändringar. */
+function destinations(base: Json): Json {
+  const out = clone(base);
+  const start = out.period?.start ?? "0000";
+  const end = out.period?.end ?? "9999";
+  const rows = allTrips().filter((t) => inPeriod(t, start, end));
+  const home = S().locations.find((l) => l.type === "home");
+  for (const item of out.items ?? []) {
+    const locId = item.location_id ?? (item.type === "home" ? home?.id : null);
+    if (!locId) continue;
+    const loc = S().locations.find((l) => l.id === locId);
+    if (loc && item.location_id) {
+      item.label = loc.name;
+      item.type = loc.type;
+    }
+    const mine = rows.filter((t) => t.end_location_id === locId);
+    if (mine.length !== item.trips) continue; // räknas inte likadant som servern – behåll inspelningen
+    const km = (c: string) => round1(mine.filter((t) => t.category === c).reduce((a, t) => a + (Number(t.distance_km) || 0), 0));
+    item.work_km = km("work");
+    item.private_km = km("private");
+    item.undecided_km = km("undecided");
+  }
+  return out;
 }
 
 // ----------------------------------------------------------------------------- router

@@ -223,6 +223,28 @@ try {
     if (summaryAfter.review.total !== after) fail(`översiktens "Att granska" (${summaryAfter.review.total}) följer inte granskningen (${after})`);
     if (summaryAfter.distance.private.km <= summaryBefore.distance.private.km) fail("privat körning på översikten ökade inte");
     await page.screenshot({ path: path.join(SHOTS, "granskning-efter.png"), fullPage: true });
+    // Ångra i kvittot: resan och räknaren går tillbaka.
+    await page.locator("[data-sonner-toast] button", { hasText: "Ångra" }).first().click();
+    await expectText(page, "Ändringen är ångrad.");
+    await page.waitForTimeout(600);
+    if ((await reviewTotal()) !== before) fail(`Ångra återställde inte granskningen (${before} → ${await reviewTotal()})`);
+  });
+
+  await section("ändringshistorik", async () => {
+    step("Resans sida: godkänn, ändringshistoriken visar beslutet och Ångra ändring återställer");
+    const proposed = trips.find((t) => t.review_status === "proposed" && t.category === "work");
+    await visit(page, `/journal/${proposed.id}/`);
+    await page.getByRole("button", { name: "Godkänn klassningen" }).click();
+    await expectText(page, "Godkänd.");
+    let d = await api(page, "GET", `/trips/${proposed.id}`);
+    if (d.trip.review_status !== "approved" || d.history.length < 1) fail("godkännandet syns inte i ändringshistoriken");
+    const preview = await api(page, "GET", `/exports/preview?from=2026-11-01&to=2026-11-30&vehicle_id=${seed.vehicleId}`);
+    if (!preview.rows.some((r) => r.trip_id === proposed.id)) fail("den godkända resan kom inte med i exportens förhandsvisning");
+    await page.getByText("Ändringshistorik").click();
+    await page.getByRole("button", { name: "Ångra ändring" }).click();
+    await expectText(page, "Ändringen är ångrad.");
+    d = await api(page, "GET", `/trips/${proposed.id}`);
+    if (d.trip.review_status !== "proposed") fail(`Ångra ändring gav ${d.trip.review_status}`);
   });
 
   await section("snabbfråga", async () => {
@@ -261,7 +283,7 @@ try {
   });
 
   await section("telefonen", async () => {
-    step("Integrationer: Volvo och Home Assistant anslutna, demotelefonen svarar, Synka nu ger demobesked");
+    step("Integrationer: Volvo och Home Assistant anslutna, demotelefonen svarar, Synka nu och testnotis");
     await visit(page, "/integrations/", "integrationer");
     for (const id of ["volvo", "home_assistant"]) {
       if (!(await page.getByTestId(`card-${id}`).getByText("Ansluten", { exact: true }).count())) fail(`${id} visas inte som ansluten`);
@@ -284,7 +306,9 @@ try {
     }
     await page.keyboard.press("Escape");
     await page.getByTestId("card-volvo").getByRole("button", { name: /Synka nu/ }).click();
-    await expectText(page, "Det här går inte att prova i demot");
+    await expectText(page, "Synkad – inga nya resor sedan sist.");
+    await page.getByRole("button", { name: "Skicka testnotis" }).first().click();
+    await expectText(page, "Testnotisen är skickad till telefonen.");
   });
 
   await section("månadens genomgång", async () => {
@@ -355,6 +379,22 @@ try {
     const after = (await api(page, "GET", "/locations")).find((l) => l.id === target.id);
     if (after.name !== "Exempelkund Nord AB" || !after.confirmed) fail("platsen blev inte bekräftad med nytt namn");
     await page.screenshot({ path: path.join(SHOTS, "platser-efter.png"), fullPage: true });
+    const sBefore = (await api(page, "GET", "/locations/suggestions")).types.length;
+    const accept = page.getByRole("button", { name: /^Godkänn förslaget för / }).first();
+    if (sBefore && (await accept.count())) {
+      await accept.click();
+      await page.waitForTimeout(800);
+      if ((await api(page, "GET", "/locations/suggestions")).types.length !== sBefore - 1) fail("det godkända förslaget finns kvar");
+    }
+  });
+
+  await section("fordon", async () => {
+    step("Inställningar → Fordon: byt namn, sparas och syns i fordonsväljaren");
+    await visit(page, "/settings/");
+    await page.getByLabel("Namn", { exact: true }).first().fill("Tjänstebilen");
+    await page.getByRole("button", { name: "Spara" }).first().click();
+    await expectText(page, "Fordon och förare är sparade.");
+    if ((await api(page, "GET", "/vehicles"))[0].name !== "Tjänstebilen") fail("fordonets namn sparades inte");
   });
 
   await section("automatik", async () => {
