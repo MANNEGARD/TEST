@@ -728,8 +728,8 @@ def test_expensive_recurrences_are_skipped_quickly():
         vevent("s@example.invalid", DTSTART="20260901T080000Z", RRULE="FREQ=SECONDLY", SUMMARY="Sekund"),
         vevent("m@example.invalid", DTSTART="20260901T080000Z", RRULE="FREQ=MINUTELY", SUMMARY="Minut"),
         vevent("h@example.invalid", DTSTART="20260901T080000Z", RRULE="FREQ=DAILY;BYHOUR=1,2,3", SUMMARY="Timme"),
-        vevent("o@example.invalid", DTSTART="19000101T080000Z", RRULE="FREQ=DAILY;BYDAY=MO,TU,WE,TH,FR,SA,SU",
-               SUMMARY="Sedan 1900"),
+        vevent("o@example.invalid", DTSTART="10000101T080000Z", RRULE="FREQ=YEARLY;BYDAY=MO,TU,WE,TH,FR,SA,SU",
+               SUMMARY="Varje dag sedan år 1000"),
         vevent("u@example.invalid", DTSTART="20200101T080000Z", RRULE="FREQ=DAILY;UNTIL=20200201T000000Z",
                SUMMARY="Slut före fönstret"),
         vevent("ok@example.invalid", DTSTART="20260915T080000Z", SUMMARY="Vanligt möte"),
@@ -801,6 +801,51 @@ def test_expansion_stops_at_the_occurrence_cap(monkeypatch):
                              SUMMARY=f"Daglig {i}", LOCATION="Kontoret") for i in range(10)])
     result = parse(data)
     assert result.truncated and len(result.events) <= 50
+
+
+@pytest.mark.parametrize("rrule", [
+    "FREQ=DAILY;BYMONTH=2;BYMONTHDAY=30",  # 30 februari finns inte – biblioteket letar till år 9999
+    "FREQ=WEEKLY;BYMONTH=4,6;BYMONTHDAY=31",
+    "FREQ=MONTHLY;BYDAY=MO;BYSETPOS=6",
+    "FREQ=YEARLY;BYMONTH=6;BYYEARDAY=1",
+    "FREQ=MONTHLY;BYDAY=6MO",
+    "FREQ=DAILY;BYSETPOS=2",
+    "FREQ=YEARLY;BYWEEKNO=1;BYMONTH=6",
+])
+def test_rules_that_can_never_occur_are_skipped_quickly(rrule):
+    data = calendar(*[vevent(f"n{i}@example.invalid", DTSTART="20260101T080000Z", RRULE=rrule, SUMMARY="Aldrig")
+                      for i in range(3)],
+                    vevent("ok@example.invalid", DTSTART="20260915T080000Z", SUMMARY="Vanligt möte"))
+    began = time.process_time()
+    result = parse(data)
+    assert time.process_time() - began < 2.0
+    assert [e["subject"] for e in result.events] == ["Vanligt möte"] and result.skipped == 3
+
+
+def test_feasible_filtered_rules_are_still_read():
+    data = calendar(
+        vevent("a@example.invalid", DTSTART="20260101T080000Z", RRULE="FREQ=YEARLY;BYMONTH=9;BYMONTHDAY=30",
+               SUMMARY="Årsmöte"),
+        vevent("b@example.invalid", DTSTART="20260101T080000Z", RRULE="FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=-1",
+               SUMMARY="Sista vardagen"),
+        vevent("c@example.invalid", DTSTART="20260101T080000Z", RRULE="FREQ=MONTHLY;BYMONTHDAY=-1",
+               SUMMARY="Sista dagen"),
+        vevent("d@example.invalid", DTSTART="20260101T080000Z", RRULE="FREQ=YEARLY;BYWEEKNO=40;BYDAY=TU;BYMONTH=9,10",
+               SUMMARY="Vecka 40"),
+        vevent("e@example.invalid", DTSTART="20260101T080000Z", RRULE="FREQ=YEARLY;BYWEEKNO=1;BYMONTH=12",
+               SUMMARY="Vecka 1 i december"),  # kan aldrig ligga i fönstret, men är möjlig
+    )
+    result = parse(data)
+    assert result.skipped == 0
+    assert sorted({e["subject"] for e in result.events}) == ["Sista dagen", "Sista vardagen", "Vecka 40", "Årsmöte"]
+
+
+def test_expansion_stops_at_the_time_budget(monkeypatch):
+    monkeypatch.setattr(ics, "EXPAND_SECONDS", 0.0)
+    data = calendar(*[vevent(f"d{i}@example.invalid", DTSTART="20260801T080000Z", RRULE="FREQ=DAILY",
+                             SUMMARY=f"Daglig {i}", LOCATION="Kontoret") for i in range(5)])
+    result = parse(data)
+    assert result.truncated and len({e["subject"] for e in result.events}) < 5
 
 
 def test_ended_count_series_do_not_use_the_window_budget():

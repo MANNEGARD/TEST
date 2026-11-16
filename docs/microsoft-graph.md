@@ -74,7 +74,8 @@ inställbart). Händelser som har tagits bort i Outlook tas bort i DriveLog vid 
 ### Båda sätten samtidigt
 
 Har du både kalenderlänk och appregistrering används båda. Ett möte som finns i båda räknas
-bara en gång. Att koppla bort Outlook (appregistreringen) rör inte länkens händelser, och att
+bara en gång (samma möte känns igen på dess id, eller på samma start, slut och rubrik – så även
+upprepade möten). Att koppla bort Outlook (appregistreringen) rör inte länkens händelser, och att
 ta bort länken rör inte Outlooks.
 
 ### Gränser

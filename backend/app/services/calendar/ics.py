@@ -22,6 +22,7 @@ import hashlib
 import logging
 import math
 import re
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
@@ -59,6 +60,8 @@ MAX_WINDOW_ESTIMATE = 20_000
 MAX_OCCURRENCES = 5_000
 # Hårt tak under själva expansionen (förekomster som byggs i minnet), oavsett uppskattningen.
 MAX_EXPANDED = 20_000
+# Tidsbudget för expansionen (sekunder processortid är svårt att mäta per tråd; väggtid räcker).
+EXPAND_SECONDS = 15.0
 
 MSG_NOT_ICS = "Filen bakom länken är ingen kalender (ICS)."
 MSG_TOO_MANY = "Kalendern innehåller för många händelser (högst 25 000)."
@@ -198,6 +201,75 @@ def _per_period(rule: Any, freq: str) -> int:
     return max(1, months)
 
 
+_MONTH_DAYS = (31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+
+
+def _ints(rule: Any, part: str) -> list[int]:
+    return [int(v) for v in rule.get(part) or []]
+
+
+def _yeardays_possible(months: frozenset[int], monthdays: frozenset[int], yeardays: frozenset[int]) -> bool:
+    """Finns någon dag (vanligt år eller skottår) som uppfyller BYYEARDAY, BYMONTH och BYMONTHDAY?
+    Går igenom BYYEARDAY-värdena, inte årets dagar, så att kostnaden följer regelns längd."""
+    for year, year_len in ((2023, 365), (2024, 366)):
+        for yd in yeardays:
+            if not 1 <= abs(yd) <= year_len:
+                continue
+            d = date(year, 1, 1) + timedelta(days=(yd - 1 if yd > 0 else year_len + yd))
+            if months and d.month not in months:
+                continue
+            last = (date(year + d.month // 12, d.month % 12 + 1, 1) - timedelta(days=1)).day
+            if monthdays and d.day not in monthdays and d.day - last - 1 not in monthdays:
+                continue
+            return True
+    return False
+
+
+def _weeks_possible(months: frozenset[int], weeks: list[int]) -> bool:
+    """Kan någon av veckorna (ISO-veckonummer) ligga i någon av månaderna? Generöst räknat:
+    vecka n börjar mellan 29 december och 4 januari plus 7·(n−1) dagar."""
+    if not any(1 <= abs(w) <= 53 for w in weeks):
+        return False
+    if not months:
+        return True
+    ref = date(2023, 1, 1)
+    for w in weeks:
+        if not 1 <= abs(w) <= 53:
+            continue
+        first = -4 + 7 * (w - 1) if w > 0 else 365 + 4 - 7 * -w - 7
+        for offset in range(first, first + 15):
+            if (ref + timedelta(days=offset)).month in months:  # även dagar i grannåren
+                return True
+    return False
+
+
+def _never_occurs(rule: Any, freq: str, per: int) -> bool:
+    """Sant för en regel som aldrig kan ge någon förekomst (30 februari, BYSETPOS=6 bland fem
+    måndagar …). Biblioteket letar då efter nästa förekomst ända till år 9999, vilket tar
+    sekunder per serie – en billig väg att dra processor."""
+    months = frozenset(_ints(rule, "BYMONTH"))
+    monthdays = frozenset(_ints(rule, "BYMONTHDAY"))
+    yeardays = frozenset(_ints(rule, "BYYEARDAY"))
+    if months and not any(1 <= m <= 12 for m in months):
+        return True
+    if monthdays and not any(1 <= abs(d) <= _MONTH_DAYS[m - 1] for d in monthdays
+                             for m in (months or range(1, 13)) if 1 <= m <= 12):
+        return True
+    if yeardays and not _yeardays_possible(months, monthdays, yeardays):
+        return True
+    weeks = _ints(rule, "BYWEEKNO")
+    if weeks and freq == "YEARLY" and not _weeks_possible(months, weeks):
+        return True
+    ordinals = [int(m.group(0)) for v in rule.get("BYDAY") or [] if (m := _ORDINAL_DAY.match(str(v)))]
+    plain = len(rule.get("BYDAY") or []) - len(ordinals)
+    if ordinals and not plain:
+        limit = 5 if freq == "MONTHLY" or (freq == "YEARLY" and months) else 53
+        if not any(1 <= abs(n) <= limit for n in ordinals):
+            return True
+    setpos = _ints(rule, "BYSETPOS")
+    return bool(setpos) and not any(1 <= abs(n) <= per for n in setpos)
+
+
 def _series_cost(component: Any, window_start: datetime, window_end: datetime, tz: ZoneInfo) -> tuple[int, int] | None:
     """Uppskattade (steg från seriens start, förekomster i fönstret), eller None för en serie
     som inte ska expanderas (för tät, oläslig eller slut före fönstret)."""
@@ -222,7 +294,12 @@ def _series_cost(component: Any, window_start: datetime, window_end: datetime, t
             return None
         if isinstance(until_v, (datetime, date)) and _as_utc(until_v, tz) < window_start:
             return None
-        per = _per_period(rule, freq)  # kandidater per period (kostnaden)
+        try:
+            per = _per_period(rule, freq)  # kandidater per period (kostnaden)
+            if _never_occurs(rule, freq, per):
+                return None
+        except (TypeError, ValueError, AttributeError):
+            return None
         hits = min(per, setpos) if setpos else per  # förekomster per period (högst)
         period = timedelta(days=_PERIOD_DAYS[freq]) * interval
         span = window_end - start
@@ -356,11 +433,16 @@ def _prefilter(
     return skipped, recurring, aliases
 
 
-def _collect(query: Any, start: datetime, end: datetime, out: list[Any]) -> tuple[int, bool]:
+def _collect(
+    query: Any, start: datetime, end: datetime, out: list[Any], deadline: float
+) -> tuple[int, bool]:
     """Lägger förekomsterna i [start, end] i ``out``, serie för serie och förekomst för
-    förekomst, och slutar vid ``MAX_EXPANDED``. Returnerar (antal trasiga serier, kapat)."""
+    förekomst, och slutar vid ``MAX_EXPANDED`` eller när tidsbudgeten är slut. Returnerar
+    (antal trasiga serier, kapat)."""
     failed = 0
     for series in query.series:
+        if time.monotonic() > deadline:
+            return failed, True
         try:
             for occurrence in series.between(start, end):
                 if len(out) >= MAX_EXPANDED:
@@ -376,13 +458,14 @@ def _expand(cal: Any, start: datetime, end: datetime) -> tuple[list[Any], int, b
     inte att dela upp i serier prövas varje UID för sig, så att en trasig händelse inte stoppar
     resten."""
     out: list[Any] = []
+    deadline = time.monotonic() + EXPAND_SECONDS
     query: Any = None
     try:
         query = recurring_ical_events.of(cal, skip_bad_series=True)
     except Exception:  # noqa: S110 – biblioteket kan kasta många slags fel på trasig indata
         query = None
     if query is not None:
-        failed, capped = _collect(query, start, end, out)
+        failed, capped = _collect(query, start, end, out, deadline)
         return out, failed, capped
     timezones = [c for c in cal.subcomponents if c.name != "VEVENT"]
     groups: dict[str, list[Any]] = {}
@@ -397,7 +480,7 @@ def _expand(cal: Any, start: datetime, end: datetime) -> tuple[list[Any], int, b
         except Exception:
             skipped += 1
             continue
-        failed, capped = _collect(part_query, start, end, out)
+        failed, capped = _collect(part_query, start, end, out, deadline)
         skipped += failed
         if capped:
             return out, skipped, True
