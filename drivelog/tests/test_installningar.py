@@ -170,7 +170,7 @@ def test_extra_domaner_dubbletter_och_fel_typ():
 @pytest.mark.parametrize(
     "vard",
     [
-        "127.0.0.1", "127.1", "0.0.0.0", "0", "2130706433", "0x7f000001", "0x7f.1", "169.254.169.254",
+        "127.0.0.1", "127.1", "0.0.0.0", "0", "2130706433", "0x7f000001", "0x7f.1", "169.254.169.254",  # noqa: S104
         "172.17.0.1", "192.168.1.10", "10.0.0.1.", "localhost", "ip6-localhost", "ip6-loopback",
         "drivelog.localhost", "host.docker.internal", "gateway.docker.internal", "drivelog",
     ],
