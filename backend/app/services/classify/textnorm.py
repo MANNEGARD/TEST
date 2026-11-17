@@ -84,6 +84,10 @@ def strip_hidden(text: str) -> str:
 
     Radbrytning, vagnretur och tabb lämnas (formkontrollen avvisar flera rader), och rad- och
     styckeavgränsare (U+2028/U+2029) blir radbrytningar. Synlig text ändras inte.
+
+    Till skillnad från ``text_safety.strip_invisible`` (importen, ägarens egen text) tas även
+    U+200C/U+200D bort: ett AI-ärende är en kort mening där sammansatta emoji inte hör hemma,
+    och ett dolt bindetecken skulle kunna dela ett ord förbi namnspärren.
     """
     out: list[str] = []
     for ch in text:

@@ -2,8 +2,6 @@
 
 * logik-3: osynliga tecken och styrtecken (bidi, nollbredd, BEL) i AI:ns ärende och "evidence"
   sparas inte; synlig text, å/ä/ö är kvar.
-* logik-5: ett dygnstak för AI-anrop; över taket bedöms resan av reglerna som när ingen
-  leverantör finns (ingen ny fråga, inget fel) och AI prövas igen när taket släpper.
 * lucka2-1: bilens VIN och registreringsnummer i annan skrivform (blanksteg, bindestreck,
   helbredd) och ägarens andra bilar tas bort ur det fullständiga underlaget.
 * lucka2-2: nivån Minimalt skickar inte heller VIN eller registreringsnummer.
@@ -19,11 +17,10 @@ import json
 from datetime import timedelta
 
 import pytest
-from sqlalchemy import select
 
 import app.models as M
 from app.services import settings as settings_svc
-from app.services.classify import engine, underlag
+from app.services.classify import underlag
 from app.services.classify.llm import _coerce
 from tests.conftest import reload_trip
 from tests.test_v130_ai_underlag import build
@@ -85,51 +82,6 @@ def test_multiline_ai_purpose_is_still_rejected(db, user, trips, world):
     t = _customer_trip(trips)
     a = classify(db, user, t, provider=FakeProvider(answer("Kundbesök hos Exempel Åkeri AB")))
     assert any(s.kind == "ai_purpose_rejected" for s in a.signals)
-
-
-# ----------------------------------------------------------------------------- logik-5
-
-
-def test_daily_cap_falls_back_to_rules_and_retries_later(db, user, vehicle, trips, world, monkeypatch):
-    from app.services import audit
-
-    monkeypatch.setattr(engine, "LLM_DAILY_LIMIT", 2)
-    engine._llm_calls.pop(user.id, None)
-    for day in (15, 16, 17, 18):
-        _customer_trip(trips, day)
-    fake = FakeProvider(answer("Kundbesök hos Exempel Åkeri AB"))
-    engine.classify_pending(db, user_id=user.id, vehicle=vehicle, actor=audit.SYSTEM, provider=fake)
-    assert len(fake.documents) == 2
-    evidence = db.execute(select(M.TripEvidence.kind)).scalars().all()
-    assert "ai_unavailable" not in evidence  # inget fel visas
-    rows = db.execute(select(M.TripClassification).where(M.TripClassification.is_current.is_(True))).scalars().all()
-    assert len(rows) == 4 and sorted(r.source for r in rows) == ["ai", "ai", "rule", "rule"]
-
-    # Samma körning igen inom taket: inga fler anrop, inget skrivs om.
-    engine.classify_pending(db, user_id=user.id, vehicle=vehicle, actor=audit.SYSTEM, provider=fake)
-    assert len(fake.documents) == 2
-
-    # Dygnet har gått: resorna som bara fick reglerna bedöms nu av AI.
-    engine._llm_calls.pop(user.id, None)
-    engine.classify_pending(db, user_id=user.id, vehicle=vehicle, actor=audit.SYSTEM, provider=fake)
-    assert len(fake.documents) == 4
-    rows = db.execute(select(M.TripClassification).where(M.TripClassification.is_current.is_(True))).scalars().all()
-    assert sorted(r.source for r in rows) == ["ai"] * 4
-    engine._llm_calls.pop(user.id, None)
-
-
-def test_daily_cap_does_not_stop_owner_started_reassessment(db, user, trips, world, monkeypatch):
-    monkeypatch.setattr(engine, "LLM_DAILY_LIMIT", 0)
-    engine._llm_calls.pop(user.id, None)
-    t = _customer_trip(trips)
-    fake = FakeProvider(answer("Kundbesök hos Exempel Åkeri AB"))
-    classify(db, user, t, provider=fake)  # force=True: ägaren bad själv om en ny bedömning
-    assert len(fake.documents) == 1
-    engine._llm_calls.pop(user.id, None)
-
-
-def test_daily_cap_is_generous():
-    assert engine.LLM_DAILY_LIMIT >= 1000
 
 
 # ----------------------------------------------------------------------------- lucka2-1

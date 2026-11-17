@@ -69,29 +69,6 @@ def hit(key: str, limit: int, window_seconds: int) -> tuple[bool, int]:
         return True, 0
 
 
-def check(key: str, limit: int, window_seconds: int) -> tuple[bool, int]:
-    """Prövar om ett nytt försök tillåts, utan att registrera det."""
-    now = time.time()
-    client = _redis()
-    if client is not None:
-        try:
-            rkey = f"drivelog:rl:{key}"
-            pipe = client.pipeline()
-            pipe.zremrangebyscore(rkey, 0, now - window_seconds)
-            pipe.zcard(rkey)
-            _, count = pipe.execute()
-            return (False, window_seconds) if count >= limit else (True, 0)
-        except Exception:  # noqa: S110 - faller tillbaka till minnet
-            pass
-    with _lock:
-        q = _memory[key]
-        while q and q[0] < now - window_seconds:
-            q.popleft()
-        if len(q) >= limit:
-            return False, int(window_seconds - (now - q[0])) + 1
-        return True, 0
-
-
 # Prövar alla nycklar och registrerar försöket i dem alla bara om ingen är full, i ett steg.
 _TRY_ACQUIRE_LUA = """
 local now = tonumber(ARGV[1])
@@ -140,24 +117,6 @@ def try_acquire(keys: list[str], limit: int, window_seconds: int) -> tuple[bool,
         for q in queues:
             q.append(now)
         return True, 0
-
-
-def record(key: str, window_seconds: int) -> None:
-    """Registrerar ett försök (används tillsammans med check)."""
-    now = time.time()
-    client = _redis()
-    if client is not None:
-        try:
-            rkey = f"drivelog:rl:{key}"
-            pipe = client.pipeline()
-            pipe.zadd(rkey, {f"{now}": now})
-            pipe.expire(rkey, window_seconds)
-            pipe.execute()
-            return
-        except Exception:  # noqa: S110 - faller tillbaka till minnet
-            pass
-    with _lock:
-        _memory[key].append(now)
 
 
 def reset(key: str | None = None) -> None:

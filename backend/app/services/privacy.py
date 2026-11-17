@@ -9,6 +9,7 @@ from typing import Any
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from app.config import get_config
 from app.models import (
     BusinessJourney,
     CalendarEvent,
@@ -39,6 +40,18 @@ from app.services.audit import Actor
 SCOPES = ("observations", "calendar", "exports", "trips", "notifications")
 
 
+def _unlink_under(path: Path, root: Path) -> bool:
+    """Raderar filen bara om den ligger under ``root`` (skydd mot en ändrad sökväg i databasen)."""
+    try:
+        resolved = path.resolve()
+        if root.resolve() not in resolved.parents:
+            return False
+        resolved.unlink(missing_ok=True)
+        return True
+    except OSError:
+        return False
+
+
 def delete_history(db: Session, *, user_id: uuid.UUID, scope: str, vehicle: Vehicle | None, actor: Actor) -> dict[str, Any]:
     if scope not in SCOPES:
         raise ValueError("Okänt omfång.")
@@ -57,10 +70,7 @@ def delete_history(db: Session, *, user_id: uuid.UUID, scope: str, vehicle: Vehi
         n = 0
         for job in db.execute(select(ExportJob).where(ExportJob.user_id == user_id)).scalars():
             if job.file_path:
-                try:
-                    Path(job.file_path).unlink(missing_ok=True)
-                except OSError:
-                    pass
+                _unlink_under(Path(job.file_path), get_config().exports_dir)
             db.delete(job)
             n += 1
         removed["exports"] = n
@@ -106,12 +116,8 @@ def delete_history(db: Session, *, user_id: uuid.UUID, scope: str, vehicle: Vehi
                     other = db.execute(
                         select(ImportedFile.id).where(ImportedFile.stored_path == f.stored_path, ImportedFile.batch_id != batch.id).limit(1)
                     ).first()
-                    if not other:
-                        try:
-                            Path(f.stored_path).unlink(missing_ok=True)
-                            files += 1
-                        except OSError:
-                            pass
+                    if not other and _unlink_under(Path(f.stored_path), get_config().uploads_dir):
+                        files += 1
             db.delete(batch)
         removed["import_files"] = files
         db.execute(delete(LocationPattern).where(LocationPattern.owner_user_id == user_id, LocationPattern.is_manual_rule.is_(False)))

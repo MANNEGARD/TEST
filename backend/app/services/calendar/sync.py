@@ -19,6 +19,7 @@ from app.services import integrations, oauth_state
 from app.services import settings as settings_svc
 from app.services.calendar import calendar_text, graph
 from app.services.calendar.ics import ICS_CALENDAR_ID
+from app.services.text_safety import sanitize_text
 
 logger = logging.getLogger(__name__)
 
@@ -164,7 +165,8 @@ def _event_values(raw: dict[str, Any], include_body: bool) -> dict[str, Any] | N
     return {
         "external_id": str(raw["id"])[:400],
         "ical_uid": (raw.get("iCalUId") or None),
-        "subject": (raw.get("subject") or "")[:500],
+        # Tvättas som i kalenderlänkens synk (ics._text): inga osynliga tecken eller bidi-tecken.
+        "subject": sanitize_text(raw.get("subject"), 500) or "",
         "start_at": start,
         "end_at": max(end, start),
         "is_all_day": bool(raw.get("isAllDay")),
@@ -173,8 +175,8 @@ def _event_values(raw: dict[str, Any], include_body: bool) -> dict[str, Any] | N
         "sensitivity": raw.get("sensitivity"),
         "is_online": bool(raw.get("isOnlineMeeting")) or provider in ONLINE_PROVIDERS,
         "online_provider": raw.get("onlineMeetingProvider"),
-        "location_name": (loc.get("displayName") or None),
-        "location_address": addr_text,
+        "location_name": sanitize_text(loc.get("displayName"), 500),
+        "location_address": sanitize_text(addr_text, 500),
         "location_city": address.get("city") or None,
         "latitude": float(lat) if isinstance(lat, (int, float)) else None,
         "longitude": float(lon) if isinstance(lon, (int, float)) else None,
@@ -253,7 +255,8 @@ def sync_user(
             for cal_id in calendar_ids:
                 raw_events = client.calendar_view(cal_id, start, end, include_body_preview=include_body)
                 stats["calendars"] += 1
-                _upsert_events(db, user_id, conn, cal_id, raw_events, start, end, include_body, stats)
+                _upsert_events(db, user_id, conn, cal_id, raw_events, start, end, include_body, stats,
+                               complete=getattr(client, "last_view_complete", True))
                 if include_body:
                     seen_values += [v for v in (_event_values(r, True) for r in raw_events) if v is not None]
             stats["removed"] += retire_unselected(db, user_id, calendar_ids)
@@ -298,6 +301,8 @@ def _upsert_events(
     end: datetime,
     include_body: bool,
     stats: dict[str, int],
+    *,
+    complete: bool = True,
 ) -> None:
     existing = {
         e.external_id: e
@@ -338,7 +343,8 @@ def _upsert_events(
             stats["updated"] += 1
         ev.fetched_at = now
     for ext_id, ev in existing.items():
-        if ext_id not in seen and ev.removed_at is None:
+        # En avbruten läsning har inte sett allt: inget markeras som borttaget (som ics._upsert).
+        if complete and ext_id not in seen and ev.removed_at is None:
             ev.removed_at = now  # borttagen eller flyttad ur fönstret i Outlook
             stats["removed"] += 1
     db.flush()

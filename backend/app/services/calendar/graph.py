@@ -168,6 +168,8 @@ def _next_link(body: dict[str, Any]) -> str | None:
 
 class GraphClient:
     def __init__(self, access_token: str, *, transport: httpx.BaseTransport | None = None, max_retries: int = 2):
+        # False när senaste calendar_view inte läste alla sidor (då tas inget bort i synken).
+        self.last_view_complete = True
         self._client = httpx.Client(
             timeout=30.0,
             transport=transport,
@@ -262,12 +264,16 @@ class GraphClient:
         headers = (
             {"Prefer": 'outlook.timezone="UTC", outlook.body-content-type="text"'} if include_body_preview else None
         )
+        self.last_view_complete = True
         while url and pages < MAX_PAGES:
             body = self._get(url, params, headers=headers) if headers else self._get(url, params)
             out.extend(body.get("value", []))
             url, params = _next_link(body), None
+            if url is None and body.get("@odata.nextLink"):
+                self.last_view_complete = False  # sidindelningen avbröts: resten är inte läst
             pages += 1
         if url:
+            self.last_view_complete = False
             logger.warning("Kalendervyn avbröts efter %s sidor.", MAX_PAGES)
         return out
 

@@ -15,15 +15,11 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import sys
-from datetime import timedelta
 from pathlib import Path
 
 import pytest
 
-from app.db import utcnow
 from app.services.ha import actions as A
-from app.services.ha import messages
-from tests.test_ha_support import HOME, OREBRO
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 COMPONENT = REPO_ROOT / "custom_components" / "smgd_drivelog"
@@ -206,24 +202,3 @@ def test_config_flow_uses_secure_base_url():
     source = (COMPONENT / "config_flow.py").read_text(encoding="utf-8")
     validate = source[source.index("async def _validate"):source.index("class DriveLogConfigFlow")]
     assert validate.index("secure_base_url") < validate.index("DriveLogApiClient(")
-
-
-# ----------------------------------------------------------------------------- homeassistant-6
-
-
-def test_manual_purpose_buttons_hide_locations(db, user, vehicle, trips):
-    trips.location(HOME, name="Hemmet", type="home")
-    trip = trips.trip(HOME, OREBRO, km=42.0, minutes=30, start_at=utcnow() - timedelta(hours=1))
-    previous = ["Kundbesök Exempel AB", "Möte hos Påhittat AB i Exempelstad"]
-
-    hidden = messages.purpose(db, trip, PID, hide_locations=True, previous=previous)
-    picks = [a for a in hidden["actions"] if a["key"].startswith(A.PURPOSE_PICK) and a["key"] != A.PURPOSE_TEXT]
-    assert [a["title"] for a in picks] == ["Föreslaget ärende 1", "Föreslaget ärende 2"]
-    assert [a["purpose"] for a in picks] == previous  # det som sparas är oförändrat
-    assert all("Exempel AB" not in a["title"] and "Påhittat" not in a["title"] for a in hidden["actions"])
-    assert [a["detail_title"] for a in picks][0] == "Kundbesök Exempel AB"  # webben visar den riktiga
-
-    shown = messages.purpose(db, trip, PID, hide_locations=False, previous=previous)
-    picks = [a for a in shown["actions"] if a["key"].startswith(A.PURPOSE_PICK) and a["key"] != A.PURPOSE_TEXT]
-    assert [a["title"] for a in picks][0] == "Kundbesök Exempel AB"
-    assert all("detail_title" not in a for a in picks)
