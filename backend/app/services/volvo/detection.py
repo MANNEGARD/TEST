@@ -161,24 +161,6 @@ def _started_after(obs: VehicleObservation, odo_ts: datetime | None, arrived_at:
     return started > arrived_at and (odo_ts is None or odo_ts >= started)
 
 
-def _has_arrival(anchor_eff: Eff, steps: list[Step]) -> bool:
-    prev = anchor_eff
-    for step in steps:
-        if _is_arrival(step, prev):
-            return True
-        prev = step.eff
-    return False
-
-
-def _position_reported_after(anchor_eff: Eff, steps: list[Step]) -> bool:
-    """Har bilen rapporterat positionen (en nyare positionsrapport) vid eller efter rörelsens
-    senaste mätarvärde, utan att positionen har flyttats? Då väntar ingen position längre."""
-    final = steps[-1].eff
-    if final.pos_ts is None or anchor_eff.pos_ts is None or final.pos_ts <= anchor_eff.pos_ts:
-        return False
-    return final.odo_ts is None or final.pos_ts >= final.odo_ts - CLOCK_SKEW
-
-
 def _arrival_complete(anchor_eff: Eff, steps: list[Step], settings: dict[str, Any]) -> bool:
     """Är rörelsen avslutad med en ankomst vars uppgifter är kompletta (1.5.0)?
 
@@ -746,6 +728,99 @@ def _correct_end_odometer(
     audit.record(db, audit.SYSTEM, "trip.update", "logical_trip", trip.id, before=before, after=after, user_id=user_id)
 
 
+def _attach_late_position(
+    db: Session, vehicle: Vehicle, user_id: uuid.UUID, step: Step, prev: Eff, settings: dict[str, Any]
+) -> RawTrip | None:
+    """För en position som kommer efter att resan redan har stängts till den resan (1.5.0).
+
+    Väntan från före 1.5.0 kunde stänga en rörelse innan positionen hade kommit (genvägen med
+    avstängd motor räknade en tidigare ankomst i samma rörelse). Resan blev då en "rundresa"
+    utan ny position, och positionen sedan en egen resa med sträcka uppskattad ur fågelvägen –
+    samma kilometer två gånger. Nu förs positionen till den resan när det är säkert att det är
+    samma ankomst:
+
+    * bara positionen har flyttats (ny positionsrapport), mätarställningen är oförändrad och
+      bilen har inte rapporterat en ny motorstart;
+    * den senaste resan slutar på just den mätarställningen, saknar ankomst (flaggad
+      ``round_trip_unobserved``) och har ingen senare resa efter sig;
+    * positionens tidsstämpel ligger inom ``CLOCK_SKEW`` från resans sluttid (mätarvärdets
+      tidsstämpel). Utan tidsstämplar gäller reglerna från före 1.5.0.
+
+    Resans slutposition, slutplats och sluttid rättas, flaggorna räknas om och rättningen syns
+    i resans historik.
+    """
+    if not step.pos_moved or step.odo_moved or prev.odo is None or step.eff.pos_ts is None:
+        return None
+    if prev.pos_ts is not None and step.eff.pos_ts <= prev.pos_ts:
+        return None
+    if step.obs.engine_running is True and (
+        step.obs.engine_reported_at is None or step.obs.engine_reported_at > step.eff.pos_ts
+    ):
+        return None
+    raw = db.execute(
+        select(RawTrip)
+        .where(
+            RawTrip.vehicle_id == vehicle.id,
+            RawTrip.voided_at.is_(None),
+            RawTrip.import_batch_id.is_(None),
+            RawTrip.source.in_((TripSource.VOLVO_API, TripSource.DEMO)),
+            RawTrip.odometer_end.is_not(None),
+        )
+        .order_by(RawTrip.odometer_end.desc(), RawTrip.created_at.desc())
+        .limit(1)
+    ).scalars().first()
+    if raw is None or raw.odometer_end is None or abs(raw.odometer_end - prev.odo) > 1e-6:
+        return None
+    if str(step.obs.id) in _observation_ids(raw):
+        return raw  # redan förd till resan (omkörning)
+    flags = set(raw.quality_flags or [])
+    if "round_trip_unobserved" not in flags or raw.end_time_quality == TimeQuality.REPORTED:
+        return None
+    if raw.ended_at is None or abs((step.eff.pos_ts - raw.ended_at).total_seconds()) > CLOCK_SKEW.total_seconds():
+        return None
+    before = {"ended_at": raw.ended_at.isoformat(), "end_lat": raw.end_lat, "end_lon": raw.end_lon,
+              "end_address": raw.end_address}
+    demo = bool(vehicle.is_demo)
+    end_loc = geocode.place_for_position(db, user_id=user_id, lat=step.eff.lat, lon=step.eff.lon, demo=demo)
+    raw.end_lat, raw.end_lon = step.eff.lat, step.eff.lon
+    raw.end_location_id = end_loc.id if end_loc else None
+    raw.end_address = geocode.address_for(end_loc)
+    raw.ended_at, raw.end_time_quality = step.eff.pos_ts, TimeQuality.REPORTED
+    raw.position_source = PositionSource.API_POSITION
+    flags -= {"round_trip_unobserved", "end_time_uncertain"}
+    crow_m = (
+        haversine_m(raw.start_lat, raw.start_lon, raw.end_lat, raw.end_lon)  # type: ignore[arg-type]
+        if None not in (raw.start_lat, raw.start_lon) else None
+    )
+    if crow_m is not None and raw.distance_quality == DistanceQuality.ODOMETER:
+        # Samma kontroll av omväg som när resan skapas (_raw_from_leg).
+        limit = float(settings.get("detour_factor", 1.8)) * (crow_m / 1000) + float(settings.get("detour_slack_km", 5.0))
+        if (raw.distance_km or 0) > limit:
+            flags.add("detour_or_multiple_trips")
+    raw.possible_missed_trips = bool(flags & {"detour_or_multiple_trips", "collection_gap"})
+    raw.is_complete = not raw.possible_missed_trips and not flags & {"missing_odometer", "no_position"}
+    if raw.start_latest is not None and raw.distance_km:
+        raw.start_latest = min(raw.start_latest, raw.ended_at - timedelta(hours=raw.distance_km / MAX_AVG_SPEED_KMH))
+        if raw.start_earliest is not None:
+            raw.start_earliest = min(raw.start_earliest, raw.start_latest)
+    raw.quality_flags = sorted(flags)
+    raw.observation_ids = list(dict.fromkeys([*_observation_ids(raw), str(step.obs.id)]))
+    raw.updated_by = "system"
+    seg.set_raw_sort_time(raw)
+    after = {"ended_at": raw.ended_at.isoformat(), "end_lat": raw.end_lat, "end_lon": raw.end_lon,
+             "end_address": raw.end_address, "reason": "late_position", "observation_id": str(step.obs.id)}
+    trip = _active_trip_for(db, raw.id)
+    db.flush()
+    if trip is None:
+        audit.record(db, audit.SYSTEM, "trip.update", "raw_trip", raw.id, before=before, after=after, user_id=user_id)
+        return raw
+    trip.updated_by = "system"
+    seg.refresh_logical(db, trip)
+    db.flush()
+    audit.record(db, audit.SYSTEM, "trip.update", "logical_trip", trip.id, before=before, after=after, user_id=user_id)
+    return raw
+
+
 def _old_movement(db: Session, vehicle_id: uuid.UUID, anchor: VehicleObservation, settings: dict[str, Any]) -> list[Step]:
     """Rörelsen som väntan från före 1.5.0 ännu inte hade stängt vid ankaret.
 
@@ -754,8 +829,9 @@ def _old_movement(db: Session, vehicle_id: uuid.UUID, anchor: VehicleObservation
     den gamla väntan alltid stängt rörelsen) spelas avläsningarna upp fram till ankaret med
     samma regler som förut. Varje avläsning gav förut en ny bedömning först när nästa kom, och
     då med alla dess hämtningar – därför blir uppspelningen densamma som förloppet var.
-    Tom lista när väntan inte hade någon öppen rörelse, eller när ingen sådan avläsning finns
-    bland de senaste ``OLD_REPLAY_ROWS``.
+    Ryms hela fordonets historik i de senaste ``OLD_REPLAY_ROWS`` avläsningarna börjar
+    uppspelningen vid den första, som den gamla motorn. Tom lista när väntan inte hade någon
+    öppen rörelse, eller när ingen sådan avläsning finns bland de senaste ``OLD_REPLAY_ROWS``.
     """
     settle = timedelta(minutes=float(settings.get("settle_minutes", 10)))
     rows = list(
@@ -773,6 +849,8 @@ def _old_movement(db: Session, vehicle_id: uuid.UUID, anchor: VehicleObservation
     start = next(
         (i for i, row in enumerate(rows) if row.last_seen_at - row.fetched_at >= LAG_SETTLE_FACTOR * settle), None
     )
+    if start is None and rows and len(rows) < OLD_REPLAY_ROWS:
+        start = len(rows) - 1  # hela historiken ryms: den gamla väntan började vid första avläsningen
     if start is None or start == 0:
         return []
     replay = list(reversed(rows[:start]))
@@ -916,7 +994,7 @@ def process_vehicle(
         if not steps:
             late = _attach_late_odometer(
                 db, vehicle, user_id, step, prev_eff, settings, old_waiting=bool(old_steps),
-            )
+            ) or _attach_late_position(db, vehicle, user_id, step, prev_eff, settings)
             if late is not None:
                 # Ett släpande mätarvärde för en resa som redan har stängts: resan rättas i
                 # stället för att värdet blir en ny "resa" för samma körning.
@@ -928,13 +1006,10 @@ def process_vehicle(
         steps.append(step)
         prev_eff = eff
         # En ankomst med kompletta uppgifter stängs direkt (1.5.0); annars gäller väntan.
-        # Stänger väntan från före 1.5.0 rörelsen stängs den här också – men bara när den här
-        # rörelsen själv har en ankomst, eller när bilen har rapporterat sin position efter
-        # körningen (samma plats: en rundresa). Annars stängde 1.4.2 ibland på en tidigare
-        # ankomst i samma rörelse innan positionen kom, och positionen blev sedan en egen resa
-        # med uppskattad sträcka (samma kilometer två gånger); då väntar den nya motorn i stället.
-        forced = old_closed and (_has_arrival(anchor_eff, steps) or _position_reported_after(anchor_eff, steps))
-        if not (forced or _arrival_complete(anchor_eff, steps, settings) or _settled(steps, settings)):
+        # Stänger väntan från före 1.5.0 rörelsen stängs den här också, så att ingen resa skapas
+        # senare än förut. (Kommer positionen efter att en sådan rörelse har stängts förs den
+        # till resan, se ``_attach_late_position``, i stället för att bli en egen resa.)
+        if not (old_closed or _arrival_complete(anchor_eff, steps, settings) or _settled(steps, settings)):
             continue
         legs = _build_legs(anchor, anchor_eff, steps, settings, poll)
         for i, leg in enumerate(legs):

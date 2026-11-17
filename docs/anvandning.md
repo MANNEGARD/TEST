@@ -259,7 +259,7 @@ motorn startade 06:15 …"). Den ändras aldrig av sig själv – bara du kan an
 startar på el kan starta motorn först en bit in i resan) används den inte; då gäller reglerna
 nedan. Resor från de senaste två veckorna som saknar starttid eller har en uppskattad starttid
 rättas vid nästa hämtning, och ändringen syns i resans historik – utom resor där du angett
-starttiden och resor i en månad vars underlag redan är skapat.
+starttiden och resor som finns i ett underlag som redan är skapat. En resa räknas som skyddad bara om den finns i den skapade filen: har månadens fil skapats i förväg får en resa som tillkommer efteråt starttid och förbrukning som vanligt.
 
 Volvo rapporterar bilens position först när en körning är slut. Räcker bilens avläsningar
 under färden räknar DriveLog fram starttiden och visar den som **≈ 07:35 (±4 min)**; ett tryck
@@ -276,9 +276,10 @@ Tiden märks precis som en uträknad tid: "≈" och felmarginal i appen, **ca** 
 körtiden visas som uppskattad. Ett tryck på tiden visar varifrån farten kommer. Felmarginalen
 blir större när dina egna resor på sträckan varierar mycket, och egna resor med en snittfart
 under 15 km/h (t.ex. en importerad resa där bilen stod parkerad) räknas inte. Resor som
-saknade starttid före 1.2.1 får uppskattningen vid nästa hämtning från bilen – utom resor i
-en månad vars underlag månadsskiftet redan har skapat, så att ett inlämnat underlag inte
-ändras. Kalendern, klassningen och AI-förslagen räknar inte med en uppskattning ur sträckan
+saknade starttid före 1.2.1 får uppskattningen vid nästa hämtning från bilen – utom resor som
+finns i ett underlag som månadsskiftet redan har skapat, så att ett inlämnat underlag inte
+ändras (en resa som tillkommit efter att månadens fil skapades finns inte i filen och får sin
+tid som vanligt). Kalendern, klassningen och AI-förslagen räknar inte med en uppskattning ur sträckan
 som känd avfärdstid.
 
 Saknas mätarställning eller en säker ankomsttid visas *Start okänd (mellan 06:10 och 08:52)*
@@ -683,7 +684,8 @@ bilen kan ha laddat batteriet med motorn eller bromsarna under färd.
 kWh. Fyll i den under *Inställningar → Fordon och förare*. Är fältet tomt används ett
 standardvärde bara när det finns ett belagt värde för modellen och årsmodellen; annars visas
 ingen el. När du fyller i eller ändrar kapaciteten räknas elen om på resorna från de senaste 14
-dygnen (dina egna värden rörs inte, och inte heller månader vars underlag redan är skapat).
+dygnen (dina egna värden rörs inte, och inte heller resor som finns i ett underlag som redan är
+skapat).
 
 Här kan du också föra in tankningar och laddningar.
 
@@ -692,7 +694,9 @@ Här kan du också föra in tankningar och laddningar.
 Strular något med bilens data kan du under *Integrationer → Volvo* trycka **Ladda ner
 felsökningsfil**. Filen innehåller bilens avläsningar och hämtningar de senaste 14 dygnen och de
 resor som byggdes av dem, men inte chassinummer, registreringsnummer, positioner, adresser eller
-platsnamn. Skicka den till den som hjälper dig felsöka.
+platsnamn. Skicka den till den som hjälper dig felsöka. Från 1.5.0 visar filen också månadernas
+underlag (skapat i förväg och när) och, för varje resa, en kort kod för varför starttiden, bensinen
+eller elen saknas.
 
 Kraschar ett steg i bearbetningen efter en hämtning står det under *Senaste fel* i Volvo-panelen
 ("Avläsningen hämtades, men …"). Resan finns ändå i journalen. Raden försvinner när

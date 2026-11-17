@@ -779,7 +779,7 @@ def unknown_start_reasons(db: Session, raw: RawTrip, locks: Any, history: Any = 
     Tom lista när starttiden är känd. Skriver ingenting. Koderna: ``imported``, ``voided``,
     ``owner_set`` (ägaren har angett starttiden på journalresan), ``closed_month`` (resan finns i
     ett skapat underlag, eller tiden skulle flytta den till en annan månad med ett skapat
-    underlag), ``no_arrival``; steget ur motorstarten: ``too_old``, ``no_engine_start``,
+    underlag), ``no_arrival``; steget ur motorstarten: ``no_readings``, ``too_old``, ``no_engine_start``,
     ``engine_window`` (för långt mellan hämtningarna), ``engine_late`` (orimligt sen motorstart);
     K4: ``no_odometer``, ``no_distance``, ``no_latest_start``, ``contradictory_bounds``,
     ``no_distance_estimate``; ``pending`` när steget skulle ge en tid vid nästa efterbearbetning.
@@ -808,7 +808,9 @@ def unknown_start_reasons(db: Session, raw: RawTrip, locks: Any, history: Any = 
         select(VehicleObservation.fetched_at).where(VehicleObservation.vehicle_id == raw.vehicle_id)
         .order_by(VehicleObservation.fetched_at.desc()).limit(1)
     ).scalar_one_or_none()
-    if newest is None or ended < newest - ENGINE_LOOKBACK:
+    if newest is None:
+        reasons.append("no_readings")
+    elif ended < newest - ENGINE_LOOKBACK:
         reasons.append("too_old")
     else:
         lower = (raw.start_earliest or ended - ENGINE_NO_EARLIEST) - ENGINE_CLOCK_SKEW

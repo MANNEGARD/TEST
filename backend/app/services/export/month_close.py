@@ -17,6 +17,11 @@ kalendermånaden och visar när den skapades. Vid månadsskiftet kontrolleras m�
 som vilken exporterad månad som helst: oförändrat avtryck → ingenting, ändrat → nytt
 underlag. Väntar då en fråga om en tjänsteresa (som inte ändrar avtrycket, eftersom bara
 redovisade resor ingår) får ägaren den vanliga "väntar"-notisen.
+
+Skyddade resor (1.5.0, ``protection``): starttiden ur motorstarten, K4 och förbrukningen lämnar
+en resa som FINNS I en skapad fil (månaden ``exported``/``stale`` och resan skapad senast när
+filen skapades). En resa som tillkommit efter filen – t.ex. efter ett underlag i förväg – får
+sina värden som vanligt.
 """
 
 from __future__ import annotations

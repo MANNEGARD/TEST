@@ -222,8 +222,10 @@ Resedetekteringen (`detection.process_vehicle`) är en tillståndsmaskin:
   ändrades*. Ingår resan i en månad vars underlag redan är skapat märker underlagets avtryck
   ändringen som vilken annan ändring som helst. Samma sak gäller när mätarsträckan vid
   ankomsten var kortare än fågelvägen (mätarvärdet bevisligen gammalt) och ökningen ryms inom
-  omvägsgränsen. Annars blir ökningen som förut en egen rörelse. Så räknas samma körning aldrig
-  två gånger.
+  omvägsgränsen. Annars blir ökningen som förut en egen rörelse. På samma sätt förs en position
+  som kommer efter att en resa utan ankomst ("rundresa") har stängts till den resan, när
+  positionens tidsstämpel ligger inom 2 minuter från resans sluttid och bilen inte har startat
+  igen. Så räknas samma körning aldrig två gånger.
 * **Frågan till telefonen kommer inte tidigare än förut:** tidigast när ankomsten först setts
   plus `settle_minutes`, så att en fortsatt körning efter ett kort stopp hinner slås ihop
   först. Lunchregelns egen väntan gäller som förut.
@@ -261,7 +263,13 @@ Resedetekteringen (`detection.process_vehicle`) är en tillståndsmaskin:
   * I efterhand: resor de senaste 14 dygnen (räknat från senaste avläsningen) med okänd eller
     uppskattad starttid rättas när avläsningarna finns kvar, med en rad i resans historik
     (`trip.start_time_engine`). Aldrig resor där ägaren angett starttiden, importerade resor
-    eller resor i (eller som skulle flytta till) en månad vars underlag redan är skapat.
+    eller resor som finns i ett underlag som redan är skapat (eller som skulle flytta till en
+    annan månad med ett skapat underlag). Från 1.5.0 är en resa skyddad bara om den finns i
+    filen: månaden har ett skapat underlag (`exported`/`stale`) och delresan skapades
+    (`raw_trips.created_at`) senast när filen skapades (`export_jobs.created_at`; okänt → skyddad).
+    En resa som tillkommit efter filen – t.ex. när månadens fil skapats i förväg – får starttid
+    och förbrukning som vanligt, och månaden blir inaktuell som vid varje ny resa
+    (`month_close.protection`, samma regel för K4 och förbrukningen).
 * **Starttid hittas aldrig på.** Gränserna `start_earliest`–`start_latest` räknas alltid
   fram. Räcker bilens egna avläsningar räknas starttiden fram inom dem
   (`start_time_quality = estimated`, grunden i `start_estimate_basis`):
@@ -339,8 +347,9 @@ Resedetekteringen (`detection.process_vehicle`) är en tillståndsmaskin:
   **Grunden** sparas per delresa (`raw_trips.fuel_basis` / `energy_basis`: metod, värdena före
   och efter, felgränsen, kapaciteten och anteckningar) och visas i resans detaljer. Bara resor
   som DriveLog har skapat ur bilens avläsningar de senaste 14 dygnen räknas; importerade resor
-  och värden som redan finns rörs aldrig, och inte heller resor i en månad vars underlag redan är
-  skapat. Resor som saknar värden fylls i efterhand vid nästa efterbearbetning.
+  och värden som redan finns rörs aldrig, och inte heller resor som finns i ett underlag som redan
+  är skapat (1.5.0: en resa som tillkommit efter att månadens fil skapades finns inte i filen och
+  fylls i som vanligt). Resor som saknar värden fylls i efterhand vid nästa efterbearbetning.
 * **Batteriets användbara kapacitet** (1.5.0, `vehicles.usable_battery_kwh`) anges under
   *Inställningar → Fordon och förare*. Tomt fält: ett standardvärde används bara där den
   ANVÄNDBARA kapaciteten är belagd för modellen och årsmodellen, annars är elen okänd. När
@@ -368,6 +377,12 @@ Resedetekteringen (`detection.process_vehicle`) är en tillståndsmaskin:
   sparade platser och de senaste resornas adresser) och mönster för gatuadresser, postnummer och
   koordinater tas bort ur meddelandet, men en adress eller ett platsnamn som varken är känt eller
   följer mönstren kan finnas kvar – läs filen innan du skickar den vidare.
+  Från 1.5.0 innehåller filen också `months` (månad, läge, om filen skapades i förväg och när)
+  och per resa `protected_by_month` samt korta koder för varför starttiden, bensinen och elen är
+  okända (`start_unknown_reason`/`start_unknown_steps`, `fuel_unknown_reason`,
+  `energy_unknown_reason`: t.ex. `closed_month`, `no_engine_start`, `engine_window`,
+  `no_before_level`, `no_after_level`, `refuel`, `charging`, `no_capacity`, `unchanged_level`,
+  `pending`). Inga platser eller positioner.
 * **Platsen:** ligger stoppet vid en känd plats används den. Annars skapas en ny obekräftad
   plats (radie 75 m) vars adress slås upp i OpenStreetMap i bakgrunden – aldrig under själva
   detekteringen. Se [Användning → Adresser](anvandning.md#adresser).

@@ -601,10 +601,11 @@ def build_diagnostics(db: DbDep, vehicle: Vehicle, *, days: int, now: Any) -> di
     # 1.5.0: varför starttiden, bensinen och elen är okända – korta koder, inga platser.
     locks = month_close.protection(db, vehicle.id)
     usage_reasons = consumption.unknown_reasons(db, vehicle, raws, locks, now=now)
+    speeds = start_time._known_speeds(db, vehicle.id) if raws else []  # K4:s historik, en gång
     for n, raw in enumerate(raws, start=1):
         basis = raw.start_estimate_basis if isinstance(raw.start_estimate_basis, dict) else {}
         fuel_reason, energy_reason = usage_reasons.get(raw.id, (None, None))
-        start_reasons = [k for k in (_safe_key(c) for c in start_time.unknown_start_reasons(db, raw, locks)) if k]
+        start_reasons = [k for k in (_safe_key(c) for c in start_time.unknown_start_reasons(db, raw, locks, speeds)) if k]
         trips_out.append({
             "id": f"trip-{n}",
             **{f: _diag_value(getattr(raw, f)) for f in _DIAG_TRIP_FIELDS},
