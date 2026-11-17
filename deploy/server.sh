@@ -35,6 +35,8 @@
 #                                   vid automatisk uppdatering. DriveLog ansluts då till Docker-nätet
 #                                   "smgd" (skapas om det saknas); den andra tjänstens container
 #                                   måste också vara med i det nätet för att nås på sitt namn.
+#                                   <värd> är just det containernamnet: inte localhost, 127.0.0.1
+#                                   eller någon annan IP-adress (inne i containern är det DriveLog).
 #   --utan-extra-doman              tar bort alla extra domäner.
 #
 # Inställningar via miljövariabler (behövs normalt inte):
@@ -164,13 +166,29 @@ borja_logga() { # loggfilen i HEM; roteras vid 1 MB
   touch "$LOGGFIL" && chmod 600 "$LOGGFIL" || LOGGFIL=""
 }
 
-# <domän>=<värd>:<port> för --extra-doman. Samma regler som startprogrammet (installningar.py):
-# värden skrivs in i Caddyfilen, så bara a–z, 0–9, punkt, bindestreck och understreck.
+# <domän>=<värd>:<port> för --extra-doman. Samma regler som startprogrammet (installningar.py,
+# provas mot samma värden i drivelog/tests/test_extra_domaner_lika.py): värden skrivs in i
+# Caddyfilen, så bara a–z, 0–9, punkt, bindestreck och understreck; domänen får inte sluta på
+# bara siffror (då är den en IP-adress) och får vara högst 253 tecken.
 ar_extra_doman() {
   [[ "$1" =~ ^([^=]+)=([a-z0-9][a-z0-9_.-]{0,62}):([0-9]{1,5})$ ]] || return 1
-  local doman="${BASH_REMATCH[1]}" vard="${BASH_REMATCH[2]}" port="${BASH_REMATCH[3]}"
-  ar_doman "$doman" && [[ "$doman" == *.* && "$doman" != localhost && "$vard" != localhost ]] \
+  local doman="${BASH_REMATCH[1]}" port="${BASH_REMATCH[3]}"
+  ar_doman "$doman" && [[ "$doman" == *.* && "$doman" != localhost ]] \
+    && [[ ! "${doman##*.}" =~ ^[0-9]+$ && ${#doman} -le 253 ]] \
     && ((10#$port >= 1 && 10#$port <= 65535))
+}
+# Värdar som inte får ligga bakom en extra domän (som installningar.ar_forbjuden_vard): Caddy kör
+# inne i DriveLogs container, så localhost/127.0.0.1 och containerns eget namn är DriveLog självt,
+# och IP-adresser och Dockers namn på värdmaskinen leder ut ur Docker-nätet.
+ar_forbjuden_vard() {
+  local v="$1"
+  # Ett namn med avslutande punkt (localhost.) slås upp som samma namn och spärras likadant.
+  while [[ "$v" == *. ]]; do v="${v%.}"; done
+  case "$v" in
+    localhost | ip6-localhost | ip6-loopback | host.docker.internal | gateway.docker.internal | drivelog) return 0 ;;
+    *.localhost | *-drivelog) return 0 ;;
+  esac
+  [[ "$v" =~ ^(0x[0-9a-f]*|[0-9]+)(\.(0x[0-9a-f]*|[0-9]+))*\.?$ ]]
 }
 
 sakert_varde() { [[ "$1" =~ ^[A-Za-z0-9._:/@+=-]*$ && "${#1}" -le 300 ]]; }
@@ -445,7 +463,11 @@ if [[ ${#EXTRA[@]} -gt 0 || "$UTAN_EXTRA" == 1 ]]; then
       del="${del,,}"
       [[ -n "$del" ]] || continue
       ar_extra_doman "$del" || die "--extra-doman '$del' ska skrivas <domän>=<värd>:<port>, t.ex. transcribe.smgd.se=transcribe:8080." \
-        "Värden är namnet på den andra tjänstens container (eller 127.0.0.1), utan http:// och utan sökväg."
+        "Domänen är ett fullständigt domännamn (inte en IP-adress) och värden namnet på den andra tjänstens container, utan http:// och utan sökväg."
+      vard="${del#*=}"
+      vard="${vard%:*}"
+      ! ar_forbjuden_vard "$vard" || die "--extra-doman '$del': $vard är DriveLog självt, en IP-adress eller värdmaskinen." \
+        "Ange den andra tjänstens container, t.ex. ${del%%=*}=transcribe:8080."
       [[ "${del%%=*}" != "$DOMAN" ]] || die "--extra-doman: ${del%%=*} är redan DriveLogs egen domän."
       for annan in "${EXTRA_DOMANER[@]}"; do
         [[ "${annan%%=*}" != "${del%%=*}" ]] || die "--extra-doman: ${del%%=*} står med mer än en gång."
@@ -476,7 +498,7 @@ fraga() { # variabelnamn, ledtext, [dold]
 # går in via standard in – aldrig på en kommandorad eller i en miljövariabel. De extra domänerna
 # (EXTRA_RAD) ändras bara när --extra-doman eller --utan-extra-doman angavs; annars behålls de.
 skriv_installningar() { # e-post ("" = behåll), lösenord ("" = inget)
-  printf '%s\n%s\n%s\n%s\n' "$DOMAN" "$EXTRA_RAD" "$1" "$2" | docker run --rm -i --entrypoint python3 -v "$DATA:/data" "$BILD" -I -c '
+  printf '%s\n%s\n%s\n%s\n' "$DOMAN" "$EXTRA_RAD" "$1" "$2" | docker run --rm -i --network none --entrypoint python3 -v "$DATA:/data" "$BILD" -I -c '
 import json, os, sys
 doman, extra, epost, losenord = (rad.rstrip("\n") for rad in sys.stdin.readlines()[:4])
 sokvag = "/data/options.json"
@@ -508,18 +530,22 @@ os.replace(tmp, sokvag)
 }
 
 # Finns det extra domäner i inställningsfilen? Läses med Python i avbilden (som när filen skrivs),
-# varje gång containern skapas – även vid automatisk uppdatering och återgång.
+# varje gång containern skapas – även vid automatisk uppdatering och återgång. Skriver ja, nej
+# eller fel (filen gick inte att läsa, docker run misslyckades) – fel är inte detsamma som nej.
 har_extra_domaner() { # avbild
-  docker run --rm --entrypoint python3 -v "$DATA:/data:ro" "$1" -I -c '
-import json, sys
+  local svar
+  svar="$(docker run --rm --network none --entrypoint python3 -v "$DATA:/data:ro" "$1" -I -c '
+import json
 try:
     with open("/data/options.json", encoding="utf-8") as fil:
         data = json.load(fil)
-except (OSError, ValueError):
-    sys.exit(1)
+except FileNotFoundError:
+    data = {}
 lista = data.get("extra_domains") if isinstance(data, dict) else None
-sys.exit(0 if isinstance(lista, list) and any(isinstance(rad, str) and rad.strip() for rad in lista) else 1)
-' >/dev/null 2>&1
+print("ja" if isinstance(lista, list) and any(isinstance(rad, str) and rad.strip() for rad in lista) else "nej")
+' 2>/dev/null)" || svar=fel
+  [[ "$svar" == ja || "$svar" == nej ]] || svar=fel
+  printf '%s' "$svar"
 }
 
 sakerstall_natverk() {
@@ -528,16 +554,24 @@ sakerstall_natverk() {
   docker network create "$NATVERK" >/dev/null 2>&1 || docker network inspect "$NATVERK" >/dev/null 2>&1
 }
 
+NATVERK_KOPPLAT=0 # 1 när DriveLog senast startades i Docker-nätet (för sammanfattningen)
 starta_container() { # avbild (namn eller id)
   local natverk=()
+  NATVERK_KOPPLAT=0
   # Med extra domäner ansluts DriveLog till nätet där de andra tjänsterna nås på sina namn.
-  if har_extra_domaner "$1"; then
-    if sakerstall_natverk; then
-      natverk=(--network "$NATVERK")
-    else
-      varna "Docker-nätet $NATVERK kunde inte skapas – DriveLog startas utan det, och de extra domänerna når inte sina tjänster."
-    fi
-  fi
+  case "$(har_extra_domaner "$1")" in
+    ja)
+      if sakerstall_natverk; then
+        natverk=(--network "$NATVERK")
+        NATVERK_KOPPLAT=1
+      else
+        varna "Docker-nätet $NATVERK kunde inte skapas – DriveLog startas utan det, och de extra domänerna når inte sina tjänster."
+      fi
+      ;;
+    fel)
+      varna "Kunde inte läsa om det finns extra domäner i $DATA/options.json – DriveLog startas utan Docker-nätet $NATVERK, så extra domäner når inte sina tjänster förrän raden körs igen."
+      ;;
+  esac
   if docker ps -a --format '{{.Names}}' | grep -qx "$NAME"; then
     docker stop -t 30 "$NAME" >/dev/null 2>&1 || true
     docker rm "$NAME" >/dev/null
@@ -944,6 +978,13 @@ fi
 
 # --- 0. Lås och automatik ----------------------------------------------------------------------------
 ta_las 1
+# En äldre kopia av skriptet känner inte till de extra domänerna och tar bort dem vid nästa
+# automatiska uppdatering. Ändras de, måste kopian därför förnyas – och det prövas innan något ändras.
+if [[ "$EXTRA_RAD" != behall && "$AUTO_AV" == 0 ]] && auto_ar_pa && ! spara_kopia; then
+  die "Automatikens kopia av skriptet ($HEM/server.sh) kunde inte förnyas – inget har ändrats." \
+    "Den gamla kopian skulle ta bort de extra domänerna vid nästa automatiska uppdatering." \
+    "Kör raden igen om en stund."
+fi
 if auto_ar_pa; then
   borja_logga
   till_loggfil "Installationsraden körs för hand${VERSION:+ (version $VERSION)}."
@@ -1162,7 +1203,11 @@ fi
 rubrik "Klart"
 info "DriveLog $VERSION är igång: https://$DOMAN"
 for rad in "${EXTRA_DOMANER[@]}"; do
-  info "Extra domän: https://${rad%%=*} skickas vidare till ${rad#*=} (Docker-nätet $NATVERK)."
+  if [[ "$NATVERK_KOPPLAT" == 1 ]]; then
+    info "Extra domän: https://${rad%%=*} skickas vidare till ${rad#*=} (Docker-nätet $NATVERK)."
+  else
+    varna "Extra domän: https://${rad%%=*} är sparad, men DriveLog kom inte med i Docker-nätet $NATVERK – ${rad#*=} nås inte (se varningen ovan)."
+  fi
 done
 [[ "$UTAN_EXTRA" == 0 ]] || info "Inga extra domäner längre."
 if [[ "$NY_INSTALLATION" == 1 ]]; then

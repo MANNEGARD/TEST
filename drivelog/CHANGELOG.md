@@ -3,6 +3,45 @@
 > Från 1.0.2 visar Home Assistant **Uppdatera** först när den nya versionen är färdigbyggd och
 > går att hämta – det går bra att trycka direkt.
 
+## 1.5.0
+
+- **Starttiden kommer från bilen och ligger fast.** När motorn startas rapporterar bilen det med en
+  egen tidsstämpel. Den tiden blir nu resans starttid, visas som en vanlig tid och ändras sedan
+  aldrig av sig själv – bara du kan ange en annan. Saknas tidsstämpeln används minuten mellan de
+  två hämtningarna, märkt "≈". Resor från de senaste två veckorna med okänd eller uppskattad start
+  rättas vid nästa hämtning när bilens sparade avläsningar visar motorstarten, och ändringen syns
+  i resans historik.
+- **Frågan till telefonen utgår från bedömningen.** Har DriveLog redan bedömt resan som tjänst
+  med ett ärende frågar notisen *Tjänsteresa – stämmer det?* med *Godkänn* först, och ett tryck
+  sparar både tjänst och ärendet. Är resan bedömd som tjänst utan säkert ärende frågar den
+  *Tjänsteresa – vilket ärende?* med förslag, och är den bedömd som privat *Privat resa – stämmer
+  det?*. En resa som inte är bedömd, som kan vara flera körningar eller som har delsträckor av
+  olika slag får frågan *Tjänst eller privat?* som förut; knappen *Alltid privat här* finns bara
+  på den frågan. Har förslaget ändrats innan du svarar godkänns ingenting. Integrationen i Home
+  Assistant behöver inte uppdateras.
+- **Bensin och el för resor från bilen, med felmarginal.** Förbrukningen räknas ur tank- och
+  batterinivån före och efter resan, och resans detaljer visar hur säkert värdet är, till exempel
+  *12 l ± 1 l* (bilen rapporterar hela liter och hela procent). Finns en noggrannare källa
+  används den. För elen fyller du i batteriets användbara kapacitet under *Inställningar → Fordon
+  och förare*. Resor som saknar värden fylls i efterhand.
+- **Resan syns direkt vid ankomsten.** När bilen har rapporterat ankomsten med kompletta uppgifter
+  skapas resan vid första hämtningen, utan väntan. Frågan till telefonen kommer inte tidigare än
+  förut. Ett mätarvärde som kommer efter att resan har stängts förs till samma resa i stället för
+  att bli en egen.
+- **Rättat: ett underlag skapat i förväg stoppade nya resor.** Var månadens underlag skapat innan
+  månaden var slut fick resor som tillkom efteråt varken starttid eller förbrukning. Nu lämnas
+  bara resor som finns i ett redan skapat underlag orörda.
+- **Volvos status "bilen används" läses** vid varje hämtning och sparas på avläsningen. Den
+  förfinar starttiden när den slår om samtidigt som motorstarten (högst två minuter före), men
+  sätter aldrig ensam en starttid: hur bilen rapporterar statusen under färd är ännu inte sett.
+- **Felsökningsfilen säger varför.** Den visar månadernas underlag och, för varje resa, varför
+  starttiden, bensinen eller elen saknas och vilket av bilens besked som gav starttiden, samt
+  statusen "bilen används" på varje avläsning.
+- **Extra domäner** kan inte längre peka på DriveLog självt: `localhost`, IP-adresser och appens
+  eget namn avvisas som mål. Står en sådan rad redan i inställningarna hoppas den över med en
+  varning i loggen, och DriveLog startar som vanligt. Installationsraden och appen avvisar samma
+  värden.
+
 ## 1.4.2
 
 - **Ett fel i efterarbetet stoppar inte längre resan.** När bilen har rapporterat en körning
