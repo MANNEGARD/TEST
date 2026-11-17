@@ -63,12 +63,16 @@ Nothing is sold, and nothing is used for advertising or profiling.
     unless the owner turns that off (it is on by default). The first 300 characters of an
     entry's description and street addresses are only sent if the owner turns each of them on.
     At this level the subject and the description are sent as they are written in the calendar:
-    codes, links, e-mail addresses or passwords that someone has written there are not removed.
+    codes, links, e-mail addresses or passwords that someone has written there are not removed
+    (the vehicle's VIN and registration number are, see below).
   * At both levels, never: coordinates, the vehicle's VIN or registration number, DriveLog's own
     API keys and tokens, the owner's passwords, the calendar link, the Home Assistant token or
-    the attendees' e-mail addresses. At the full level, links, e-mail addresses, codes, meeting
-    IDs and passwords found in subjects, locations, descriptions and notes are also removed
-    before sending. The provider processes the data under its own terms; DriveLog keeps
+    the attendees' e-mail addresses. From version 1.3.1 the VIN and registration number of all
+    the owner's vehicles are removed from all text at both levels in any spelling (with spaces,
+    hyphens or dots, in lower case or full-width characters), as is anything that looks like a
+    VIN; earlier versions removed only the exact stored spelling, and only at the full level. At
+    the full level, links, e-mail addresses, codes, meeting IDs and passwords found in subjects,
+    locations, descriptions and notes are also removed before sending. The provider processes the data under its own terms; DriveLog keeps
     nothing at the provider.
 * Notifications are sent to the owner's own Home Assistant when the owner has connected it.
   From version 1.3.0 the questions about new trips show the full street address with house

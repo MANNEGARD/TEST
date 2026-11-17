@@ -3,6 +3,53 @@
 > Från 1.0.2 visar Home Assistant **Uppdatera** först när den nya versionen är färdigbyggd och
 > går att hämta – det går bra att trycka direkt.
 
+## 1.3.1
+
+Säkerhetsrättningar efter en genomgång av hela appen.
+
+- **Bara säkerhetsrättningar – appen fungerar som förut.** Ingen text, knapp, fråga, inställning
+  eller standardvärde har ändrats, och ingenting behöver ställas om efter uppdateringen. Ingen
+  ändring i databasen.
+- **Säkrare inloggning.** Spärren mot gissade lösenord håller nu även när många försök görs
+  samtidigt. En webbläsare där du redan har loggat in har en egen spärr, så den som gissar mot ditt
+  konto kan inte längre låsa ute dig där (den slutar gälla när du byter lösenord). Lösenordsbytet
+  har också fått en spärr: 8 felaktiga nuvarande lösenord inom 5 minuter. En adress som skrivs in
+  vid en misslyckad inloggning sparas bara i ändringsloggen när kontot finns.
+- **Integrationen i Home Assistant skickar bara DriveLogs egna notiser.** Allt annat som skulle
+  hamna i utkorgen avvisas i stället för att skickas till telefonen, och rubrik och text visas
+  aldrig som HTML. Skriver du in en publik adress med `http://` när integrationen läggs till
+  används `https://`; lokala adresser och tilläggets värdnamn fungerar med `http://` som förut.
+  Integrationen har ändrats: **uppdatera den i HACS och starta om Home Assistant** för att de här
+  rättningarna ska gälla. Den integration du har installerad fungerar som förut mot den nya
+  servern tills dess.
+- **Kalendern tål elaka bokningar.** Upprepningsregler som aldrig kan inträffa och jättelika
+  beskrivningar belastar inte längre servern, och bokningar försvinner inte när en synk avbryts i
+  förtid (kalenderlänken och Outlook). Rubrik och plats från Outlook tvättas från osynliga tecken,
+  som kalenderlänkens redan gjorde. Efter anslutning till Microsoft visas leverantörens felkoder
+  som förut, men aldrig annan text ur adressfältet.
+- **Importen och underlaget.** Osynliga styr- och formattecken tas bort ur ärenden och adresser
+  vid import (originalanteckningen sparas oförändrad). Formelskyddet i underlaget gäller nu även
+  text som börjar med en radbrytning, och Excel-filer med orimligt mycket text avvisas innan de
+  packas upp. Original- och exportfiler raderas bara inne i DriveLogs egna kataloger.
+- **Mindre till AI.** Bilens chassinummer (VIN) och registreringsnummer tas bort ur underlaget på
+  båda nivåerna, för alla dina bilar och i alla skrivsätt. Koder och lösenord tas bort även i böjd
+  form (*koden*, *lösenordet*, wifi), och ett AI-ärende med ord som inte finns i underlaget kastas
+  också när det är skrivet med andra alfabet. Nivån du har valt är oförändrad.
+- **Webbläsarens skydd.** Webbappen skickar nu en Content-Security-Policy, ett extra skydd mot
+  inskjuten kod. Efter inloggning skickas du bara vidare till sidor i DriveLog. Kartan och egna
+  kartservrar fungerar som förut.
+- **Servern, anslutningarna och loggarna.** Anrop över 2 MB som inte är uppladdningar avvisas
+  innan de läses. Kalenderlänken och adressuppslagen kontrollerar motpartens adress redan när
+  anslutningen öppnas, och fler förklädda interna adresser spärras. Svar från Volvo, Microsoft
+  och Home Assistant kontrolleras hårdare. En plats med säker position slås inte längre ihop via
+  adressen med ett stopp mer än 2 km bort. Loggarna döljer nu även felspår, fler delade
+  kalenderadresser och inloggningskoder i adresser, och databasfel visar inte de sparade värdena.
+  Nedladdningslänkens tak på 10 hämtningar håller även vid samtidiga anrop. I produktion startar
+  API:t inte om `DRIVELOG_CORS_ORIGINS` innehåller `*` eller en adress utan https (ingen av
+  DriveLogs installationsvägar sätter den).
+- **Kända begränsningar.** Det som inte har rättats, eftersom rättningen skulle ändra hur appen
+  fungerar, står under *Kända begränsningar* i `docs/sakerhet.md` i repot.
+
 ## 1.3.0
 
 - **Egna gränser för sammanslagning av tjänsteresor och privata resor.** Under *Inställningar →

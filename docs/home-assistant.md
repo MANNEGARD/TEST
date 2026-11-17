@@ -87,7 +87,10 @@ Token ger endast åtkomst till Home Assistant-gränssnittet (`/api/v1/ha/*` och
    - **Notify-tjänst** (valfri), t.ex. `notify.mobile_app_min_iphone`. Listan visar
      de `notify.mobile_app_*`-tjänster som finns i din Home Assistant.
 3. Integrationen kontrollerar adress och token mot `GET /api/v1/auth/whoami` och
-   att token har behörigheten `ha`.
+   att token har behörigheten `ha`. Från integrationen 1.3.1 används `https://` om du skriver
+   `http://` och adressen bara pekar på publika IP-adresser, så att token aldrig skickas
+   okrypterat över internet. Tilläggets värdnamn, namn i det lokala nätet, `.local` och privata
+   adresser fungerar med `http://` som förut. Redan tillagda integrationer ändras inte.
 
 Om token senare återkallas eller byts visar Home Assistant ett
 *Återautentisering krävs*-meddelande: klistra in en ny token där. Notify-tjänst och
@@ -106,7 +109,11 @@ Integrationen hämtar notiser från DriveLog var 30:e sekund
 
 - **Fördelar:** endast *utgående* anslutningar från Home Assistant. DriveLog behöver
   ingen åtkomst till Home Assistant och ingen long-lived token från Home Assistant
-  lagras i DriveLog. Fungerar även om Home Assistant sitter bakom NAT/CGNAT.
+  lagras i DriveLog. Fungerar även om Home Assistant sitter bakom NAT/CGNAT. Från
+  integrationen 1.3.1 skickar integrationen bara vidare DriveLogs eget notisformat (rubrik,
+  text, DriveLogs knappar och taggar, länkar som börjar med http eller https); annat i utkorgen
+  avvisas och kvitteras som misslyckat. DriveLog kan alltså inte skicka andra kommandon till
+  telefonerna i Home Assistant.
 - **Nackdelar:** upp till ~30 sekunders fördröjning. Kräver att integrationen är
   installerad och igång.
 - Status *ansluten* visas först när integrationen har skickat ett livstecken
@@ -133,8 +140,10 @@ Konfigurera push-läget i DriveLog:
 
 1. Skapa en long-lived access token i Home Assistant (din profil → **Säkerhet** →
    **Långlivade åtkomsttokens**).
-2. Ange Home Assistants adress (t.ex. `http://homeassistant.local:8123`), token och
-   enhet i DriveLog och välj **Testa anslutning**. Status blir *ansluten* först när
+2. Ange Home Assistants adress (t.ex. `http://homeassistant.local:8123` när DriveLog körs i
+   samma nät), token och enhet i DriveLog och välj **Testa anslutning**. Nås Home Assistant över
+   internet ska adressen börja med `https://` – DriveLog godtar `http://` även mot en publik
+   adress, och då skickas token okrypterad. Status blir *ansluten* först när
    DriveLog har verifierat adress och token (`GET /api/` och `GET /api/config`).
 
 Token från Home Assistant visas aldrig igen i DriveLog – API:t svarar bara om en
@@ -292,7 +301,9 @@ notiser. Användbart efter att DriveLog varit nere.
 - Med **Dölj platser på låsskärmen** innehåller notistexten inga platser alls, bara dag
   och mil. Knapparna med ett föreslaget ärende heter då bara *Tjänst: föreslaget ärende*
   eller *Föreslaget ärende 1*, eftersom ärendet ofta innehåller platsens namn. Trycker du
-  på knappen sparas det riktiga ärendet, och i `/m/q` ser du vad det är. Från 1.1.0 är inställningen **av** som standard om du aldrig har ändrat den
+  på knappen sparas det riktiga ärendet, och i `/m/q` ser du vad det är. Undantag: i läget
+  *Jag godkänner allt själv* visar frågan *Vad var syftet?* dina tidigare syften som knappar
+  även när inställningen är på, och de kan innehålla platsnamn. Från 1.1.0 är inställningen **av** som standard om du aldrig har ändrat den
   (tidigare på). Har du själv satt den gäller ditt val.
 - Larm, månadsnotiser och notisen om en ny version innehåller aldrig platser, VIN eller belopp
   per resa.

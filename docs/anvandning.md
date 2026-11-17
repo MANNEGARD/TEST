@@ -448,8 +448,11 @@ kopiera den nya länken. Under *Integrationer* står hur många bokningar som ha
 respektive deltagare; Outlook tar inte alltid med deltagarna i en delad kalender.
 
 **Min arbetsgivares e-postdomän** (samma sektion) avgör vilka deltagare som är kollegor (samma
-domän) och vilka som är externa (kunder, kandidater, leverantörer). DriveLog fyller i fältet ur
-kalendern efter första synken – ändra det om det är fel.
+domän) och vilka som är externa (kunder, kandidater, leverantörer). Så länge fältet är tomt och
+du aldrig har sparat det fyller DriveLog i det ur kalendern vid en synk – kontrollera det och
+ändra det om det är fel. Ett värde du har sparat skrivs aldrig över. Använder du en allmän
+e-postadress (t.ex. gmail) kan domänen ha tagits från någon annans inbjudan; fyll då gärna i
+fältet själv.
 
 En bokning kopplas till resan även utan plats i bokningen, om en ort eller ett företag i rubriken,
 beskrivningen eller bland deltagarnas domäner stämmer med resmålet. Att bara tiden stämmer räcker
