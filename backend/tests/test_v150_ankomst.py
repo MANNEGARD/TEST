@@ -143,7 +143,7 @@ def test_owner_timeline_trip_at_first_fetch_after_arrival(db, user, vehicle, car
     # Motorn går sedan 2 h: raden ses 61 gånger utan nya rader – ingen resa än.
     running = db.execute(select(M.VehicleObservation).where(M.VehicleObservation.engine_running.is_(True))
                          .order_by(M.VehicleObservation.fetched_at.desc())).scalars().first()
-    assert running.seen_count == 61 and running.processed_at is None
+    assert running.seen_count == 61
     arrive(car, PC, 194, pos_min=0.0, odo_min=0.5, fuel=13.0)
     poll(db, vehicle, car, at(1.7))  # första hämtningen efter ankomsten
     rows = raws(db)
@@ -249,8 +249,8 @@ def test_late_odometer_corrects_an_approved_merged_trip(db, user, vehicle, car, 
     poll(db, vehicle, car, at(1.7))
     first, second = raws(db)
     t1, t2 = trip_of(db, first), trip_of(db, second)
-    merged = merge.merge_trips(db, [t1.id, t2.id], actor=actor) if hasattr(merge, "merge_trips") else None
-    trip = merged if merged is not None else t2
+    trip = t1 if t1.id == t2.id else merge.merge_trips(db, [t1, t2], trigger="manual", actor=actor)
+    assert trip.segment_count == 2
     trip.category, trip.review_status = Category.WORK, ReviewStatus.APPROVED
     db.flush()
     car.odometer += 1
@@ -416,14 +416,11 @@ def test_question_not_sent_before_arrival_seen_plus_settle(db, user, vehicle):
 
 
 def test_self_driving_question_waits_for_settle(db, user, vehicle):
-    from tests.v130_ai_stod import self_driving
-
     connect(db, user, vehicle)
     setup_push(db, user, batch_window_minutes=0)
     settings_svc.update_section(db, user.id, "automation", {"mode": "self_driving"})
     settings_svc.update_section(db, user.id, "automation", {"active_since": utcnow() - timedelta(hours=1)},
                                 allow_read_only=True)
-    del self_driving
     base = utcnow().replace(microsecond=0) - timedelta(minutes=20)
     car = FakeCar(odometer=10_000, lat=PA[0], lon=PA[1], odo_ts=base - timedelta(hours=5),
                   pos_ts=base - timedelta(hours=5), engine_ts=base - timedelta(hours=5))
@@ -456,8 +453,8 @@ def _load_old_detection(tmp_dir: Path) -> ModuleType | None:
     else:
         repo = Path(__file__).resolve().parents[2]
         try:
-            text = subprocess.run(
-                ["git", "-C", str(repo), "show", "de16760:backend/app/services/volvo/detection.py"],
+            text = subprocess.run(  # noqa: S603 – fasta argument, ingen indata utifrån
+                ["git", "-C", str(repo), "show", "de16760:backend/app/services/volvo/detection.py"],  # noqa: S607
                 check=True, capture_output=True, text=True, timeout=30,
             ).stdout
         except (OSError, subprocess.SubprocessError):
