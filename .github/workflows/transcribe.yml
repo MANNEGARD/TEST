@@ -155,7 +155,7 @@ jobs:
           }
           halsa() { docker inspect -f '{{.State.Health.Status}}' transcribe; }
           logga_in() {
-            docker exec -e PW="$PW" transcribe node -e 'fetch("http://127.0.0.1:8080/api/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "idag@example.com", password: process.env.PW }) }).then((r) => console.log(r.status), () => console.log(0))'
+            docker exec -e PW="$PW" transcribe node -e 'fetch("http://127.0.0.1:8080/api/login", { method: "POST", headers: { "content-type": "application/json", "x-requested-with": "transcribe" }, body: JSON.stringify({ email: "idag@example.com", password: process.env.PW }) }).then((r) => console.log(r.status), () => console.log(0))'
           }
 
           # 1.0.0 byggs ur sin incheckning. Etiketten saknas (inte ens basavbilden har en).
@@ -187,7 +187,7 @@ jobs:
           test -n "$fraga"
           test "$(docker exec transcribe node -e "$fraga")" = 0
           token="$(docker exec transcribe node dist/cli.js inbjudan admin | grep -oE '/#/inbjudan/[A-Za-z0-9_-]+' | sed 's|.*/||')"
-          docker exec -e PW="$PW" -e TOKEN="$token" transcribe node -e 'fetch("http://127.0.0.1:8080/api/invites/" + process.env.TOKEN, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "idag@example.com", password: process.env.PW }) }).then(async (r) => { if (!r.ok) { console.error(r.status, await r.text()); process.exit(1); } })'
+          docker exec -e PW="$PW" -e TOKEN="$token" transcribe node -e 'fetch("http://127.0.0.1:8080/api/invites/" + process.env.TOKEN, { method: "POST", headers: { "content-type": "application/json", "x-requested-with": "transcribe" }, body: JSON.stringify({ email: "idag@example.com", password: process.env.PW }) }).then(async (r) => { if (!r.ok) { console.error(r.status, await r.text()); process.exit(1); } })'
           test "$(logga_in)" = 200
 
           # Första körningen av raden, innan något nyare finns: ingen omstart, versionen låses i .env
@@ -263,7 +263,7 @@ jobs:
             test "$(halsa)" = healthy
           }
           logga_in() { # → HTTP-koden (inloggningen görs inne i containern; ingen port publiceras)
-            docker exec -e PW="$PW" transcribe node -e 'fetch("http://127.0.0.1:8080/api/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "ci@example.com", password: process.env.PW }) }).then((r) => console.log(r.status), () => console.log(0))'
+            docker exec -e PW="$PW" transcribe node -e 'fetch("http://127.0.0.1:8080/api/login", { method: "POST", headers: { "content-type": "application/json", "x-requested-with": "transcribe" }, body: JSON.stringify({ email: "ci@example.com", password: process.env.PW }) }).then((r) => console.log(r.status), () => console.log(0))'
           }
           for v in 900.0.0 900.1.0; do ny_version "$v"; done
           ny_version 900.2.0 langsam
@@ -302,7 +302,7 @@ jobs:
 
           # Ett konto skapas med en inbjudan, som en användare gör.
           token="$(docker exec transcribe node dist/cli.js inbjudan admin | grep -oE '/#/inbjudan/[A-Za-z0-9_-]+' | sed 's|.*/||')"
-          docker exec -e PW="$PW" -e TOKEN="$token" transcribe node -e 'fetch("http://127.0.0.1:8080/api/invites/" + process.env.TOKEN, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "ci@example.com", password: process.env.PW }) }).then(async (r) => { if (!r.ok) { console.error(r.status, await r.text()); process.exit(1); } })'
+          docker exec -e PW="$PW" -e TOKEN="$token" transcribe node -e 'fetch("http://127.0.0.1:8080/api/invites/" + process.env.TOKEN, { method: "POST", headers: { "content-type": "application/json", "x-requested-with": "transcribe" }, body: JSON.stringify({ email: "ci@example.com", password: process.env.PW }) }).then(async (r) => { if (!r.ok) { console.error(r.status, await r.text()); process.exit(1); } })'
           test "$(logga_in)" = 200
 
           # 2) Ingen ny version: ingenting händer, ingen omstart.
