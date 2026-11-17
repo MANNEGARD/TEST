@@ -145,6 +145,26 @@ def _is_arrival(step: Step, prev: Eff) -> bool:
     return step.pos_moved and newer_report
 
 
+def _started_after(obs: VehicleObservation, odo_ts: datetime | None, arrived_at: datetime) -> bool:
+    """Kan mätarvärdet innehålla en ny körning: avläsningen rapporterar att motorn har startat
+    efter ankomsten, och mätarvärdet är inte bevisligen avläst före den starten?"""
+    if obs.engine_running is not True:
+        return False
+    started = obs.engine_reported_at
+    if started is None:
+        return True
+    return started > arrived_at and (odo_ts is None or odo_ts >= started)
+
+
+def _has_arrival(anchor_eff: Eff, steps: list[Step]) -> bool:
+    prev = anchor_eff
+    for step in steps:
+        if _is_arrival(step, prev):
+            return True
+        prev = step.eff
+    return False
+
+
 def _arrival_complete(anchor_eff: Eff, steps: list[Step], settings: dict[str, Any]) -> bool:
     """Är rörelsen avslutad med en ankomst vars uppgifter är kompletta (1.5.0)?
 
@@ -159,7 +179,9 @@ def _arrival_complete(anchor_eff: Eff, steps: list[Step], settings: dict[str, An
       inom ``CLOCK_SKEW`` från positionens. Ett äldre värde kan sakna en del av sträckan, och
       ett mycket senare kan innehålla nästa körning;
     * mätarsträckan är minst fågelvägen (med mätarens upplösning i marginal) – annars är
-      mätarvärdet bevisligen gammalt, vad tidsstämpeln än säger.
+      mätarvärdet bevisligen gammalt, vad tidsstämpeln än säger;
+    * en mätarökning efter ankomsten kommer inte från en avläsning som rapporterar att motorn
+      har startat igen efter ankomsten (då kan den höra till nästa körning).
 
     Motorstatus och "sett två gånger" krävs inte. Saknas något av detta gäller den vanliga
     väntan i ``_settled`` oförändrad.
@@ -181,15 +203,45 @@ def _arrival_complete(anchor_eff: Eff, steps: list[Step], settings: dict[str, An
     arrived_at, odo_ts = arrival.eff.pos_ts, final.odo_ts
     if arrived_at is None or odo_ts is None or final.pos_ts != arrived_at:
         return False
+    after = steps[steps.index(arrival) + 1:]
+    if any(s.odo_moved and _started_after(s.obs, s.eff.odo_ts, arrived_at) for s in after):
+        return False  # bilen har startat igen: ökningen kan höra till nästa körning
     if not (arrived_at - CLOCK_SKEW <= odo_ts <= arrived_at + CLOCK_SKEW):
         return False
     if final.odo is None or leg_start.odo is None:
         return False
-    crow_m = _dist_m(leg_start, final)
-    if crow_m is None:
+    if _dist_m(leg_start, final) is None:
+        return False
+    return not _stale_at_arrival(leg_start, final, settings)
+
+
+def _stale_at_arrival(start: Eff, end: Eff, settings: dict[str, Any]) -> bool:
+    """Är mätarvärdet vid ankomsten bevisligen gammalt: mätarsträckan kortare än fågelvägen?
+
+    Mätarställningen är ett heltal, så en kilometer (eller ``min_odometer_delta_km``) räknas
+    som marginal. Då måste en senare ökning utan ny positionsrapport höra till samma körning –
+    annars räknas sträckan två gånger (en uppskattning ur fågelvägen plus mätarökningen).
+    """
+    crow_m = _dist_m(start, end)
+    if crow_m is None or start.odo is None or end.odo is None:
         return False
     resolution = max(float(settings.get("min_odometer_delta_km", 1.0)), 1.0)
-    return final.odo - leg_start.odo + resolution >= crow_m / 1000
+    return end.odo - start.odo + resolution < crow_m / 1000
+
+
+def _catches_up(start: Eff, end: Eff, new_odo: float, settings: dict[str, Any]) -> bool:
+    """Hör en senare mätarökning till en ankomst vars mätarvärde var bevisligen gammalt?
+
+    Ja när mätarvärdet vid ankomsten var gammalt (``_stale_at_arrival``) och resan med ökningen
+    inte blir längre än vad som räknas som omväg (``detour_factor`` × fågelvägen +
+    ``detour_slack_km``). Är ökningen större kan den innehålla en annan körning: då gäller
+    reglerna från före 1.5.0.
+    """
+    crow_m = _dist_m(start, end)
+    if crow_m is None or start.odo is None or not _stale_at_arrival(start, end, settings):
+        return False
+    limit = float(settings.get("detour_factor", 1.8)) * (crow_m / 1000) + float(settings.get("detour_slack_km", 5.0))
+    return new_odo - start.odo <= limit
 
 
 def _settled(steps: list[Step], settings: dict[str, Any]) -> bool:
@@ -279,6 +331,10 @@ def _build_legs(anchor: VehicleObservation, anchor_eff: Eff, steps: list[Step], 
                 lagging = end.eff.odo_ts <= arrival_ts + CLOCK_SKEW
             else:
                 lagging = extra <= LAG_KM
+            # 1.5.0: var mätarvärdet vid ankomsten bevisligen gammalt hör ökningen till samma
+            # resa, vad tidsstämpeln än säger. Före 1.5.0 blev den en egen "resa" utan ny
+            # position, och sträckan räknades två gånger (uppskattningen ur fågelvägen plus ökningen).
+            lagging = lagging or (end.eff.odo is not None and _catches_up(last_leg.start, last_leg.end, end.eff.odo, settings))
             if lagging:
                 last_leg.end = Eff(
                     odo=end.eff.odo, odo_ts=end.eff.odo_ts, lat=last_leg.end.lat, lon=last_leg.end.lon,
@@ -554,6 +610,16 @@ def _arrival_raw(db: Session, vehicle_id: uuid.UUID, at: Eff) -> RawTrip | None:
     return None
 
 
+def _raw_catches_up(raw: RawTrip, step: Step, arrived_at: datetime, settings: dict[str, Any]) -> bool:
+    """``_catches_up`` för en redan skapad resa – men aldrig när bilen har rapporterat en
+    motorstart efter ankomsten (då kan ökningen vara nästa körning)."""
+    if _started_after(step.obs, step.eff.odo_ts, arrived_at):
+        return False
+    start = Eff(odo=raw.odometer_start, lat=raw.start_lat, lon=raw.start_lon)
+    end = Eff(odo=raw.odometer_end, lat=raw.end_lat, lon=raw.end_lon)
+    return step.eff.odo is not None and _catches_up(start, end, step.eff.odo, settings)
+
+
 def _observation_ids(raw: RawTrip) -> list[str]:
     value = raw.observation_ids
     return [v for v in value if isinstance(v, str)] if isinstance(value, list) else []
@@ -573,12 +639,15 @@ def _attach_late_odometer(
 
     Bara när det är säkert att det är samma körning:
 
-    * bara mätarställningen har ökat, och ingen ny positionsrapport har kommit sedan
-      ankomsten (samma tidsstämpel);
+    * bara mätarställningen har ökat, ingen ny positionsrapport har kommit sedan ankomsten
+      (samma tidsstämpel), och bilen har inte rapporterat en ny motorstart efter ankomsten
+      som mätarvärdet kan vara avläst efter (``_started_after``);
     * mätarvärdet är avläst senast vid ankomsten (bilens tidsstämpel högst ``CLOCK_SKEW``
       efter positionens) – eller, utan tidsstämpel, en ökning på högst ``LAG_KM`` medan
       väntan från före 1.5.0 ännu inte hade stängt rörelsen (då hade värdet hamnat i samma
-      resa förut också);
+      resa förut också) – eller resans mätarsträcka är kortare än fågelvägen, så att värdet
+      vid ankomsten bevisligen var gammalt, och ökningen ryms inom omvägsgränsen utan att
+      bilen har rapporterat en ny motorstart (``_raw_catches_up``);
     * resan som slutade med just den positionsrapporten finns, är inte makulerad och slutar
       på den mätarställning bilen hade före ökningen.
 
@@ -591,14 +660,17 @@ def _attach_late_odometer(
     arrived_at = prev.pos_ts
     if arrived_at is None or not _same_instant(step.eff.pos_ts, arrived_at):
         return None
-    odo_ts = step.eff.odo_ts
-    if odo_ts is not None:
-        if odo_ts > arrived_at + CLOCK_SKEW:
-            return None
-    elif not (old_waiting and step.eff.odo - prev.odo <= LAG_KM):
-        return None
+    if _started_after(step.obs, step.eff.odo_ts, arrived_at):
+        return None  # bilen har startat igen: ökningen kan höra till nästa körning
     raw = _arrival_raw(db, vehicle.id, prev)
     if raw is None or raw.odometer_start is None or raw.odometer_end is None:
+        return None
+    odo_ts = step.eff.odo_ts
+    if odo_ts is not None:
+        read_at_arrival = odo_ts <= arrived_at + CLOCK_SKEW
+    else:
+        read_at_arrival = old_waiting and step.eff.odo - prev.odo <= LAG_KM
+    if not (read_at_arrival or _raw_catches_up(raw, step, arrived_at, settings)):
         return None
     obs_id = str(step.obs.id)
     if obs_id in _observation_ids(raw):
@@ -793,8 +865,8 @@ def process_vehicle(
     created: list[RawTrip] = []
     corrected: list[RawTrip] = []
     # Väntan från före 1.5.0 följs vid sidan av (``old_steps``): rörelsen som den ännu inte
-    # hade stängt. Det gör att (1) ingen resa stängs senare än förut – stänger den gamla väntan
-    # rörelsen stängs den pågående också – och (2) ett släpande mätarvärde utan tidsstämpel förs
+    # hade stängt. Det gör att (1) ingen resa med ankomst stängs senare än förut – stänger den
+    # gamla väntan rörelsen stängs den pågående också (se ``forced`` nedan) – och (2) ett släpande mätarvärde utan tidsstämpel förs
     # till den stängda resan precis så länge den gamla väntan hade tagit med det i samma resa.
     old_steps = _old_movement(db, vehicle.id, anchor, settings)
 
@@ -841,7 +913,12 @@ def process_vehicle(
         steps.append(step)
         prev_eff = eff
         # En ankomst med kompletta uppgifter stängs direkt (1.5.0); annars gäller väntan.
-        if not (old_closed or _arrival_complete(anchor_eff, steps, settings) or _settled(steps, settings)):
+        # Stänger väntan från före 1.5.0 rörelsen stängs den här också – men bara när den här
+        # rörelsen själv har en ankomst. Utan ankomst stängde 1.4.2 ibland på en tidigare
+        # ankomst i samma rörelse innan positionen kom, och positionen blev sedan en egen resa
+        # med uppskattad sträcka (samma kilometer två gånger); då väntar den nya motorn i stället.
+        forced = old_closed and _has_arrival(anchor_eff, steps)
+        if not (forced or _arrival_complete(anchor_eff, steps, settings) or _settled(steps, settings)):
             continue
         legs = _build_legs(anchor, anchor_eff, steps, settings, poll)
         for i, leg in enumerate(legs):

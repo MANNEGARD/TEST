@@ -73,6 +73,15 @@ export interface TripSegment {
   note: string | null;
 }
 
+/** Hur en uppskattad förbrukning räknades fram: metod, värde ± felgräns och en färdig text. */
+export interface ConsumptionBasis {
+  method: string;
+  value: number;
+  margin: number;
+  unit: "l" | "kWh";
+  text: string;
+}
+
 export interface RawTrip {
   id: string;
   source: TripSourceCode;
@@ -98,6 +107,9 @@ export interface RawTrip {
   energy_kwh: number | null;
   energy_quality: ValueQualityCode;
   regen_kwh: number | null;
+  /** Grunden för en uppskattad förbrukning (1.5.0, volvo/consumption.basis_out); null annars. */
+  fuel_basis?: ConsumptionBasis | null;
+  energy_basis?: ConsumptionBasis | null;
   original_category: string | null;
   original_title: string | null;
   original_notes: string | null;

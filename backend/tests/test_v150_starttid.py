@@ -119,6 +119,42 @@ def test_without_timestamp_the_minute_between_the_polls():
     assert estimate(rows, km=12.0)[3]["method"] == "poll_midpoint"
 
 
+def test_minute_between_the_polls_is_estimated(db, user, vehicle, actor):
+    """Minuten mitt emellan är uträknad: "≈" och "ca", aldrig bilens tid – men den ligger fast."""
+    trip = engine_trip(db, vehicle, user, engine_ts=None)
+    db.execute(M.VehicleObservation.__table__.update().where(
+        M.VehicleObservation.engine_running.is_(False), M.VehicleObservation.fetched_at < ARR)
+        .values(last_seen_at=at(-14.1)))
+    db.execute(M.VehicleObservation.__table__.update().where(M.VehicleObservation.engine_running.is_(True))
+               .values(fetched_at=at(-12.1)))
+    assert start_time.fill_from_engine(db, vehicle.id) == 1
+    trip = reload_trip(db, trip.id)
+    raw = seg.ordered_raws(trip)[0]
+    assert raw.start_estimate_basis["method"] == "poll_midpoint" and raw.start_estimate_basis["margin_min"] == 1.0
+    assert trip.start_time_quality == TimeQuality.ESTIMATED and local(trip.started_at) == local(at(-13))
+    assert start_time.display(trip, TZ).startswith("≈")
+    assert start_time.known_start(trip) == trip.started_at
+    (out,) = serializers.trips_out(db, [trip])
+    assert out.start_time_source == "estimated"
+    # Ligger fast: varken steget eller K4 rör den igen.
+    assert start_time.engine_plan(db, vehicle.id) == []
+    assert start_time.fill_from_distance(db, vehicle.id) == 0
+    assert reload_trip(db, trip.id).started_at == trip.started_at
+
+
+def test_unreadable_engine_status_midtrip_is_ignored():
+    """En hämtning där motorstatusen inte kunde läsas mitt i resan är ingen motorstart."""
+    rows = [
+        row(-200, -56, engine=False),
+        row(-54.5, -28, engine=True, engine_ts=-55),
+        row(-26, engine=None),
+        row(-24, -0.4, engine=True, engine_ts=-55),
+        row(1.7, engine=False, engine_ts=0.5),
+    ]
+    kind, when, _, basis = estimate(rows, km=40.0)
+    assert kind == "set" and when == at(-55) and basis["method"] == "engine_start"
+
+
 def test_long_window_gives_no_start_but_narrows_the_latest():
     """Uppehåll i hämtningen: 40 minuter mellan hämtningarna och ingen tidsstämpel."""
     rows = [row(-90, -60, engine=False), row(-20, -1, engine=True)]

@@ -239,6 +239,19 @@ adresser vid bostaden, visas i stället ett förslag om att slå ihop dem under 
 
 ### Starttid
 
+**Motorstarten (från 1.5.0).** Bilen rapporterar själv när motorn startar, med egen tid, även
+när position och mätarställning kommer först när tändningen slås av. DriveLog använder den som
+resans starttid: bilens egen tid när den ligger mellan två hämtningar. Tiden visas som en
+vanlig tid, utan "≈", och utan "ca" i underlaget. Saknas bilens tid används minuten mitt
+emellan hämtningarna när de ligger högst 6 minuter isär; den är uträknad och visas därför som
+**≈ 06:15 (±1 min)** och **ca** i underlaget. Ett tryck visar grunden ("Bilen rapporterade själv att
+motorn startade 06:15 …"). Den ändras aldrig av sig själv – bara du kan ange en annan tid med
+**Ange**. Skulle motorstarten ge en orimligt hög snittfart för sträckan (en laddhybrid som
+startar på el kan starta motorn först en bit in i resan) används den inte; då gäller reglerna
+nedan. Resor från de senaste två veckorna som saknar starttid eller har en uppskattad starttid
+rättas vid nästa hämtning, och ändringen syns i resans historik – utom resor där du angett
+starttiden och resor i en månad vars underlag redan är skapat.
+
 Volvo rapporterar bilens position först när en körning är slut. Räcker bilens avläsningar
 under färden räknar DriveLog fram starttiden och visar den som **≈ 07:35 (±4 min)**; ett tryck
 visar grunden ("Bilen stod still … och var på väg …"). I underlaget skrivs den **ca 07:35**,
@@ -612,9 +625,13 @@ som redan är skapade ändras inte.
 ## Notiser i telefonen
 
 Med Home Assistant ansluten kommer frågorna som interaktiva notiser, och svaren sparas direkt
-i journalen. I självgående läge kommer en fråga åt gången, med kategori och ärende i samma
-tryck och knappar som *Tjänst: Kundbesök …*, *Tjänst – skriv ärende*, *Privat* och *Alltid
-privat här*. DriveLog påminner efter 24 timmar och lägger undan frågan efter 48, så att nästa
+i journalen. Frågan utgår från vad DriveLog har kommit fram till: har resan bedömts som
+tjänst med ett ärende frågar notisen *Tjänsteresa – stämmer det?* med *Godkänn* (tjänst och
+ärendet i ett tryck), *Ändra ärende*, *Privat* och *Senare*; utan ärende *Tjänsteresa –
+vilket ärende?* med förslag; bedömd som privat *Privat resa – stämmer det?*. Bara en resa som
+inte är bedömd får *Tjänst eller privat?* med knappar som *Tjänst: Kundbesök …*, *Tjänst –
+skriv ärende*, *Privat* och *Alltid privat här*. I självgående läge kommer en fråga åt
+gången. DriveLog påminner efter 24 timmar och lägger undan frågan efter 48, så att nästa
 får plats. Larm när något har slutat fungera (Volvo, kalendern) och månadsnotisen kommer också
 hit. Obesvarade frågor ligger kvar under *Granskning*. Tysta timmar, max antal per
 dygn och påminnelser ställs in under *Inställningar → Notiser*. Se
@@ -639,11 +656,25 @@ tilläggets sida i Home Assistant.
 
 Under *Mer → Bränsle & energi* visas bensin och el. Förbrukning räknas som uppmätt när den
 kommer per resa ur den importerade körjournalen. För resor från bilen räknar DriveLog fram
-förbrukningen ur bilens egna avläsningar – den automatiska trippmätaren och snittförbrukningen
-för samma period, annars skillnaden i tanken; en tankning under resan gör värdet okänt.
-Batteriets nivå används inte än. De värdena är uppskattade och står med ≈ på resan. Räcker inte
-bilens uppgifter, eller är de för grova för att lita på, står det "–". Här kan du också
-föra in tankningar och laddningar.
+förbrukningen ur bilens egna avläsningar: färddatorns snitt gånger trippmätaren, eller
+skillnaden i tanken och batteriet mellan senaste rapporten före resan och rapporten vid
+ankomsten. DriveLog väljer den källa som är säkrast för just den resan. En tankning eller
+laddning under resan gör värdet okänt. Värdena är uppskattade och står med ≈ på resan; räcker
+inte bilens uppgifter står det "–".
+
+**Hur säkert är värdet?** Bilen rapporterar tanken i hela liter och batteriet i hela procent.
+Då kan skillnaden vara fel med upp till en liter respektive en procentenhet: "12 l ± 1 l" betyder
+att resan drog mellan 11 och 13 liter. DriveLog avrundar inte själv. I resans detaljer står hur
+värdet räknades fram – metod, nivån före och efter och felgränsen. Elen är nettot ur batteriet;
+bilen kan ha laddat batteriet med motorn eller bromsarna under färd.
+
+**Batteriets kapacitet.** För att räkna el behöver DriveLog batteriets *användbara* kapacitet i
+kWh. Fyll i den under *Inställningar → Fordon och förare*. Är fältet tomt används ett
+standardvärde bara när det finns ett belagt värde för modellen och årsmodellen; annars visas
+ingen el. När du fyller i eller ändrar kapaciteten räknas elen om på resorna från de senaste 14
+dygnen (dina egna värden rörs inte, och inte heller månader vars underlag redan är skapat).
+
+Här kan du också föra in tankningar och laddningar.
 
 ### Felsökningsfil
 

@@ -30,6 +30,7 @@ export interface VehiclePatch {
   model?: string;
   model_year?: number | null;
   registration_number?: string | null;
+  usable_battery_kwh?: number | null;
 }
 
 /** routes/vehicles.py → DriverOut */

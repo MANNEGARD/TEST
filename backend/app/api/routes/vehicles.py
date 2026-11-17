@@ -31,6 +31,8 @@ class VehicleIn(BaseModel):
     registration_number: str | None = Field(default=None, max_length=20)
     is_default: bool | None = None
     is_active: bool | None = None
+    # Batteriets användbara kapacitet i kWh (1.5.0); null = standardvärdet eller okänd.
+    usable_battery_kwh: float | None = Field(default=None, gt=0, le=200)
 
 
 class DriverOut(ORM):
@@ -117,11 +119,18 @@ def update_vehicle(vehicle_id: uuid.UUID, body: VehicleIn, principal: WebPrincip
             raise bad_request("Demobilen kan inte vara standardfordon.")
         for other in db.execute(select(Vehicle).where(Vehicle.owner_user_id == principal.user.id)).scalars():
             other.is_default = False
+    capacity_before = v.usable_battery_kwh
     for field, value in data.items():
         if field == "registration_number" and value is not None:
             value = value.strip().upper() or None
         setattr(v, field, value)
     audit.record(db, principal.actor, "vehicle.update", "vehicle", v.id, before=before, after=data)
+    if "usable_battery_kwh" in data and data["usable_battery_kwh"] != capacity_before:
+        # Elen som räknats ur kapaciteten (och el som saknas) räknas om (volvo.consumption).
+        from app.services.volvo import consumption
+
+        db.flush()
+        consumption.refill_after_capacity_change(db, v.id)
     db.commit()
     return vehicle_out(v)
 

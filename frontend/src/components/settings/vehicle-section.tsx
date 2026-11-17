@@ -20,12 +20,23 @@ import { Advanced, Field, FormCard, GroupHeading, SaveBar, SectionIntro, Setting
 import { OdometerReadings } from "./odometer-readings";
 import { useSettingsForm } from "./use-settings-form";
 
-type VehicleField = "name" | "make" | "model" | "model_year" | "registration_number";
+type VehicleField = "name" | "make" | "model" | "model_year" | "registration_number" | "usable_battery_kwh";
 
 /** Gränserna följer backend/app/api/routes/vehicles.py → VehicleIn. */
 const MAX = { name: 120, make: 80, model: 120, registration_number: 20 } as const;
 const YEAR_MIN = 1950;
 const YEAR_MAX = 2100;
+/** Batteriets användbara kapacitet (kWh), samma gränser som VehicleIn.usable_battery_kwh. */
+const KWH_MAX = 200;
+
+function formatKwhInput(value: number | null | undefined): string {
+  return value != null ? String(value).replace(".", ",") : "";
+}
+
+function parseKwh(value: string): number | null {
+  const t = value.trim().replace(",", ".");
+  return t ? Number(t) : null;
+}
 
 function serverValues(v: Vehicle): Record<VehicleField, string> {
   return {
@@ -34,6 +45,7 @@ function serverValues(v: Vehicle): Record<VehicleField, string> {
     model: v.model ?? "",
     model_year: v.model_year != null ? String(v.model_year) : "",
     registration_number: v.registration_number ?? "",
+    usable_battery_kwh: formatKwhInput(v.usable_battery_kwh),
   };
 }
 
@@ -52,6 +64,10 @@ function validate(values: Record<VehicleField, string>): Partial<Record<VehicleF
   if (year && (!/^\d{4}$/.test(year) || Number(year) < YEAR_MIN || Number(year) > YEAR_MAX)) {
     errors.model_year = `Ange ett årtal mellan ${YEAR_MIN} och ${YEAR_MAX}.`;
   }
+  const kwh = parseKwh(values.usable_battery_kwh);
+  if (kwh != null && (!Number.isFinite(kwh) || kwh <= 0 || kwh > KWH_MAX)) {
+    errors.usable_battery_kwh = `Ange kapaciteten i kWh, större än 0 och högst ${KWH_MAX}.`;
+  }
   return errors;
 }
 
@@ -61,9 +77,22 @@ function toPatch(fields: VehicleField[], values: Record<VehicleField, string>): 
     const v = normalize(f, values[f]);
     if (f === "model_year") patch.model_year = v ? Number(v) : null;
     else if (f === "registration_number") patch.registration_number = v || null;
+    else if (f === "usable_battery_kwh") patch.usable_battery_kwh = parseKwh(v);
     else patch[f] = v;
   }
   return patch;
+}
+
+/** Hjälptexten under kapaciteten: vad elen räknas med och var värdet kommer ifrån. */
+function batteryHint(v: Vehicle): string {
+  const base =
+    "Elen per resa räknas som batterinivåns skillnad (hela procent) × den användbara kapaciteten – inte den nominella, som är större.";
+  const volvo = v.volvo_battery_kwh != null ? ` Volvo anger batteriet till ${formatKwhInput(v.volvo_battery_kwh)} kWh (nominellt).` : "";
+  if (v.usable_battery_kwh != null) return `${base}${volvo}`;
+  if (v.suggested_battery_kwh != null) {
+    return `${base} Tomt fält: standardvärdet ${formatKwhInput(v.suggested_battery_kwh)} kWh för modellen och årsmodellen används.${volvo}`;
+  }
+  return `${base} Inget belagt värde finns för bilens årsmodell, så elen visas inte förrän du fyller i.${volvo} För V90 T8 med 11,6 kWh-batteri anger motorpressen 9,1 kWh användbart.`;
 }
 
 /** Vanliga IANA-tidszoner. Backend (settings.py) validerar mot hela tz-databasen. */
@@ -191,6 +220,19 @@ function VehicleForm({ vehicle, data }: { vehicle: Vehicle; data: SettingsPayloa
             placeholder="ÅÅÅÅ"
             className="font-mono"
             aria-invalid={errors.model_year ? true : undefined}
+            autoComplete="off"
+          />
+        </Field>
+        <Field id="veh-battery" label="Batteriets användbara kapacitet (kWh)" hint={batteryHint(vehicle)} error={errors.usable_battery_kwh} className="sm:col-span-6">
+          <Input
+            id="veh-battery"
+            value={values.usable_battery_kwh}
+            onChange={set("usable_battery_kwh")}
+            inputMode="decimal"
+            maxLength={6}
+            placeholder={vehicle.suggested_battery_kwh != null ? formatKwhInput(vehicle.suggested_battery_kwh) : "t.ex. 9,1"}
+            className="font-mono sm:w-40"
+            aria-invalid={errors.usable_battery_kwh ? true : undefined}
             autoComplete="off"
           />
         </Field>

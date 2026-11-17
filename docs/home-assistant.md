@@ -183,7 +183,10 @@ Alla texter är på svenska, med mil och decimalkomma.
 
 | Typ | Exempel | Knappar |
 | --- | --- | --- |
-| Ny resa | *Ny resa: Hemmet → Örebro. 4,2 mil. Var detta arbete eller privat?* | Arbete, Privat, Granska, Senare |
+| Ny resa (inte bedömd) | *Ny resa: Hemmet → Örebro. 4,2 mil. Var detta arbete eller privat?* | Arbete, Privat, Granska, Senare |
+| Tjänsteresa – stämmer det? | *tis 15/9 08:10–08:55 · Hemmet → Örebro · 4,2 mil. Ärende: Kundbesök Exempel AB.* | Godkänn, Ändra ärende (textsvar), Privat, Senare, Alltid: &lt;ärendet&gt; |
+| Tjänsteresa – vilket ärende? | *tis 15/9 08:10–08:55 · Hemmet → Örebro · 4,2 mil.* | Två förslag, Skriv ärende (textsvar), Privat, Senare, Alltid: &lt;förslag&gt; |
+| Privat resa – stämmer det? | *tis 15/9 08:10–08:55 · Hemmet → Örebro · 4,2 mil.* | Ja, privat; Tjänst – skriv ärende (textsvar); Senare |
 | Syfte | *Du har en resa till Jönköping. Vad var syftet?* | Upp till tre tidigare bekräftade syften, Ange nytt syfte (textsvar), Öppna körjournal |
 | Sammanslagning | *Två resor med 38 minuters stillestånd. Ska de slås samman?* | Ja, Nej, Granska, Senare |
 | Samlingsnotis | *5 resor behöver granskas i körjournalen.* | Öppna granskning, Senare |
@@ -195,7 +198,10 @@ från 1.1.0) ser notiserna ut så här:
 
 | Typ | Exempel | Knappar |
 | --- | --- | --- |
-| Ny resa | *Ny resa · tis 08:10–08:55 · Hemvägen 1, Hemby → Exempelgatan 12, Exempelstad · 2,3 mil. Tjänst eller privat?* | Tjänst: &lt;förslag&gt;, Alltid: &lt;förslag&gt;, Tjänst – skriv ärende (textsvar), Privat, Alltid privat här, Senare |
+| Ny resa (inte bedömd) | *tis 15/9 08:10–08:55 · Hemvägen 1, Hemby → Exempelgatan 12, Exempelstad · 2,3 mil. Tjänst eller privat?* | Tjänst: &lt;förslag&gt;, Alltid: &lt;förslag&gt;, Tjänst – skriv ärende (textsvar), Privat, Alltid privat här, Senare |
+| Tjänsteresa – stämmer det? | *tis 15/9 08:10–08:55 · Hemvägen 1, Hemby → Exempelgatan 12, Exempelstad · 2,3 mil. Ärende: Kundbesök Exempel AB.* | Godkänn, Ändra ärende (textsvar), Privat, Senare, Alltid: &lt;ärendet&gt; |
+| Tjänsteresa – vilket ärende? | *tis 15/9 08:10–08:55 · Hemvägen 1, Hemby → Exempelgatan 12, Exempelstad · 2,3 mil.* | Två förslag, Skriv ärende (textsvar), Privat, Senare, Alltid: &lt;förslag&gt; |
+| Privat resa – stämmer det? | *tis 15/9 08:10–08:55 · Hemvägen 1, Hemby → Exempelgatan 12, Exempelstad · 2,3 mil.* | Ja, privat; Tjänst – skriv ärende (textsvar); Senare |
 | Vilket ärende? | *Exempel AB, Exempelstad, 2,3 mil* | Två förslag, Alltid: &lt;förslag&gt;, Skriv ärende (textsvar), Privat, Senare |
 | Vilket företag var det? | *tis 10:15 · Industrivägen 4, Exempelstad · 2,3 mil* | Skriv företagets namn (textsvar), Privat, Senare |
 | Antaget | *Antaget: Kundbesök Exempel AB · tis 2,3 mil · Räknas som tjänst i morgon 14:05 om du inte säger emot* | Stämmer, Fel – privat, Annat ärende (textsvar) |
@@ -203,6 +209,15 @@ från 1.1.0) ser notiserna ut så här:
 | Månaden | *Oktober klart* (siffror, inga platser) eller *Oktober väntar* (vad som väntar) | Öppna underlaget, Se antagna |
 | Ny version | *DriveLog är uppdaterad till 1.3.0* – *Från 1.2.3. Nytt: …* (direkt efter uppgraderingen från 1.2.x: *Från en tidigare version.*) (de tre första nyheterna) | Öppna (Inställningar → Om DriveLog) |
 
+- **Frågan utgår från DriveLogs bedömning** (från 1.5.0, i båda lägena). Har DriveLog redan
+  bedömt resan som tjänst med ett ärende frågar notisen *Tjänsteresa – stämmer det?*, och
+  *Godkänn* godkänner både tjänst och ärendet som det står i notisen, i ett tryck. *Ändra
+  ärende* godkänner tjänst med det ärende du skriver. Har förslaget ändrats sedan notisen kom
+  (du ändrade ärendet i webben eller resan bedömdes om) godkänns ingenting: du får ett
+  meddelande om att öppna körjournalen. Bara en resa som DriveLog inte har bedömt får
+  frågan *Tjänst eller privat?*, och en resa som kan vara flera körningar får den alltid.
+  Svaren ger samma resultat i journalen som motsvarande val i webben: godkänd resa, ärendena
+  i Granskning stängs och DriveLog lär sig av svaret.
 - Kategori och ärende besvaras i **samma tryck**. Det kommer **en fråga åt gången**; nästa
   skickas när den förra är besvarad eller undanlagd. Ingen samlingsnotis och ingen
   sammanslagningsfråga.
@@ -300,7 +315,9 @@ notiser. Användbart efter att DriveLog varit nere.
   Assistants historik. Notiserna i läget *Jag godkänner allt själv* visar som förut bara orten.
 - Med **Dölj platser på låsskärmen** innehåller notistexten inga platser alls, bara dag
   och mil. Knapparna med ett föreslaget ärende heter då bara *Tjänst: föreslaget ärende*
-  eller *Föreslaget ärende 1*, eftersom ärendet ofta innehåller platsens namn. Trycker du
+  eller *Föreslaget ärende 1*, eftersom ärendet ofta innehåller platsens namn. I *Tjänsteresa
+  – stämmer det?* står då *Ärendet visas i appen.* i stället för ärendet, och knappen heter
+  *Godkänn förslaget*. Trycker du
   på knappen sparas det riktiga ärendet, och i `/m/q` ser du vad det är. Undantag: i läget
   *Jag godkänner allt själv* visar frågan *Vad var syftet?* dina tidigare syften som knappar
   även när inställningen är på, och de kan innehålla platsnamn. Från 1.1.0 är inställningen **av** som standard om du aldrig har ändrat den

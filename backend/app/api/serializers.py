@@ -42,6 +42,15 @@ def approval_reason(trip: LogicalTrip) -> str | None:
 def vehicle_out(v: Vehicle) -> VehicleOut:
     out = VehicleOut.model_validate(v)
     out.vin_masked = vehicles_svc.mask_vin(v.vin)
+    from app.services.volvo import consumption
+
+    out.suggested_battery_kwh = consumption.suggested_battery_kwh(v)
+    details = (v.capabilities or {}).get("details") if isinstance(v.capabilities, dict) else None
+    nominal = details.get("battery_capacity_kwh") if isinstance(details, dict) else None
+    try:
+        out.volvo_battery_kwh = float(nominal) if nominal is not None and float(nominal) > 0 else None
+    except (TypeError, ValueError):
+        out.volvo_battery_kwh = None
     return out
 
 

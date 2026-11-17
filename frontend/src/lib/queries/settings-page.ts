@@ -106,6 +106,7 @@ export function useUpdateVehicle() {
       void qc.invalidateQueries({ queryKey: qk.vehicles });
       void qc.invalidateQueries({ queryKey: qk.dashboard.all }); // fordonets namn visas på översikten
       void qc.invalidateQueries({ queryKey: qk.exports.all }); // och i exportens sidhuvud
+      void qc.invalidateQueries({ queryKey: qk.trips.all }); // elen räknas om när batteriets kapacitet ändras
     },
   });
 }

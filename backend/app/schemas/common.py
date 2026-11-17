@@ -30,6 +30,11 @@ class VehicleOut(ORM):
     is_active: bool
     is_default: bool
     capabilities: dict[str, Any] = {}
+    # Batteriets användbara kapacitet (1.5.0): ägarens värde, standardvärdet ur modell och
+    # årsmodell (None när inget belagt finns) och Volvos uppgift om batteriet (nominell kapacitet).
+    usable_battery_kwh: float | None = None
+    suggested_battery_kwh: float | None = None
+    volvo_battery_kwh: float | None = None
 
 
 class LocationBrief(ORM):

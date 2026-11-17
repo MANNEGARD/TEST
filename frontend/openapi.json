@@ -14916,6 +14916,19 @@
        }
       ],
       "title": "Is Active"
+     },
+     "usable_battery_kwh": {
+      "anyOf": [
+       {
+        "type": "number",
+        "maximum": 200.0,
+        "exclusiveMinimum": 0.0
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Usable Battery Kwh"
      }
     },
     "type": "object",
@@ -14994,6 +15007,39 @@
       "type": "object",
       "title": "Capabilities",
       "default": {}
+     },
+     "usable_battery_kwh": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Usable Battery Kwh"
+     },
+     "suggested_battery_kwh": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Suggested Battery Kwh"
+     },
+     "volvo_battery_kwh": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Volvo Battery Kwh"
      }
     },
     "type": "object",

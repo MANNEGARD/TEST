@@ -4680,6 +4680,8 @@ export interface components {
             is_default?: boolean | null;
             /** Is Active */
             is_active?: boolean | null;
+            /** Usable Battery Kwh */
+            usable_battery_kwh?: number | null;
         };
         /** VehicleOut */
         VehicleOut: {
@@ -4715,6 +4717,12 @@ export interface components {
             capabilities: {
                 [key: string]: unknown;
             };
+            /** Usable Battery Kwh */
+            usable_battery_kwh?: number | null;
+            /** Suggested Battery Kwh */
+            suggested_battery_kwh?: number | null;
+            /** Volvo Battery Kwh */
+            volvo_battery_kwh?: number | null;
         };
         /** WhatsNewOut */
         WhatsNewOut: {

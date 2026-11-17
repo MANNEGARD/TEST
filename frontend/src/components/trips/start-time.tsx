@@ -13,7 +13,7 @@ import { TripTime } from "./trip-time";
 
 /** RawTrip.start_estimate_basis (services/trips/start_time.py, byggkontraktet D.3). */
 export interface StartBasis {
-  method?: "trip_meter" | "odometer_speed" | "window" | "distance_speed" | string;
+  method?: "trip_meter" | "odometer_speed" | "window" | "distance_speed" | "engine_start" | "poll_midpoint" | string;
   earliest?: string | null;
   latest?: string | null;
   margin_min?: number | null;
@@ -28,7 +28,14 @@ export interface StartBasis {
   duration_minutes?: number | null;
   /** K4: körtiden rymdes inte mellan bilens avläsningar, så tiden hölls inom fönstret. */
   held_to_window?: boolean;
+  /** 1.5.0: motorstarten – hämtningen före, den första med motorn igång och bilens tidsstämpel. */
+  polled_before?: string | null;
+  polled_running?: string | null;
+  engine_reported_at?: string | null;
 }
+
+/** Starttider som bilen själv har rapporterat (motorstarten); visas som vanliga tider. */
+export const ENGINE_METHODS = ["engine_start", "poll_midpoint"];
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -57,6 +64,9 @@ export function readBasis(raw: unknown): StartBasis {
     samples: num(b.samples),
     duration_minutes: num(b.duration_minutes),
     held_to_window: b.held_to_window === true,
+    polled_before: str(b.polled_before),
+    polled_running: str(b.polled_running),
+    engine_reported_at: str(b.engine_reported_at),
   };
 }
 
@@ -69,6 +79,12 @@ export function marginText(basis: StartBasis): string {
 /** Grunden för en uträknad starttid i klartext, t.ex. "Bilen stod still 07:30 och var på väg 07:40." */
 export function basisText(basis: StartBasis): string {
   const parts: string[] = [];
+  if (basis.method === "engine_start" && basis.engine_reported_at) {
+    return `Bilen rapporterade själv att motorn startade ${formatTime(basis.engine_reported_at)}${basis.polled_before && basis.polled_running ? ` (mellan hämtningarna ${formatTime(basis.polled_before)} och ${formatTime(basis.polled_running)})` : ""}. Tiden ändras inte av sig själv.`;
+  }
+  if (basis.method === "poll_midpoint" && basis.polled_before && basis.polled_running) {
+    return `Motorn stod still vid hämtningen ${formatTime(basis.polled_before)} och gick vid hämtningen ${formatTime(basis.polled_running)}. Tiden är minuten mitt emellan (högst ${formatNumber(Math.max(1, Math.ceil((basis.window_minutes ?? 2) / 2)), 0)} min fel). Den ändras inte av sig själv.`;
+  }
   if (basis.method === "trip_meter" && basis.trip_km != null && basis.avg_speed_kmh != null) {
     parts.push(
       `Uträknad ur bilens trippmätare: ${formatNumber(basis.trip_km, 1)} km i snitt ${formatNumber(basis.avg_speed_kmh, 0)} km/h fram till ankomsten.`,
@@ -249,6 +265,35 @@ export function StartTime({ trip, earliest, latest }: { trip: Trip; earliest?: s
             <span className="sr-only">ungefär </span>
             {formatTime(trip.started_at)}
             {margin ? <span className="text-fg-muted"> ({margin})</span> : null}
+          </button>
+          {canEdit ? (
+            <Button size="xs" variant="ghost" onClick={open} aria-label="Ange starttiden själv">
+              <Pencil aria-hidden /> Ange
+            </Button>
+          ) : null}
+        </span>
+        {showBasis ? (
+          <span className="max-w-xs text-xs leading-relaxed text-fg-muted" data-testid="start-time-basis">
+            {basisText(basis)}
+          </span>
+        ) : null}
+      </span>
+    );
+  }
+
+  if (source === "car" && trip.started_at && ENGINE_METHODS.includes(basis.method ?? "")) {
+    // Bilens egen rapport om motorstarten (1.5.0): en vanlig tid, utan "≈"; ett tryck visar grunden.
+    return (
+      <span className="inline-flex flex-col gap-1" data-testid="start-time-engine">
+        <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
+          <button
+            type="button"
+            aria-expanded={showBasis}
+            onClick={() => setShowBasis((v) => !v)}
+            className="num cursor-pointer rounded-sm whitespace-nowrap focus-visible:outline-2 focus-visible:outline-ring"
+            title="Visa grunden för tiden"
+          >
+            {formatTime(trip.started_at)}
           </button>
           {canEdit ? (
             <Button size="xs" variant="ghost" onClick={open} aria-label="Ange starttiden själv">

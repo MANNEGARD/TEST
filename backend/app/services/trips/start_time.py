@@ -30,8 +30,10 @@ bara rapporteras när tändningen slås av. Den SISTA övergången "stod still" 
 före ankomsten letas upp bland de sparade avläsningarna. Starttiden blir bilens tidsstämpel
 för motorstarten (avrundad till hel minut) när den ligger mellan de två hämtningarna (± två
 minuters klockskillnad), annars minuten mitt emellan hämtningarna när de ligger högst
-``ENGINE_SHORT_WINDOW_MINUTES`` isär. Den får kvalitet ``reported`` – bilens tid, utan "≈"
-och "ca" – och grunden sparas (metod ``engine_start`` eller ``poll_midpoint``). Ger tiden en
+``ENGINE_SHORT_WINDOW_MINUTES`` isär. Bilens tidsstämpel får kvalitet ``reported`` – bilens
+tid, utan "≈" och "ca" (metod ``engine_start``); minuten mitt emellan är uträknad och får
+kvalitet ``estimated`` med felmarginal, "≈" och "ca" (metod ``poll_midpoint``). Avläsningar där
+motorstatusen inte kunde läsas räknas inte alls. Grunden sparas. Ger tiden en
 orimligt hög snittfart (``plausible_speed_kmh``), eller är fönstret längre, blir den bara
 senaste möjliga start och K4 uppskattar som förut. En fastställd starttid ändras aldrig av sig
 själv; bara ägaren kan ange en annan.
@@ -539,7 +541,9 @@ def find_engine_start(
     (sågs bilen med motorn av emellan var det en annan körning), och övergången ska ligga
     efter resans tidigaste gräns.
     """
-    seen = [r for r in rows if r.fetched_at <= ended_at]
+    # En avläsning där motorstatusen inte kunde läsas (None) säger ingenting: den räknas varken
+    # som "stod still" eller "motorn igång", så att ett enstaka fel mitt i resan inte blir en start.
+    seen = [r for r in rows if r.fetched_at <= ended_at and r.engine_running is not None]
     while seen and seen[-1].engine_running is False and (
         seen[-1].engine_reported_at is not None and seen[-1].engine_reported_at >= ended_at - ENGINE_CLOCK_SKEW
     ):
@@ -591,12 +595,16 @@ def engine_estimate(
         return "narrow", None, new_latest, basis
     if raw_at >= ended_at or (earliest is not None and raw_at < earliest - ENGINE_CLOCK_SKEW):
         return "none", None, None, {}  # motsägelsefulla tider: hellre okänd än fel
-    at = _clamp_round(raw_at, earliest, ended_at)
+    at = _clamp_round(raw_at, earliest, min(latest, ended_at) if latest is not None else ended_at)
     # Snittfarten räknas på den oavrundade tiden, så att avrundningen inte avgör rimligheten.
     speed = distance_km / (_minutes(ended_at - raw_at) / 60) if distance_km else None
     basis.update(method=method, avg_speed_kmh=round(speed, 1) if speed is not None else None)
+    if method == "poll_midpoint":
+        basis["margin_min"] = round(gap / 2, 1)  # uträknad: högst halva fönstret fel
     too_fast = speed is not None and speed > plausible_speed_kmh(distance_km or 0.0)
-    too_late = latest is not None and at > latest + timedelta(seconds=30)
+    # Senaste möjliga start (t.ex. den första mätarökningen hos en bil som rapporterar under färd):
+    # en motorstart först då eller senare är för sen – bilen rullade redan.
+    too_late = latest is not None and raw_at >= latest
     if too_fast or too_late:
         # Troligen en sen motorstart (laddhybrid på el): bara senaste möjliga start.
         new_latest = min(latest, raw_at) if latest is not None else raw_at
@@ -684,8 +692,8 @@ def engine_plan(db: Session, vehicle_id: uuid.UUID) -> list[EngineChange]:
 def fill_from_engine(db: Session, vehicle_id: uuid.UUID) -> int:
     """Fastställer starttiden ur bilens egen rapport om motorstarten (1.5.0). Idempotent.
 
-    Körs före K4. En fastställd starttid (kvalitet ``reported``, metod ``engine_start`` eller
-    ``poll_midpoint``) rörs sedan aldrig av steget, K4, omräkningar eller sammanslagningar;
+    Körs före K4. En fastställd starttid (metod ``engine_start``, kvalitet ``reported``, eller
+    ``poll_midpoint``, kvalitet ``estimated``) rörs sedan aldrig av steget, K4, omräkningar eller sammanslagningar;
     bara ägarens angivna starttid gäller före. Varje ändring antecknas i resans historik.
     Returnerar antalet delresor som fick en starttid.
     """
@@ -699,7 +707,9 @@ def fill_from_engine(db: Session, vehicle_id: uuid.UUID) -> int:
     for change in plan:
         raw = change.raw
         if change.kind == "set":
-            raw.started_at, raw.start_time_quality = change.at, TimeQuality.REPORTED
+            # Bilens egen tidsstämpel är bilens tid; minuten mitt emellan hämtningarna är uträknad.
+            quality = TimeQuality.REPORTED if change.basis.get("method") == "engine_start" else TimeQuality.ESTIMATED
+            raw.started_at, raw.start_time_quality = change.at, quality
             raw.start_estimate_basis = change.basis
             filled += 1
         else:

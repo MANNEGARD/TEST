@@ -58,7 +58,7 @@ kommandon till bilen (lås, klimat m.m.).
      | `conve:trip_statistics` | Bilens snittförbrukning, trippmätare, räckvidd |
      | `conve:engine_status` | Motor igång/avstängd |
      | `conve:diagnostics_workshop` | Serviceinformation (provas, pollas inte) |
-     | `conve:command_accessibility` | Om bilen är uppkopplad (provas, pollas inte) |
+     | `conve:command_accessibility` | Om bilen är tillgänglig eller används (hämtas från 1.5.0) |
      | `location:read` | Senast rapporterad position |
      | `energy:state:read` | Laddstatus och elräckvidd |
      | `energy:capability:read` | Vilka energivärden bilen stöder |
@@ -128,9 +128,40 @@ Bas-URL `https://api.volvocars.com`. Headers: `authorization: Bearer …`,
 | `…/vehicles/{vin}/engine-status` | ja | `RUNNING` / `STOPPED` |
 | `/energy/v2/vehicles/{vin}/state` | ja | Batterinivå, elräckvidd, laddstatus |
 | `/energy/v2/vehicles/{vin}/capabilities` | provas | Vilka energivärden som stöds |
-| `…/vehicles/{vin}/diagnostics`, `…/command-accessibility` | provas | Service, uppkoppling |
+| `…/vehicles/{vin}/command-accessibility` | ja (från 1.5.0) | Tillgänglighet: `availabilityStatus` och vid `UNAVAILABLE` en orsak (`unavailableReason`, t.ex. `CAR_IN_USE`) – se "Bilen används" nedan |
+| `…/vehicles/{vin}/diagnostics` | provas | Service |
 
 Värden kan komma som tal **eller** sträng (t.ex. `"heading": "129"`) – DriveLog tolkar båda.
+
+### Bilen används (command-accessibility, 1.5.0)
+
+Ändpunkten hämtas vid varje hämtning, sist av alla. Svaret tolkas enligt Volvos
+dokumenterade form `{"data": {"availabilityStatus": {"value", "unavailableReason",
+"timestamp"}}}` (orsaken läses också om den ligger bredvid statusen) och sparas på
+avläsningen (`vehicle_observations`):
+
+| Kolumn | Innehåll |
+|---|---|
+| `accessibility_status` | Statusen som den kom (`AVAILABLE`, `UNAVAILABLE`, `UNSPECIFIED` eller annat) |
+| `accessibility_reason` | Orsaken som den kom (t.ex. `CAR_IN_USE`, `NO_INTERNET`, `POWER_SAVING_MODE`) |
+| `accessibility_reported_at` | Bilens egen tidsstämpel för statusen |
+| `car_in_use` | Härlett: sant bara för `UNAVAILABLE` med `CAR_IN_USE`; falskt för andra lästa värden (okända räknas inte som "används"); tomt när ingen status lästes |
+
+* Status och orsak ingår i avläsningens innehållshash: en ändrad status ger en ny
+  avläsningsrad, vars hämtningstid (`fetched_at`) visar när övergången sågs. Bilens
+  tidsstämpel ingår inte i hashen (en ny tidsstämpel med samma status ger ingen ny rad).
+  En rad där bara statusen har ändrats är ingen rörelse för resedetekteringen.
+* Syftet är att kunna belägga starttiden även när bilen startar på ren el och motorstatusen
+  därför inte säger något. **Hur den riktiga bilen svarar under färd är inte prövat** –
+  felsökningsfilen (`GET /api/v1/volvo/diagnostics`) visar de fyra fälten för varje
+  avläsning, så att det går att se vad bilen faktiskt svarar.
+* Kvoten: ett anrop till per hämtning mot Connected Vehicle (vid 120 s ca 3 600 anrop/dygn
+  med de fem ändpunkterna, budget 9 000).
+* 403/404 gör att ändpunkten slutar hämtas på samma sätt som övriga (omprovning efter ett
+  dygn). Ett fel i just den här ändpunkten gör aldrig att hämtningen räknas som misslyckad,
+  och ett svar bara från den ger ingen avläsningsrad.
+* Demobilen svarar `UNAVAILABLE`/`CAR_IN_USE` medan motorn går och `AVAILABLE` annars
+  (påhittat förlopp).
 
 ### Felhantering och gränser
 
@@ -170,6 +201,37 @@ Resedetekteringen (`detection.process_vehicle`) är en tillståndsmaskin:
 * **Sträcka** = skillnad i mätarställning (`distance_quality = odometer`).
 * **Sluttid** = bilens positionstidsstämpel (`reported`) om den är rimlig, annars en märkt
   uppskattning (`estimated`/`bounded`).
+* **Starttid ur motorstarten (1.5.0).** Bilen rapporterar "motorn igång" direkt, med egen
+  tidsstämpel, även när mätarställning och position bara rapporteras när tändningen slås av.
+  Efterbearbetningen (`start_time.fill_from_engine`, steget `pipeline.start_engine`, före
+  uppskattningen ur sträckan) letar för resor med okänd eller uppskattad starttid upp den
+  **sista** övergången från en avläsning med motorn av till en med motorn igång
+  före ankomsten, utan att bilen setts med motorn av emellan och efter resans tidigaste gräns.
+  * Ligger bilens tidsstämpel (`engine_reported_at`) mellan de två hämtningarna (±2 minuters
+    klockskillnad) blir den starttiden, avrundad till hel minut (metod `engine_start`).
+  * Annars, när hämtningarna ligger högst 6 minuter isär (hämtning var 2:a–5:e minut): minuten
+    mitt emellan dem (metod `poll_midpoint`, högst 3 minuter fel). Den är uträknad och märks
+    `estimated` med felmarginal (visas med "≈", "ca" i underlaget); bara bilens tidsstämpel
+    märks `reported`. Avläsningar där motorstatusen inte kunde läsas räknas inte.
+  * Längre fönster: ingen starttid, men `start_latest` snävas in till den första avläsningen
+    med motorn igång.
+  * Rimlighet: tiden ligger aldrig före den tidigaste gränsen eller efter ankomsten, och inte
+    på eller efter senaste möjliga start (t.ex. första mätarökningen). Snittfarten från
+    motorstarten får vara högst dubbla tabellfarten för sträckan, aldrig över 130 km/h (under
+    3 km 50 km/h, under 10 km 70, under 30 km 100, därefter 130). En laddhybrid som startar på
+    el kan rapportera motorstarten en bit in i resan; en snabbare tid används därför bara som
+    senaste möjliga start, och uppskattningen ur sträckan tar vid.
+  * Tiden får kvalitet `reported` (bilens egen tid: utan "≈" i appen och utan "ca" i
+    underlaget) och grunden sparas i `start_estimate_basis` (metod, de två hämtningarna,
+    bilens tidsstämpel, fönstrets längd och snittfarten). Den räknas som känd av kalendern,
+    pendlingskedjan och AI-underlaget.
+  * Den ligger fast: steget rör aldrig en resa som redan har en sådan tid, och varken
+    uppskattningen ur sträckan, omräkningar eller sammanslagningar ändrar den. Bara ägarens
+    angivna starttid gäller före; en import av Volvos journal ersätter resan som förut.
+  * I efterhand: resor de senaste 14 dygnen (räknat från senaste avläsningen) med okänd eller
+    uppskattad starttid rättas när avläsningarna finns kvar, med en rad i resans historik
+    (`trip.start_time_engine`). Aldrig resor där ägaren angett starttiden, importerade resor
+    eller resor i (eller som skulle flytta till) en månad vars underlag redan är skapat.
 * **Starttid hittas aldrig på.** Gränserna `start_earliest`–`start_latest` räknas alltid
   fram. Räcker bilens egna avläsningar räknas starttiden fram inom dem
   (`start_time_quality = estimated`, grunden i `start_estimate_basis`):
@@ -200,26 +262,68 @@ Resedetekteringen (`detection.process_vehicle`) är en tillståndsmaskin:
   Lösningen är att importera Volvos körjournal för dagen: de importerade originalresorna
   ersätter den rekonstruerade resan utan dubbletter (eller dela upp kilometrarna i tjänst och
   privat). Larmet "Hämtningen från Volvo fungerar inte" (efter 6 timmar) påminner om samma sak.
-* **Bränsle och el per resa** (1.3.0, `services/volvo/consumption.py`) räknas fram ur bilens
-  egna avläsningar och märks som uppskattade (`estimated`, "≈" i appen):
-  1. *Trippmätare × snitt:* avläsningen före och efter resan, trippmätaren
+* **Bränsle och el per resa** (1.3.0, 1.5.0, `services/volvo/consumption.py`) räknas fram ur
+  bilens egna avläsningar och märks som uppskattade (`estimated`, "≈" i appen). Från 1.5.0
+  räknas varje metod som går att använda fram med både ett värde och en **felgräns**, och den
+  med minst felgräns väljs:
+  1. *Automatiska trippmätaren × snitt:* avläsningen före och efter resan, trippmätaren
      (`tripMeterAutomatic`) har inte nollställts emellan och har ökat ungefär lika mycket som
      resan är lång (±2 km eller 15 %). Snittet är `averageFuelConsumptionAutomatic` resp.
-     `averageEnergyConsumptionAutomatic` – samma period som trippmätaren; `averageFuelConsumption`
-     hör till förarens manuella trippmätare och används inte här. Förbrukningen är
+     `averageEnergyConsumptionAutomatic` – samma period som trippmätaren. Förbrukningen är
      `(snitt_efter × tripp_efter − snitt_före × tripp_före) / 100` – så får två resor i samma
-     trippmätarperiod var sin del. Snitten har en decimal: kan avrundningen flytta värdet mer än
-     25 % (lång trippmätare, kort resa) lämnas värdet åt nästa metod.
-  2. *Nollställd trippmätare* (efter ca 4 timmars stillestånd): trippmätaren efter resan ≈
-     resans längd → `snitt × tripp / 100`.
-  3. *Nivåskillnad i tanken* när trippmätaren inte räcker. En ökning på mer än 1 l mellan två
-     avläsningar under resan är en tankning, och då lämnas värdet okänt. Finns ingen avläsning
-     under resan syns inte en tankning: då krävs minst 5 l/100 km, annars okänt. Batteriets nivå
-     används inte, eftersom den användbara kapaciteten inte är känd.
-  Orimliga värden (negativa, mer än 100 l, mer än 60 l eller 60 kWh per 100 km) kastas. Räcker
-  inget lämnas värdet okänt (`unknown`, "–"). Bara resor som DriveLog har skapat ur bilens
-  avläsningar de senaste 14 dygnen räknas; importerade resor och värden som redan finns rörs
-  aldrig, och inte heller resor i en månad vars underlag redan är skapat.
+     trippmätarperiod var sin del. Snitten har en decimal: felgränsen är
+     `0,05 × (tripp_före + tripp_efter) / 100`; är den mer än 25 % av värdet avstår metoden.
+     Nollställd trippmätare (tripp efter ≈ resans längd): `snitt × tripp / 100`.
+  2. *Manuella trippmätaren × dess snitt* (1.5.0): `averageFuelConsumption` /
+     `averageEnergyConsumption` gånger `tripMeterManual`, med samma regler. Snitten utan
+     "Automatic" används bara med den manuella trippmätaren. Om ägarens bil rapporterar dem är
+     inte känt; koden klarar båda fallen.
+  3. *Nivåskillnad.* Ägarens bil rapporterar nivåerna bara när tändningen slås av. Nivån FÖRE
+     resan är därför den senast rapporterade medan bilen stod still – oavsett hur gammal
+     rapporten är (för 194-kilometersresan drygt 19 timmar) – och nivån EFTER den som
+     rapporterades vid ankomsten. "Före" hittas utan känd starttid: den sista avläsningen före
+     ankomsten vars nivå rapporterades före resans senast möjliga start och vars mätarställning
+     inte har ökat förbi resans start.
+     * Bensin: nettot i tanken. Har nivån ökat (mer än 1 l mellan två rapporter, eller totalt)
+       är det en tankning och värdet lämnas okänt. Oförändrad nivå ger aldrig 0 l.
+     * Regeln "minst 5 l/100 km när bara läget före och efter finns" gäller från 1.5.0 bara bilar
+       utan batteri. En laddhybrid drar ofta lite bensin, och en dold tankning ger ett för lågt
+       netto bara om den var mindre än resans förbrukning; vanligen är den större, och då blir
+       nettot negativt och okänt. För en laddhybrid skulle regeln nästan bara kasta riktiga värden.
+     * El (1.5.0): `(procent före − procent efter) × batteriets användbara kapacitet`. "Före" efter
+       en laddning är nivån när laddningen var klar. Laddades batteriet under resan (nivån ökar,
+       laddstatus `CHARGING` efter "före", eller nivån vid ankomsten rapporterades efter
+       ankomsten under laddning), eller pågick laddningen när "före" rapporterades, lämnas elen
+       okänd. Värdet är **netto ur batteriet**: bilen kan ha laddat batteriet med motorn eller
+       bromsarna under färd.
+  Säger två metoder emot varandra utanför sina felgränser används nivåskillnaden (ett fysiskt
+  mått) och avvikelsen antecknas. Orimliga värden (negativa, mer än tanken/batteriet rymmer,
+  mer än 60 l eller 60 kWh per 100 km) kastas. Räcker inget lämnas värdet okänt (`unknown`, "–").
+  **Precisionen:** Volvos API ger tanknivån i hela liter och batterinivån i hela procent. Före och
+  efter kan då vara fel med en halv enhet var, så nivåskillnaden är riktig på ±1 l respektive
+  ±1 procentenhet × kapaciteten: "12 l ± 1 l" betyder 11–13 l. Det går inte att komma förbi med
+  nivåerna ensamma; har en bil decimaler används de, och DriveLog avrundar aldrig själv.
+  **Grunden** sparas per delresa (`raw_trips.fuel_basis` / `energy_basis`: metod, värdena före
+  och efter, felgränsen, kapaciteten och anteckningar) och visas i resans detaljer. Bara resor
+  som DriveLog har skapat ur bilens avläsningar de senaste 14 dygnen räknas; importerade resor
+  och värden som redan finns rörs aldrig, och inte heller resor i en månad vars underlag redan är
+  skapat. Resor som saknar värden fylls i efterhand vid nästa efterbearbetning.
+* **Batteriets användbara kapacitet** (1.5.0, `vehicles.usable_battery_kwh`) anges under
+  *Inställningar → Fordon och förare*. Tomt fält: ett standardvärde används bara där den
+  ANVÄNDBARA kapaciteten är belagd för modellen och årsmodellen, annars är elen okänd. När
+  kapaciteten fylls i eller ändras räknas den el om som DriveLog räknat ur kapaciteten (och el
+  som saknas); ägarens egna och importerade värden rörs aldrig. Källor för V90 laddhybrid
+  (offentliga, november 2026):
+  * Volvo Cars pressmeddelande september 2021: batteriet i S90/V90/XC60 Recharge T8 ökar från
+    11,6 till 18,8 kWh *nominellt*, först under årsmodell 2022.
+  * 18,8 kWh-batteriet: användbart 14,9 kWh (evpulse.com, tflcar.com), 14,8 kWh
+    (greencarreports.com). Standardvärde 14,9 kWh från årsmodell 2023.
+  * 11,6 kWh-batteriet (årsmodell 2020–2022): användbart 9,1 kWh enligt greencarreports.com,
+    10,4 kWh enligt pod-point.com (egen uppskattning). Källorna går isär och årsmodell 2021–2022
+    kan ha båda batterierna → inget standardvärde. Ägarens bil (årsmodell 2021, elräckvidd
+    32–36 km vid 100 %, alltså 11,6 kWh-batteriet) får inget standardvärde: elen visas när
+    ägaren har fyllt i kapaciteten.
+  * Volvos `batteryCapacityKWH` (fordonsuppgifterna) är nominell och visas bara som upplysning.
 * **Felsökningsfil** (1.3.0): *Ladda ner felsökningsfil* under *Integrationer → Volvo*
   (`GET /api/v1/volvo/diagnostics?days=14`, 1–31 dygn) ger bilens avläsningar, hämtningarnas
   utfall (status och HTTP-kod) och de resor som byggdes av dem som JSON – utan VIN,
@@ -254,9 +358,10 @@ blir granskningsärenden.
   färden; annars är den okänd.
 * **Ingen resejournal** i de publika API:erna. Volvo-appens körjournal kan bara fås via
   export/import.
-* **Ingen förbrukning per resa i API:t.** DriveLog uppskattar den ur trippmätaren och bilens
-  snitt (se ovan). Tankningar och laddningar mellan hämtningar gör nivåskillnader opålitliga,
-  och elförbrukningen kan bara räknas när bilen rapporterar ett elsnitt.
+* **Ingen förbrukning per resa i API:t.** DriveLog uppskattar den ur trippmätaren, bilens snitt
+  och nivåerna (se ovan). En tankning eller laddning som inte syns i en rapport gör
+  nivåskillnaden okänd, och nivåerna i hela liter och hela procent ger ±1 l respektive ±1
+  procentenhet. Elen ur batterinivån kräver batteriets användbara kapacitet.
 * Korta resor (< 1 km) kan missas p.g.a. mätarställningens heltalsupplösning.
 * Två resor tätt efter varandra utan ny positionsrapport kan se ut som en enda resa
   (flaggas som möjliga missade resor).
@@ -289,7 +394,9 @@ Följande är byggt enligt dokumentationen men **inte prövat mot en riktig bil*
 * Förbrukningens metoder mot en riktig bil: att `averageFuelConsumptionAutomatic` och
   `averageEnergyConsumptionAutomatic` finns för bilen och avser `tripMeterAutomatic`s sträcka,
   snittens upplösning, när trippmätaren nollställs och hur ofta statistiken uppdateras. Saknar
-  bilen de automatiska snitten används bara nivåskillnaden i tanken. Uppskattningen är prövad på påhittade avläsningar och demobilen.
+  bilen de automatiska snitten används bara nivåskillnaden. Uppskattningen är prövad på påhittade
+  avläsningar, demobilen och en avidentifierad uppspelning av ägarens förlopp (1.5.0) – inte
+  mot den riktiga bilen.
 
 ## 9. Demoläge
 

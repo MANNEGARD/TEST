@@ -71,7 +71,7 @@ import {
   useUnmerge,
   useUpdateJourney,
 } from "@/lib/queries/trips";
-import type { RawTrip, TripDetail } from "@/lib/types";
+import type { ConsumptionBasis, RawTrip, TripDetail } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { AllocationDialog } from "./allocation-dialog";
 import { ClassificationCard } from "./classification-card";
@@ -85,9 +85,25 @@ function energyExplanation(kind: "fuel" | "el", quality: string): string | undef
   return undefined;
 }
 
+/** "± 1,0 l": felgränsen för en uppskattad förbrukning (1.5.0). */
+function marginText(b: ConsumptionBasis): string {
+  const decimals = b.margin >= 1 ? 1 : 2;
+  return `± ${b.unit === "l" ? formatLiters(b.margin, decimals) : formatKwh(b.margin, decimals)}`;
+}
+
+/** Hur förbrukningen räknades fram: metod, före och efter, felgränsen (volvo/consumption.basis_out). */
+function BasisNote({ basis }: { basis: ConsumptionBasis | null | undefined }) {
+  if (!basis) return null;
+  return <p className="mt-1 max-w-prose text-xs text-fg-muted">{basis.text}</p>;
+}
+
 function Facts({ d }: { d: TripDetail }) {
   const t = d.trip;
   const firstRaw = d.raw_trips[0];
+  // Grunden visas när resan består av en delresa (annars per delresa under Originalresor).
+  const onlyRaw = d.raw_trips.length === 1 ? d.raw_trips[0] : null;
+  const fuelBasis = t.fuel_quality === "estimated" ? onlyRaw?.fuel_basis : null;
+  const energyBasis = t.energy_quality === "estimated" ? onlyRaw?.energy_basis : null;
   const estimatedDistance = t.quality_flags.includes("distance_estimated");
   // Körtiden saknas från bilen; med en uträknad starttid visas den som uppskattad (≈).
   const estimatedDriving =
@@ -132,13 +148,17 @@ function Facts({ d }: { d: TripDetail }) {
             <span className="inline-flex items-center gap-1.5">
               <span className="size-2 rounded-full bg-fuel" aria-hidden />
               <QualityValue mono value={t.fuel_liters != null ? formatLiters(t.fuel_liters) : null} quality={t.fuel_quality} explanation={energyExplanation("fuel", t.fuel_quality)} />
+              {fuelBasis && t.fuel_liters != null ? <span className="num text-xs text-fg-muted">{marginText(fuelBasis)}</span> : null}
             </span>
+            <BasisNote basis={fuelBasis} />
           </DescriptionItem>
           <DescriptionItem label="El">
             <span className="inline-flex items-center gap-1.5">
               <span className="size-2 rounded-full bg-el" aria-hidden />
               <QualityValue mono value={t.energy_kwh != null ? formatKwh(t.energy_kwh) : null} quality={t.energy_quality} explanation={energyExplanation("el", t.energy_quality)} />
+              {energyBasis && t.energy_kwh != null ? <span className="num text-xs text-fg-muted">{marginText(energyBasis)}</span> : null}
             </span>
+            <BasisNote basis={energyBasis} />
           </DescriptionItem>
           {t.regen_kwh != null ? (
             <DescriptionItem label="Återvunnet">
@@ -373,6 +393,12 @@ function RawTrips({ d, onAllocate }: { d: TripDetail; onAllocate: (raw: RawTrip)
                       <QualityValue value={r.fuel_liters != null ? formatLiters(r.fuel_liters) : null} quality={r.fuel_quality} explanation={energyExplanation("fuel", r.fuel_quality)} />
                       <span className="mx-1 text-fg-subtle">/</span>
                       <QualityValue value={r.energy_kwh != null ? formatKwh(r.energy_kwh) : null} quality={r.energy_quality} explanation={energyExplanation("el", r.energy_quality)} />
+                      {merged ? (
+                        <>
+                          <BasisNote basis={r.fuel_basis} />
+                          <BasisNote basis={r.energy_basis} />
+                        </>
+                      ) : null}
                     </dd>
                   </div>
                   <div className="col-span-2">

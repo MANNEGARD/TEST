@@ -219,6 +219,8 @@ def list_trips(
 
 
 def _raw_out(db, raw: RawTrip) -> dict[str, Any]:
+    from app.services.volvo import consumption
+
     origin: dict[str, Any] | None = None
     if raw.import_row_id:
         row = db.get(ImportRow, raw.import_row_id)
@@ -251,6 +253,11 @@ def _raw_out(db, raw: RawTrip) -> dict[str, Any]:
         "energy_kwh": raw.energy_kwh,
         "energy_quality": raw.energy_quality,
         "regen_kwh": raw.regen_kwh,
+        # Grunden för en uppskattad förbrukning (1.5.0): metod, värde, felgräns och text.
+        "fuel_basis": consumption.basis_out(raw.fuel_basis) if raw.fuel_quality == ValueQuality.ESTIMATED else None,
+        "energy_basis": (
+            consumption.basis_out(raw.energy_basis) if raw.energy_quality == ValueQuality.ESTIMATED else None
+        ),
         "original_category": raw.original_category,
         "original_title": raw.original_title,
         "original_notes": raw.original_notes,
