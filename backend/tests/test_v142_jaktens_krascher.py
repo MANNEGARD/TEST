@@ -116,9 +116,13 @@ def test_oforutsett_fel_i_ai_anropet_ger_bedomning_med_reglerna(db, user, trips,
     assert broken.calls == 1
     assert any(s.kind == "ai_unavailable" for s in a.signals)
     assert reload_trip(db, t.id).category is not None  # reglerna har bedömt resan
-    failures = internal_errors.take_failures(db)
-    assert [f["step"] for f in failures] == ["classify.ai"]
-    assert failures[0]["type"] == "TypeError"
+    # Inget delsteg räknas som misslyckat (autopiloten körs som vid ett vanligt AI-fel) …
+    assert internal_errors.take_failures(db) == []
+    # … men felet står i felsökningsfilens lista, med typ och kodställe.
+    stored = internal_errors.entries(db, user.id)
+    assert [e["step"] for e in stored] == ["classify.ai"]
+    assert stored[0]["type"] == "TypeError" and stored[0]["origin"] == "classify"
+    assert any("test_v142_jaktens_krascher" not in f and "engine.py" in f for f in stored[0]["where"])
     assert internal_errors.step_label("classify.ai") == "AI-bedömningen"
 
 
@@ -134,10 +138,12 @@ def test_efter_felet_fungerar_nasta_bedomning(db, user, trips, world):
     t = live(trips, OFFICE, CUSTOMER, km=30, start_at=local(2026, 9, 15, 9, 0))
     with internal_errors.tolerant_mode(True):
         classify(db, user, t, provider=BrokenProvider())
-        internal_errors.take_failures(db)
+        classify(db, user, t, provider=BrokenProvider())
         fake = FakeProvider(answer("Kundbesök hos Exempel Åkeri AB"))
         classify(db, user, t, provider=fake)
-    assert len(fake.documents) == 1 and internal_errors.take_failures(db) == []
+    assert len(fake.documents) == 1
+    stored = internal_errors.entries(db, user.id)
+    assert len(stored) == 1 and stored[0]["count"] == 2  # samma fel tar en plats
 
 
 # ----------------------------------------------------------------------------- granskningsärenden

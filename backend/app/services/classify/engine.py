@@ -506,6 +506,26 @@ def _report_llm_outcome(db: Session, user_id: uuid.UUID, error: llm_mod.LLMError
         integrations.mark_error(conn, str(error), needs_reauth=error.auth)
 
 
+UNEXPECTED_LLM_ERROR = "Oväntat fel i AI-anropet – resorna bedöms med reglerna. Felet står i felsökningsfilen."
+
+
+def _record_unexpected_llm_error(db: Session, user_id: uuid.UUID, exc: BaseException) -> None:
+    """Ett oförutsett fel i AI-anropet: syns på AI-anslutningen och i felsökningsfilen
+    (``internal_errors``, steget ``classify.ai``). Antecknas inte som ett misslyckat delsteg –
+    bedömningen har gjorts, med reglerna – och kastar aldrig."""
+    from app.services import internal_errors
+
+    try:
+        logger.exception("Oväntat fel i AI-anropet; resan bedöms med reglerna", exc_info=exc)
+    except Exception:  # noqa: S110 – loggningen får aldrig fälla bedömningen
+        pass
+    try:
+        internal_errors.save_failures(db, user_id, [internal_errors.describe("classify.ai", exc)], origin="classify")
+        _report_llm_outcome(db, user_id, llm_mod.LLMError(UNEXPECTED_LLM_ERROR))
+    except Exception:
+        logger.exception("Felet i AI-anropet kunde inte antecknas")
+
+
 # ----------------------------------------------------------------------------- huvudflöde
 
 
@@ -607,13 +627,13 @@ def _assess(
             signals.append(Signal("ai_unavailable", "AI-leverantören kunde inte användas – endast regler tillämpades", "neutral"))
         except Exception as exc:
             # Ett fel som leverantörskoden inte förutsåg (t.ex. ett svar i oväntat format). AI:n är
-            # en hjälp, inte ett krav: resan bedöms med reglerna och felet antecknas (1.4.2).
+            # en hjälp, inte ett krav: resan bedöms med reglerna, precis som vid ett vanligt fel
+            # från leverantören (1.4.2). I testmiljön kastas felet vidare, så att sviten faller på det.
             from app.services import internal_errors
 
             if not internal_errors.is_tolerant():
                 raise
-            internal_errors.note_failure(db, "classify.ai", exc)
-            _report_llm_outcome(db, user_id, llm_mod.LLMError("Oväntat fel i AI-anropet."))
+            _record_unexpected_llm_error(db, user_id, exc)
             result = None
             signals.append(Signal("ai_unavailable", "AI-leverantören kunde inte användas – endast regler tillämpades", "neutral"))
         if result is not None:
