@@ -1,4 +1,5 @@
 // Inställningar läses från miljövariabler (se .env.example). Inga hemligheter loggas.
+import fs from "node:fs";
 import path from "node:path";
 
 function env(name: string, fallback = ""): string {
@@ -14,9 +15,20 @@ function envInt(name: string, fallback: number): number {
   return n;
 }
 
+/** Versionen i package.json (läses en gång vid start). */
+function readVersion(): string {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version?: unknown };
+    return typeof pkg.version === "string" ? pkg.version : "okänd";
+  } catch {
+    return "okänd";
+  }
+}
+
 const publicUrl = env("TRANSCRIBE_PUBLIC_URL", "http://localhost:8080").replace(/\/+$/, "");
 
 export const config = {
+  version: readVersion(),
   port: envInt("TRANSCRIBE_PORT", 8080),
   host: env("TRANSCRIBE_HOST", "0.0.0.0"),
   /** Adressen användarna når tjänsten på, t.ex. https://transcribe.smgd.se. */
@@ -25,7 +37,10 @@ export const config = {
   secureCookies: publicUrl.startsWith("https://"),
   dataDir: path.resolve(env("TRANSCRIBE_DATA_DIR", "./data")),
   webDir: path.resolve(env("TRANSCRIBE_WEB_DIR", "./web")),
-  /** Live-utkast och talaruppdelning (Deepgram). Tomt = live-text och talare av. */
+  /**
+   * Live-utkast och talaruppdelning (Deepgram). Används bara om ingen nyckel lagts in under
+   * Administration i webbgränssnittet (se keys.ts). Läs nyckeln med getKey("deepgram").
+   */
   deepgramKey: env("DEEPGRAM_API_KEY"),
   deepgramModel: env("DEEPGRAM_MODEL", "nova-3"),
   deepgramLanguage: env("DEEPGRAM_LANGUAGE", "sv"),
@@ -35,6 +50,7 @@ export const config = {
    * gratisnivå; byt adress för t.ex. en egen KB-Whisper-server hemma.
    */
   whisperUrl: env("WHISPER_API_URL", "https://api.groq.com/openai/v1").replace(/\/+$/, ""),
+  /** Reserv om ingen nyckel lagts in i webbgränssnittet. Läs nyckeln med getKey("whisper"). */
   whisperKey: env("WHISPER_API_KEY"),
   whisperModel: env("WHISPER_MODEL", "whisper-large-v3"),
   whisperLanguage: env("WHISPER_LANGUAGE", "sv"),

@@ -177,7 +177,7 @@ async function processTranscript(id: string): Promise<void> {
     } else {
       const reason = notes.length
         ? notes.join(" ")
-        : "Ingen transkriberingstjänst är inställd (DEEPGRAM_API_KEY eller WHISPER_API_KEY saknas).";
+        : "Ingen transkriberingstjänst är inställd. Lägg in nycklarna under Administration.";
       throw new Error(reason);
     }
     segments = normalizeSpeakers(segments);

@@ -2,9 +2,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { config } from "../config.js";
+import { getKey } from "../keys.js";
 import type { WhisperSegment, Word } from "../merge.js";
 
-export const whisperEnabled = (): boolean => config.whisperKey !== "" || !config.whisperUrl.includes("groq.com");
+/** En egen Whisper-server (inte Groq) kan fungera utan nyckel. Nyckeln läses i varje anrop. */
+export const whisperEnabled = (): boolean => getKey("whisper") !== "" || !config.whisperUrl.includes("groq.com");
 
 export interface WhisperResult {
   segments: WhisperSegment[];
@@ -48,7 +50,8 @@ export async function whisperFile(file: string, offset: number, prompt: string):
   if (prompt.trim()) form.append("prompt", prompt.trim());
 
   const headers: Record<string, string> = {};
-  if (config.whisperKey) headers.Authorization = `Bearer ${config.whisperKey}`;
+  const key = getKey("whisper");
+  if (key) headers.Authorization = `Bearer ${key}`;
   const res = await fetch(`${config.whisperUrl}/audio/transcriptions`, {
     method: "POST",
     headers,
@@ -61,7 +64,7 @@ export async function whisperFile(file: string, offset: number, prompt: string):
   if (!res.ok) {
     const body = (await res.text()).slice(0, 300);
     if (res.status === 401 || res.status === 403) {
-      throw new Error("Whisper-tjänsten nekade nyckeln (kontrollera WHISPER_API_KEY).");
+      throw new Error("Whisper-tjänsten nekade nyckeln. Kontrollera den under Administration.");
     }
     throw new Error(`Whisper-tjänsten svarade ${res.status}: ${body}`);
   }

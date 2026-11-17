@@ -2,9 +2,13 @@
 import fs from "node:fs";
 import WebSocket from "ws";
 import { config } from "../config.js";
+import { getKey } from "../keys.js";
 import type { Word } from "../merge.js";
 
-export const deepgramEnabled = (): boolean => config.deepgramKey !== "";
+/** Nyckeln läses i varje anrop så att en nyckel som sparas i gränssnittet gäller direkt. */
+export const deepgramEnabled = (): boolean => getKey("deepgram") !== "";
+
+const DENIED = "Deepgram nekade nyckeln. Kontrollera den under Administration.";
 
 interface DgWord {
   word: string;
@@ -65,7 +69,7 @@ export class DeepgramLive {
       vad_events: "true",
     });
     const url = `${config.deepgramUrl.replace(/^http/, "ws")}/v1/listen?${params}`;
-    this.ws = new WebSocket(url, { headers: { Authorization: `Token ${config.deepgramKey}` } });
+    this.ws = new WebSocket(url, { headers: { Authorization: `Token ${getKey("deepgram")}` } });
     this.ws.on("open", () => {
       this.open = true;
       for (const b of this.queue) this.ws.send(b);
@@ -94,7 +98,7 @@ export class DeepgramLive {
     this.ws.on("unexpected-response", (_req, res) => {
       this.cb.onError(
         res.statusCode === 401 || res.statusCode === 403
-          ? "Deepgram nekade nyckeln (kontrollera DEEPGRAM_API_KEY)."
+          ? DENIED
           : res.statusCode === 402
             ? "Deepgram-krediten är slut."
             : `Deepgram svarade ${res.statusCode}.`,
@@ -174,7 +178,7 @@ export async function deepgramFile(file: string, contentType: string, keyterms: 
   const res = await fetch(`${config.deepgramUrl}/v1/listen?${params}`, {
     method: "POST",
     headers: {
-      Authorization: `Token ${config.deepgramKey}`,
+      Authorization: `Token ${getKey("deepgram")}`,
       "Content-Type": contentType,
       "Content-Length": String(size),
     },
@@ -185,6 +189,7 @@ export async function deepgramFile(file: string, contentType: string, keyterms: 
   if (!res.ok) {
     const body = (await res.text()).slice(0, 300);
     if (res.status === 402) throw new QuotaError("Deepgram-krediten är slut.");
+    if (res.status === 401 || res.status === 403) throw new Error(DENIED);
     // Okända söktermer (keyterm) för språket ska inte stoppa jobbet – försök igen utan.
     if (res.status === 400 && keyterms.length) return deepgramFile(file, contentType, []);
     throw new Error(`Deepgram svarade ${res.status}: ${body}`);

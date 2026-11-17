@@ -121,6 +121,15 @@ const MIGRATIONS: string[] = [
     id UNINDEXED, title, body, tokenize = "unicode61 remove_diacritics 0"
   );
   `,
+  // 2: API-nycklar som lagts in i webbgränssnittet, krypterade (se keys.ts).
+  `
+  CREATE TABLE service_keys (
+    name TEXT PRIMARY KEY CHECK (name IN ('deepgram','whisper')),
+    ciphertext BLOB NOT NULL,
+    updated_at TEXT NOT NULL,
+    updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL
+  );
+  `,
 ];
 
 function migrate(db: Database.Database): void {

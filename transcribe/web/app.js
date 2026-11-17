@@ -546,7 +546,7 @@ async function renderList() {
     ].map(([v, l]) => h("option", { value: v, selected: `${f.sort}:${f.order}` === v }, l)),
   );
 
-  layout.append(sidebar(refresh), h("main", {}, h("div", { class: "toolbar" }, search, sort), listEl));
+  layout.append(sidebar(refresh), h("main", {}, getStartedRow(), h("div", { class: "toolbar" }, search, sort), listEl));
   mount(topbar(), layout);
   await refresh();
 }
@@ -796,7 +796,6 @@ async function renderNew(resumeId) {
     return;
   }
   await loadSidebarData();
-  const features = state.me.features;
   let source = store("source") || "mic";
   const title = h("input", { type: "text", maxlength: 200, placeholder: "T.ex. Styrelsemöte, intervju med …" });
   const folder = h(
@@ -929,9 +928,7 @@ async function renderNew(resumeId) {
           },
         },
         h("h1", { style: "margin-top:0" }, "Ny inspelning"),
-        !features.live
-          ? h("div", { class: "banner warn" }, "Live-text är inte aktiverad på servern (DEEPGRAM_API_KEY saknas). Ljudet spelas in och transkriberas när du stoppar.")
-          : null,
+        serviceWarning(),
         h("label", {}, "Ljudkälla"),
         h(
           "div",
@@ -1536,10 +1533,341 @@ function renderSettings() {
   );
 }
 
+// ---------------------------------------------------------------- nycklar
+// Nyckelvärdet finns bara i inmatningsfältet tills det skickas. Det sparas aldrig i webbläsaren,
+// läggs aldrig i adressen och skrivs aldrig ut. Servern skickar bara tillbaka de fyra sista tecknen.
+const KEY_INFO = {
+  deepgram: {
+    what: "Live-text under inspelningen och uppdelning på talare.",
+    link: "https://console.deepgram.com",
+    missing: "Utan den blir det ingen live-text och ingen uppdelning på talare.",
+  },
+  whisper: {
+    what: "Slutversionens text (Whisper large-v3).",
+    link: "https://console.groq.com/keys",
+    missing: "Utan den görs slutversionen bara med Deepgram, om den nyckeln finns, och texten blir mindre exakt.",
+  },
+};
+
+// Besked på korten (aldrig nyckeln själv) – ligger kvar om sidan ritas om.
+let keyNotes = {};
+
+const isGroq = (k) => /(^|\.)groq\.com$/i.test(k.host || "");
+const serviceName = (k) => (k.name === "deepgram" ? "Deepgram" : isGroq(k) ? "Groq" : "Whisper-servern");
+const sentence = (s) => (s && !/[.!?]$/.test(s.trim()) ? `${s.trim()}.` : (s || "").trim());
+
+/** Samma regler som servern: 8–512 synliga tecken utan mellanslag. */
+function keyFormatProblem(v) {
+  if (!v) return "Klistra in nyckeln först.";
+  if (v.length < 8) return "Nyckeln är för kort. Kontrollera att du fått med hela.";
+  if (v.length > 512) return "Nyckeln är för lång. Kontrollera att du bara klistrat in nyckeln.";
+  if (!/^[\x21-\x7e]+$/.test(v)) return "Nyckeln innehåller tecken som inte kan finnas i en nyckel, till exempel mellanslag. Kopiera den igen.";
+  return "";
+}
+
+/** Läget för en nyckel i klartext: etikett, ton och förklaring. */
+function keyView(k) {
+  const missing = KEY_INFO[k.name].missing;
+  const ends = k.hint ? `Slutar på …${k.hint}.` : null;
+  if (k.unreadable) {
+    return {
+      tone: "err",
+      label: "Oläslig",
+      body: [
+        h(
+          "div",
+          { class: "banner err" },
+          h(
+            "span",
+            {},
+            "Den sparade nyckeln går inte att läsa på servern. Lägg in den igen.",
+            k.source === "env" ? " Under tiden används nyckeln i serverns inställningsfil (.env)." : k.required ? ` ${missing}` : "",
+          ),
+        ),
+      ],
+    };
+  }
+  if (k.source === "ui") {
+    const when = k.updatedAt ? fmtDate(k.updatedAt) : "";
+    return {
+      tone: "ok",
+      label: "Sparad",
+      body: [
+        h("p", {}, "Sparad här", when ? ` ${when.charAt(0).toLowerCase()}${when.slice(1)}` : "", k.updatedBy ? ` av ${k.updatedBy}` : "", "."),
+        ends ? h("p", { class: "hint" }, ends) : null,
+        k.envSet ? h("p", { class: "hint" }, "Den används i stället för nyckeln i serverns inställningsfil (.env).") : null,
+      ],
+    };
+  }
+  if (k.source === "env") {
+    return {
+      tone: "ok",
+      label: "Från .env",
+      body: [
+        h("p", {}, "Nyckeln kommer från serverns inställningsfil (.env).", ends ? ` ${ends}` : ""),
+        h("p", { class: "hint" }, "Lägger du in en nyckel här används den i stället."),
+      ],
+    };
+  }
+  if (!k.required) {
+    return { tone: "neutral", label: "Behövs inte", body: [h("p", {}, `Den inställda Whisper-servern (${k.host}) kräver ingen nyckel.`)] };
+  }
+  return {
+    tone: "warn",
+    label: "Saknas",
+    body: [h("div", { class: "banner warn" }, h("span", {}, h("strong", {}, "Ingen nyckel är inlagd. "), missing))],
+  };
+}
+
+function keyCard(initial) {
+  let k = initial;
+  const name = k.name;
+  const info = KEY_INFO[name];
+  const ids = { title: `nyckel-${name}-rubrik`, input: `nyckel-${name}`, help: `nyckel-${name}-hjalp` };
+  const titleEl = h("h3", { id: ids.title });
+  const whatEl = h("p", { class: "keycard-what" });
+  const pill = h("span", { class: "pill" });
+  const statusEl = h("div", { class: "keycard-status" });
+  const noteEl = h("div", { class: "keycard-note" });
+  const labelEl = h("label", { for: ids.input });
+  const helpEl = h("p", { class: "hint", id: ids.help });
+  const input = h("input", {
+    type: "password",
+    id: ids.input,
+    name: `nyckel-${name}`,
+    autocomplete: "off",
+    spellcheck: "false",
+    autocapitalize: "off",
+    autocorrect: "off",
+    maxlength: 600,
+    "aria-describedby": ids.help,
+    "data-secret": true,
+    "data-lpignore": "true",
+    "data-1p-ignore": true,
+    "data-bwignore": true,
+  });
+  const saveBtn = h("button", { class: "btn primary", type: "submit" }, "Spara");
+  const testBtn = h("button", { class: "btn", type: "button", onclick: () => test() }, "Testa");
+  const delBtn = h("button", { class: "btn danger", type: "button", onclick: () => remove() }, "Ta bort");
+  const link = h(
+    "a",
+    { class: "keycard-link", href: info.link, target: "_blank", rel: "noopener noreferrer" },
+    "Skaffa en nyckel",
+    h("span", { class: "sr-only" }, " (öppnas i en ny flik)"),
+    h("span", { "aria-hidden": "true" }, " ↗"),
+  );
+  const form = h(
+    "form",
+    { class: "keycard-form", onsubmit: (e) => save(e) },
+    labelEl,
+    h("div", { class: "key-entry" }, input, saveBtn),
+    helpEl,
+    h("div", { class: "keycard-actions" }, testBtn, delBtn, link),
+  );
+  const card = h(
+    "section",
+    { class: "card keycard", "aria-labelledby": ids.title },
+    h("div", { class: "keycard-head" }, h("div", {}, titleEl, whatEl), pill),
+    statusEl,
+    noteEl,
+    form,
+  );
+
+  let busy = false;
+  const setNote = (tone, text) => (keyNotes[name] = { tone, text });
+
+  function paint() {
+    const svc = serviceName(k);
+    const v = keyView(k);
+    titleEl.textContent = svc;
+    whatEl.textContent = name === "whisper" && !isGroq(k) ? `Slutversionens text, via ${k.host}.` : info.what;
+    pill.className = `pill ${v.tone}`;
+    pill.textContent = v.label;
+    statusEl.replaceChildren(...v.body.filter(Boolean));
+    const note = keyNotes[name];
+    noteEl.replaceChildren(...(note ? [h("div", { class: `banner ${note.tone}` }, h("span", {}, note.tone === "ok" ? "✓ " : "", note.text))] : []));
+    labelEl.textContent = k.set ? "Byt till en ny nyckel" : k.required ? `Klistra in nyckeln till ${svc}` : "Nyckel (behövs bara om servern kräver det)";
+    helpEl.textContent = `Nyckeln kontrolleras hos ${k.host} innan den sparas.`;
+    testBtn.hidden = !k.set;
+    delBtn.hidden = k.source !== "ui";
+    link.hidden = name === "whisper" && !isGroq(k);
+    card.classList.toggle("attention", v.tone === "warn" || v.tone === "err");
+  }
+
+  function setBusy(on, btn, label) {
+    busy = on;
+    card.setAttribute("aria-busy", String(on));
+    input.readOnly = on;
+    for (const b of [saveBtn, testBtn, delBtn]) b.disabled = on;
+    if (on) {
+      btn.dataset.label = btn.textContent;
+      btn.textContent = label;
+    } else if (btn.dataset.label) {
+      btn.textContent = btn.dataset.label;
+      delete btn.dataset.label;
+    }
+  }
+
+  async function afterChange() {
+    // Resten av appen (t.ex. Ny inspelning) ska se det nya läget direkt.
+    await loadMe();
+  }
+
+  async function save(e) {
+    e.preventDefault();
+    if (busy) return;
+    const value = input.value.trim();
+    const problem = keyFormatProblem(value);
+    if (problem) {
+      setNote("err", problem);
+      paint();
+      input.focus();
+      return;
+    }
+    setBusy(true, saveBtn, "Kontrollerar …");
+    try {
+      const res = await api("PUT", `/api/admin/keys/${name}`, { key: value });
+      input.value = "";
+      k = res.key;
+      if (res.check.result === "ok") setNote("ok", "Nyckeln fungerar och är sparad.");
+      else setNote("warn", `Nyckeln är sparad, men den kunde inte kontrolleras just nu. ${sentence(res.check.detail)} Tryck på Testa om en stund.`);
+      await afterChange();
+    } catch (ex) {
+      setNote("err", ex.message);
+    } finally {
+      setBusy(false, saveBtn);
+      paint();
+      saveBtn.focus();
+    }
+  }
+
+  async function test() {
+    if (busy) return;
+    const svc = serviceName(k);
+    setBusy(true, testBtn, "Testar …");
+    try {
+      const { check } = await api("POST", `/api/admin/keys/${name}/test`);
+      if (check.result === "ok") setNote("ok", "Nyckeln fungerar.");
+      else if (check.result === "denied") setNote("err", `${svc} godkände inte nyckeln. Lägg in en ny.`);
+      else if (check.result === "missing") setNote("warn", sentence(check.detail) || "Ingen nyckel är inlagd.");
+      else setNote("warn", `Nyckeln kunde inte kontrolleras just nu. ${sentence(check.detail)}`);
+    } catch (ex) {
+      setNote("err", ex.message);
+    } finally {
+      setBusy(false, testBtn);
+      paint();
+      (testBtn.hidden ? input : testBtn).focus();
+    }
+  }
+
+  async function remove() {
+    if (busy) return;
+    const svc = serviceName(k);
+    const then = k.envSet ? "Då används nyckeln i serverns inställningsfil (.env) igen." : `Då har tjänsten ingen nyckel till ${svc}.`;
+    if (!(await confirmDialog("Ta bort nyckeln?", `Nyckeln till ${svc} som sparats här tas bort. ${then}`, "Ta bort", true))) return;
+    setBusy(true, delBtn, "Tar bort …");
+    try {
+      const res = await api("DELETE", `/api/admin/keys/${name}`);
+      k = res.key;
+      setNote("info", "Nyckeln är borttagen.");
+      await afterChange();
+    } catch (ex) {
+      setNote("err", ex.message);
+    } finally {
+      setBusy(false, delBtn);
+      paint();
+      input.focus();
+    }
+  }
+
+  paint();
+  return card;
+}
+
+function keysSection(keys) {
+  return [
+    h("h2", { class: "section" }, "API-nycklar"),
+    h(
+      "p",
+      { class: "keys-intro" },
+      "Nycklarna behövs för att tjänsten ska kunna transkribera. De sparas krypterat på servern och visas aldrig igen, inte ens här.",
+    ),
+    keys.error
+      ? h("div", { class: "error" }, `Nycklarna kunde inte hämtas: ${keys.error}`)
+      : h("div", { class: "keys" }, keys.keys.map(keyCard)),
+  ];
+}
+
+/** Varning på Ny inspelning när en tjänst saknar nyckel. */
+function serviceWarning() {
+  const f = state.me.features;
+  const admin = state.me.user.role === "admin";
+  const adminLink = (text) => h("a", { href: "#/admin" }, text);
+  if (!f.live && !f.final) {
+    return h(
+      "div",
+      { class: "banner warn" },
+      h(
+        "span",
+        {},
+        h("strong", {}, "Nycklarna till transkriberingen är inte inlagda. "),
+        "Inspelningen sparas, men den kan inte transkriberas förrän nycklarna är inlagda. ",
+        admin ? adminLink("Lägg in dem under Administration.") : "Be administratören lägga in dem.",
+      ),
+    );
+  }
+  if (!f.live) {
+    return h(
+      "div",
+      { class: "banner warn" },
+      h(
+        "span",
+        {},
+        "Live-text är avstängd eftersom nyckeln till Deepgram saknas. Ljudet spelas in och texten skapas när du stoppar. ",
+        admin ? adminLink("Lägg in nyckeln under Administration.") : "Be administratören lägga in nyckeln.",
+      ),
+    );
+  }
+  if (!f.final) {
+    return h(
+      "div",
+      { class: "banner warn" },
+      h(
+        "span",
+        {},
+        "Nyckeln till Groq saknas, så slutversionen görs bara med Deepgram och blir mindre exakt. ",
+        admin ? adminLink("Lägg in nyckeln under Administration.") : "Be administratören lägga in nyckeln.",
+      ),
+    );
+  }
+  return null;
+}
+
+/** Diskret rad överst på startsidan för administratören så länge en nyckel saknas. */
+function getStartedRow() {
+  const f = state.me.features;
+  if (state.me.user.role !== "admin" || (f.live && f.final)) return null;
+  const text =
+    !f.live && !f.final
+      ? "Kom igång: lägg in nycklarna till Deepgram och Groq under Administration."
+      : !f.live
+        ? "Kom igång: lägg in nyckeln till Deepgram under Administration för live-text och talare."
+        : "Kom igång: lägg in nyckeln till Groq under Administration för en exaktare slutversion.";
+  return h("a", { class: "getstarted", href: "#/admin" }, h("span", {}, text), h("span", { "aria-hidden": "true" }, "→"));
+}
+
 // ---------------------------------------------------------------- administration
 async function renderAdmin() {
   if (state.me.user.role !== "admin") return go("#/");
-  const [users, invites, usage] = await Promise.all([api("GET", "/api/admin/users"), api("GET", "/api/admin/invites"), api("GET", "/api/admin/usage")]);
+  const [users, invites, usage, keys] = await Promise.all([
+    api("GET", "/api/admin/users"),
+    api("GET", "/api/admin/invites"),
+    api("GET", "/api/admin/usage"),
+    api("GET", "/api/admin/keys").catch((ex) => {
+      if (ex.status === 401) throw ex;
+      return { error: ex.message };
+    }),
+  ]);
   const inviteOut = h("div");
   const role = h("select", { style: "width:auto" }, h("option", { value: "user" }, "Användare"), h("option", { value: "admin" }, "Administratör"));
   const note = h("input", { type: "text", placeholder: "Anteckning, t.ex. vem den är till", maxlength: 200 });
@@ -1554,6 +1882,7 @@ async function renderAdmin() {
       "div",
       { class: "page" },
       h("h1", {}, "Administration"),
+      keysSection(keys),
       h("h2", { class: "section" }, "Bjud in"),
       h(
         "div",
@@ -1737,6 +2066,8 @@ async function render() {
   const hash = location.hash || "#/";
   const prev = lastHash;
   lastHash = hash;
+  clearSecrets();
+  if (hash !== "#/admin") keyNotes = {};
 
   // Pågående inspelning: varna innan man lämnar inspelningsvyn.
   if (state.recorder && !state.recorder.stopped && !hash.startsWith("#/ny") && prev.startsWith("#/ny")) {
@@ -1771,5 +2102,11 @@ async function render() {
   }
 }
 
+/** Tömmer nyckelfälten när man lämnar sidan, så att inget ligger kvar i webbläsaren. */
+function clearSecrets() {
+  for (const el of document.querySelectorAll("input[data-secret]")) el.value = "";
+}
+
 window.addEventListener("hashchange", render);
+window.addEventListener("pagehide", clearSecrets);
 render();

@@ -25,6 +25,19 @@ import { audioDir, db, now, parseJson, reindex, type Role, type Segment, type Tr
 import { deepgramEnabled } from "./engines/deepgram.js";
 import { whisperEnabled } from "./engines/whisper.js";
 import { enqueue, queuePosition } from "./jobs.js";
+import {
+  ensureWritable,
+  deleteKey,
+  isKeyName,
+  KEY_NAMES,
+  KeyStoreError,
+  serviceLabel,
+  setKey,
+  status as keyStatus,
+  testKey,
+  validateKey,
+  type KeyName,
+} from "./keys.js";
 import { isLive } from "./live.js";
 import { toTxt } from "./merge.js";
 
@@ -171,16 +184,42 @@ function safeFilename(title: string): string {
   return base || "transkribering";
 }
 
+// Spärr för kontroll och sparning av API-nycklar: högst 10 anrop per minut och administratör.
+const keyCalls = new Map<number, number[]>();
+const KEY_CALLS_PER_MINUTE = 10;
+
+function keyCallAllowed(userId: number): boolean {
+  const t = Date.now();
+  const recent = (keyCalls.get(userId) ?? []).filter((x) => x > t - 60_000);
+  if (recent.length >= KEY_CALLS_PER_MINUTE) {
+    keyCalls.set(userId, recent);
+    return false;
+  }
+  recent.push(t);
+  keyCalls.set(userId, recent);
+  return true;
+}
+
+function keyName(name: string): KeyName {
+  if (!isKeyName(name)) throw new HttpError(404, "Det finns ingen sådan nyckel.");
+  return name;
+}
+
 export function registerApi(app: FastifyInstance): void {
   app.setErrorHandler((err, req, reply) => {
     if (err instanceof HttpError) return reply.code(err.status).send({ error: err.message });
     const status = (err as { statusCode?: number }).statusCode;
+    // Felaktig JSON: svara utan tolkens meddelande, som kan citera det som skickades (t.ex. en nyckel).
+    const code = (err as { code?: string }).code ?? "";
+    if (status === 400 && (err instanceof SyntaxError || code.startsWith("FST_ERR_CTP_"))) {
+      return reply.code(400).send({ error: "Begäran har fel format." });
+    }
     if (status && status < 500) return reply.code(status).send({ error: err.message });
     req.log.error({ err }, "Oväntat fel");
     return reply.code(500).send({ error: "Något gick fel på servern." });
   });
 
-  app.get("/api/health", async () => ({ ok: true }));
+  app.get("/api/health", async () => ({ ok: true, version: config.version }));
 
   // --- Konto ---------------------------------------------------------------------------
   app.get("/api/me", async (req, reply) => {
@@ -350,6 +389,53 @@ export function registerApi(app: FastifyInstance): void {
     return db
       .prepare("SELECT month, engine, SUM(seconds) AS seconds FROM usage GROUP BY month, engine ORDER BY month DESC LIMIT 60")
       .all();
+  });
+
+  // --- API-nycklar (Deepgram och Whisper-tjänsten) ----------------------------------------
+  // Nyckelvärdet skickas aldrig tillbaka och loggas aldrig; svaren visar bara de sista tecknen.
+  app.get("/api/admin/keys", { preHandler: requireAdmin }, async () => {
+    return { keys: KEY_NAMES.map((n) => keyStatus(n)) };
+  });
+
+  app.put<{ Params: { name: string } }>("/api/admin/keys/:name", { preHandler: requireAdmin }, async (req, reply) => {
+    const name = keyName(req.params.name);
+    if (!keyCallAllowed(req.user!.id)) return reply.code(429).send({ error: "För många försök. Vänta en minut." });
+    const v = validateKey(body(req).key);
+    if ("error" in v) throw new HttpError(400, v.error);
+    try {
+      ensureWritable();
+    } catch (e) {
+      if (!(e instanceof KeyStoreError)) throw e;
+      req.log.error({ key: name }, e.message);
+      return reply.code(500).send({ error: e.message });
+    }
+    const check = await testKey(name, v.value);
+    if (check.result === "denied") {
+      req.log.info({ key: name, userId: req.user!.id, check: check.result }, "API-nyckeln nekades och sparades inte");
+      return reply.code(400).send({ error: `${serviceLabel(name)} godkände inte nyckeln. Den sparades inte.` });
+    }
+    try {
+      setKey(name, v.value, req.user!.id);
+    } catch (e) {
+      if (!(e instanceof KeyStoreError)) throw e;
+      req.log.error({ key: name }, e.message);
+      return reply.code(500).send({ error: e.message });
+    }
+    req.log.info({ key: name, userId: req.user!.id, check: check.result }, "API-nyckel sparad");
+    return { key: keyStatus(name), check };
+  });
+
+  app.delete<{ Params: { name: string } }>("/api/admin/keys/:name", { preHandler: requireAdmin }, async (req) => {
+    const name = keyName(req.params.name);
+    deleteKey(name);
+    req.log.info({ key: name, userId: req.user!.id }, "API-nyckel borttagen");
+    return { key: keyStatus(name) };
+  });
+
+  app.post<{ Params: { name: string } }>("/api/admin/keys/:name/test", { preHandler: requireAdmin }, async (req, reply) => {
+    const name = keyName(req.params.name);
+    if (!keyCallAllowed(req.user!.id)) return reply.code(429).send({ error: "För många försök. Vänta en minut." });
+    return { check: await testKey(name) };
   });
 
   // --- Mappar ----------------------------------------------------------------------------
