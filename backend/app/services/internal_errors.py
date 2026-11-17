@@ -84,6 +84,7 @@ STEP_LABELS: dict[str, str] = {
     "pipeline.suggestions": "platsförslag",
     "pipeline.calendar": "kalendern",
     "pipeline.classify": "klassning",
+    "classify.ai": "AI-bedömningen",
     "pipeline.journeys": "resekedjor",
     "pipeline.autopilot": "autopiloten",
     "pipeline.review_items": "granskningsärenden",

@@ -15,6 +15,12 @@ from app.models import LogicalTrip, RawTrip, ReviewItem, TripSegment
 from app.models.enums import LogicalState, ReviewKind, ReviewState
 
 
+def item_data(item: ReviewItem) -> dict[str, Any]:
+    """Ärendets ``data`` som objekt. Fältet är fri JSON: ett ärende vars data är något annat
+    (text, lista, tomt) behandlas som om det saknade data – det ska aldrig fälla efterarbetet."""
+    return item.data if isinstance(item.data, dict) else {}
+
+
 def upsert(
     db: Session,
     *,
@@ -189,7 +195,7 @@ def close_stale(
     for item in items:
         if item.dedupe_key in keep or (when and not when(item)):
             continue
-        if data_type is not None and (item.data or {}).get("type") != data_type:
+        if data_type is not None and item_data(item).get("type") != data_type:
             continue
         item.snoozed_until = None
         resolve(db, item, by="system", resolution={"auto": True, "reason": NO_LONGER_REASON, "note": note})
@@ -233,7 +239,7 @@ def close_orphaned(db: Session, vehicle_id: uuid.UUID, *, by: str = "system") ->
             # efter: en ångrad uppdelning makulerar delresan men råresan finns kvar i en aktiv resa.
             continue
         if item.kind == ReviewKind.MERGE:
-            data = item.data or {}
+            data = item_data(item)
             for key in ("first_raw_trip_id", "second_raw_trip_id"):
                 try:
                     raw_id = uuid.UUID(str(data.get(key)))

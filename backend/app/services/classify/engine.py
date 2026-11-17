@@ -605,6 +605,17 @@ def _assess(
             _report_llm_outcome(db, user_id, exc)
             result = None
             signals.append(Signal("ai_unavailable", "AI-leverantören kunde inte användas – endast regler tillämpades", "neutral"))
+        except Exception as exc:
+            # Ett fel som leverantörskoden inte förutsåg (t.ex. ett svar i oväntat format). AI:n är
+            # en hjälp, inte ett krav: resan bedöms med reglerna och felet antecknas (1.4.2).
+            from app.services import internal_errors
+
+            if not internal_errors.is_tolerant():
+                raise
+            internal_errors.note_failure(db, "classify.ai", exc)
+            _report_llm_outcome(db, user_id, llm_mod.LLMError("Oväntat fel i AI-anropet."))
+            result = None
+            signals.append(Signal("ai_unavailable", "AI-leverantören kunde inte användas – endast regler tillämpades", "neutral"))
         if result is not None:
             data = result.data
             source, model = DecisionSource.AI, result.model

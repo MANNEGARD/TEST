@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class ORM(BaseModel):
@@ -156,6 +156,13 @@ class ReviewItemOut(ORM):
     # ``trip`` är då null.
     first_trip: TripOut | None = None
     second_trip: TripOut | None = None
+
+    @field_validator("data", "resolution", mode="before")
+    @classmethod
+    def _object_or_empty(cls, value: Any) -> Any:
+        # Fälten är fri JSON i databasen: ett ärende med något annat än ett objekt ska visas
+        # som ett ärende utan data, inte fälla hela listan i Granskning.
+        return value if isinstance(value, dict) else {}
 
 
 class ReviewListOut(BaseModel):

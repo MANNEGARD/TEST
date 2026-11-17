@@ -234,7 +234,7 @@ def trip_refs(item: ReviewItem) -> list[tuple[str, uuid.UUID]]:
     Tom lista när ärendet gäller fordonet och inte en resa (mätarhopp, inaktuella uppgifter …).
     Äldre ärenden (före 1.3.2) saknar ``logical_trip_id`` men har råresorna i ``data``.
     """
-    data = item.data or {}
+    data = review.item_data(item)
 
     def as_id(value: Any) -> uuid.UUID | None:
         try:
@@ -357,7 +357,7 @@ def close_noise(db: Session, vehicle_id: uuid.UUID, *, scope: str) -> dict[str, 
 
     rest: list[ReviewItem] = []
     for item in items:
-        if (item.data or {}).get("type") == "abnormal_consumption":
+        if review.item_data(item).get("type") == "abnormal_consumption":
             _close(db, item, CONSUMPTION_REASON, CONSUMPTION_NOTE)
             count("abnormal_consumption")
         else:
@@ -744,7 +744,7 @@ def scan_vehicle(db: Session, vehicle: Vehicle, *, user_id: uuid.UUID, now: date
     )
     closed_stale += review.close_stale(
         db, vehicle.id, prefixes=("overlap:",), keep=keep, data_type="overlap", note=NO_LONGER_NOTE,
-        when=lambda item: "first_raw_trip_id" in (item.data or {}),
+        when=lambda item: "first_raw_trip_id" in review.item_data(item),
     )
     if closed_stale:
         closed["no_longer_applies"] = closed_stale

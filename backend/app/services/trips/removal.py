@@ -160,7 +160,7 @@ def delete_trip(db: Session, trip: LogicalTrip, *, actor: Actor) -> None:
                 ReviewItem.status.in_(_OPEN),
             )
         ).scalars()
-        if str(raw.id) in ((item.data or {}).get("first_raw_trip_id"), (item.data or {}).get("second_raw_trip_id"))
+        if str(raw.id) in (review.item_data(item).get("first_raw_trip_id"), review.item_data(item).get("second_raw_trip_id"))
     ]
     for item in merge_items:
         review.resolve(db, item, by=actor.label, resolution={"deleted": True})

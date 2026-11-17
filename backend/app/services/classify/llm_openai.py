@@ -76,25 +76,34 @@ class OpenAIProvider:
                 },
             },
         )
+        # Svaret kommer utifrån: varje del kontrolleras, så att ett oväntat format blir ett
+        # LLMError (resan bedöms då med enbart reglerna) och aldrig ett ohanterat undantag.
         try:
             message = body["choices"][0]["message"]
         except (KeyError, IndexError, TypeError) as exc:
             raise LLMError("Oväntat svar från OpenAI.") from exc
+        if not isinstance(message, dict):
+            raise LLMError("Oväntat svar från OpenAI.")
         if message.get("refusal"):
             logger.info("AI-leverantören avböjde att bedöma resan.")
             return None
         content = message.get("content")
         if not content:
             raise LLMError("AI-svaret saknade innehåll.")
+        if not isinstance(content, str):
+            raise LLMError("AI-svaret hade ett oväntat format.")
         try:
             data = json.loads(content)
-        except json.JSONDecodeError as exc:
+        except ValueError as exc:  # json.JSONDecodeError är en ValueError
             raise LLMError("AI-svaret var inte giltig JSON.") from exc
-        usage = body.get("usage") or {}
+        usage = body.get("usage")
+        if not isinstance(usage, dict):
+            usage = {}
+        model = body.get("model")
         return LLMResult(
             data=_coerce(data),
             provider=self.name,
-            model=body.get("model") or self.model,
+            model=model if isinstance(model, str) and model else self.model,
             usage={"input_tokens": usage.get("prompt_tokens"), "output_tokens": usage.get("completion_tokens")},
         )
 

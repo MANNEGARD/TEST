@@ -1077,7 +1077,7 @@ def close_stale_overlaps(db: Session, vehicle_id: uuid.UUID, *, odometer_toleran
     from app.services.stats import anomalies
 
     def pair(item: ReviewItem) -> tuple[RawTrip | None, RawTrip | None] | None:
-        if "first_trip_id" not in (item.data or {}):
+        if "first_trip_id" not in review.item_data(item):
             return None
         try:
             first, second = (uuid.UUID(part) for part in item.dedupe_key.split(":")[1:3])

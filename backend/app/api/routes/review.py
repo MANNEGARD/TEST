@@ -87,7 +87,7 @@ def list_items(
     merge_trip: dict[uuid.UUID, uuid.UUID] = {}  # sammanslagningsfrågan har även sin "egen" resa
     for i in items:
         if i.kind == ReviewKind.MERGE:
-            ids = [_as_id(i.data.get(key)) for key in ("first_trip_id", "second_trip_id")]
+            ids = [_as_id(review.item_data(i).get(key)) for key in ("first_trip_id", "second_trip_id")]
             pairs[i.id] = (ids[0], ids[1])
             if i.logical_trip_id:
                 merge_trip[i.id] = i.logical_trip_id

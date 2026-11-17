@@ -166,10 +166,14 @@ def answer_question(item_id: uuid.UUID, body: MergeAnswer, principal: PrincipalD
         raise not_found("Frågan")
     if item.status not in (ReviewState.OPEN, ReviewState.SNOOZED):
         raise bad_request("Frågan är redan besvarad.", "already_answered")
+    try:
+        first_id, second_id = (uuid.UUID(str(item.data[k])) for k in ("first_raw_trip_id", "second_raw_trip_id"))
+    except (KeyError, TypeError, ValueError):
+        raise bad_request("Frågan saknar uppgift om vilka resor den gäller.", "invalid_question") from None
     merged = merge.answer_question(
         db, vehicle_id=item.vehicle_id,
-        first_raw_trip_id=uuid.UUID(item.data["first_raw_trip_id"]),
-        second_raw_trip_id=uuid.UUID(item.data["second_raw_trip_id"]),
+        first_raw_trip_id=first_id,
+        second_raw_trip_id=second_id,
         accept=body.accept, actor=principal.actor, odometer_tolerance=_tolerance(db, principal.user.id),
     )
     if merged is not None:

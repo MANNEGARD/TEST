@@ -138,7 +138,10 @@ def _coerce(data: Any) -> dict[str, Any]:
         # "… – syfte behöver bekräftas" och varianter: platshållaren tas bort; blir inget kvar
         # finns inget ärende.
         purpose = _PLACEHOLDER.sub("", purpose).strip() if "behöver bekräftas" in purpose.lower() else purpose.strip()
-    evidence = [str(e) for e in (data.get("evidence") or []) if isinstance(e, (str, int, float))][:8]
+    raw_evidence = data.get("evidence")
+    if not isinstance(raw_evidence, list):
+        raw_evidence = []
+    evidence = [str(e) for e in raw_evidence if isinstance(e, (str, int, float))][:8]
     # Visas för ägaren ("AI-förslag utifrån: …"): osynliga tecken och styrtecken, länkar och
     # e-postadresser bort, som i underlaget.
     from app.services.classify.underlag import _scrub
@@ -203,18 +206,25 @@ class AnthropicProvider:
             raise LLMError(f"Fel från Anthropic ({exc.status_code}).", retryable=exc.status_code >= 500) from exc
         except anthropic.APIConnectionError as exc:
             raise LLMError("Kunde inte nå Anthropic.", retryable=True) from exc
+        except anthropic.APIError as exc:  # t.ex. ett svar som SDK:t inte kan tolka
+            raise LLMError("Oväntat svar från Anthropic.") from exc
 
         if response.stop_reason == "refusal":
             logger.info("AI-leverantören avböjde att bedöma resan.")
             return None
         if response.stop_reason == "max_tokens":
             raise LLMError("AI-svaret blev avklippt.")
-        text = next((b.text for b in response.content if b.type == "text"), None)
+        try:
+            text = next((b.text for b in response.content if b.type == "text"), None)
+        except (TypeError, AttributeError) as exc:
+            raise LLMError("Oväntat svar från Anthropic.") from exc
         if not text:
             raise LLMError("AI-svaret saknade text.")
+        if not isinstance(text, str):
+            raise LLMError("AI-svaret hade ett oväntat format.")
         try:
             data = json.loads(text)
-        except json.JSONDecodeError as exc:
+        except ValueError as exc:  # json.JSONDecodeError är en ValueError
             raise LLMError("AI-svaret var inte giltig JSON.") from exc
         usage = {
             "input_tokens": getattr(response.usage, "input_tokens", None),

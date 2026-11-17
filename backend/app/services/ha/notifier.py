@@ -387,7 +387,7 @@ def create_merge_question(
     key = f"merge:{item.id}"
     if _exists(db, user_id, key):
         return None
-    data = item.data or {}
+    data = item.data if isinstance(item.data, dict) else {}
     pid = new_public_id()
     built = messages.merge(pid, data.get("minutes_low"), data.get("minutes_high"), bool(data.get("exact", True)))
     return _create(
