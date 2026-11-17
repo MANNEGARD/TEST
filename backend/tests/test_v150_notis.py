@@ -272,6 +272,34 @@ def test_multi_trip_keeps_the_old_question(db, user, vehicle, trips, fake_ha, mo
     assert "WORKP0" not in keys(req)
 
 
+@pytest.mark.parametrize("mode", MODES)
+def test_mixed_trip_keeps_the_old_question(db, user, vehicle, trips, fake_ha, monkeypatch, mode):
+    """Blandad resa: "Godkänn" skulle bara spara ärendet, inte godkänna – frågan som i de16760."""
+    suggest(monkeypatch, [PURPOSE], remember=True)
+    _setup(db, user, mode, hide=False)
+    home(trips)
+    trip = _trip(db, trips, "work_purpose")
+    trip.has_mixed_categories = True
+    db.flush()
+    req = _ask(db, user, vehicle, trip, mode)
+    assert req.title == "Ny resa"
+    assert "assessment" not in req.context
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_long_purpose_is_not_offered_for_one_tap_approval(db, user, vehicle, trips, fake_ha, monkeypatch, mode):
+    """Ett ärende över 200 tecken skulle kortas i knappen och sparas kortat som bekräftat."""
+    long = "Kundbesök " + "x" * 250
+    suggest(monkeypatch, [PURPOSE], remember=True)
+    _setup(db, user, mode, hide=False)
+    home(trips)
+    trip = _trip(db, trips, "work_purpose", purpose=long)
+    req = _ask(db, user, vehicle, trip, mode)
+    assert req.title == "Tjänsteresa – vilket ärende?"
+    assert req.context["assessment"] == "work"
+    assert all(a.get("purpose") != long[:200] for a in req.actions)
+
+
 # ----------------------------------------------------------------------------- svaren hela vägen
 
 

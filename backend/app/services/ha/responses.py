@@ -153,7 +153,7 @@ def _check_proposal(db: Session, req: NotificationRequest, key: str, purpose: st
     if key not in _APPROVE_KEYS or ctx.get("assessment") != "work_purpose":
         return
     trip = _load_active_trip(db, req)
-    current = text_safety.sanitize_text(trip.purpose) if isinstance(trip.purpose, str) else ""
+    current = text_safety.sanitize_text(trip.purpose, limit=10_000) if isinstance(trip.purpose, str) else ""
     if trip.category != Category.WORK or current != purpose:
         raise TripError(
             "Förslaget har ändrats sedan notisen skickades. Öppna körjournalen och se över resan där.",

@@ -192,11 +192,34 @@ Resedetekteringen (`detection.process_vehicle`) är en tillståndsmaskin:
 * **Ankare** = senaste stabila läge. **Rörelse** = mätarställningen ökat minst
   `min_odometer_delta_km` (1 km) eller positionen flyttats minst `position_threshold_m`
   (150 m).
-* Resan anses avslutad när läget varit oförändrat i `settle_minutes` (10 min) – eller när
-  bilen rapporterat avstängd motor efter en ny positionsrapport, bekräftat av en till hämtning.
-  Har bara mätarställningen eller bara positionen hunnit ändras väntar systemet tre gånger så
-  länge (30 min), eftersom det andra värdet ofta kommer med fördröjning – annars skulle samma
-  körning kunna bli två resor.
+* **Ankomst med kompletta uppgifter stängs direkt (1.5.0).** Många bilar (bland dem ägarens)
+  rapporterar mätarställning och position bara när tändningen slås av. Kommer en ny
+  positionsrapport (flyttad position) och är mätarvärdet avläst vid ankomsten – bilens
+  tidsstämpel för mätarvärdet högst 2 minuter från positionens – och är mätarsträckan minst
+  fågelvägen (1 km marginal för heltalsmätaren), stängs resan vid den hämtning som först ser
+  ankomsten. Motorstatus och "sedd två gånger" krävs inte. En mätarökning efter ankomsten
+  räknas bara med om bilen inte har rapporterat en ny motorstart som värdet kan vara avläst
+  efter. Det gäller också mycket korta resor där mätaren inte hann öka (sträckan uppskattas då
+  ur fågelvägen och märks).
+* Annars gäller väntan från före 1.5.0 oförändrad: resan anses avslutad när läget varit
+  oförändrat i `settle_minutes` (10 min) – eller när bilen rapporterat avstängd motor efter en
+  ny positionsrapport, bekräftat av en till hämtning. Har bara mätarställningen eller bara
+  positionen hunnit ändras väntar systemet tre gånger så länge (30 min), eftersom det andra
+  värdet ofta kommer med fördröjning – annars skulle samma körning kunna bli två resor. Den
+  nya motorn stänger aldrig en rörelse med ankomst senare än den gamla väntan hade gjort.
+* **Släpande mätarvärde efter att resan stängts (1.5.0).** Kommer ett högre mätarvärde utan ny
+  positionsrapport och utan ny motorstart, och är det avläst senast vid ankomsten (eller, utan
+  tidsstämpel, högst 2 km medan den gamla väntan ännu inte hade stängt), förs det till den redan
+  skapade resan: slutmätarställning och sträcka rättas (även på en klassad, godkänd eller
+  sammanslagen resa – beslutet står kvar), och rättningen syns i resans historik som *Resan
+  ändrades*. Ingår resan i en månad vars underlag redan är skapat märker underlagets avtryck
+  ändringen som vilken annan ändring som helst. Samma sak gäller när mätarsträckan vid
+  ankomsten var kortare än fågelvägen (mätarvärdet bevisligen gammalt) och ökningen ryms inom
+  omvägsgränsen. Annars blir ökningen som förut en egen rörelse. Så räknas samma körning aldrig
+  två gånger.
+* **Frågan till telefonen kommer inte tidigare än förut:** tidigast när ankomsten först setts
+  plus `settle_minutes`, så att en fortsatt körning efter ett kort stopp hinner slås ihop
+  först. Lunchregelns egen väntan gäller som förut.
 * Varje ny positionsrapport inom en rörelse delar upp den i delresor.
 * **Sträcka** = skillnad i mätarställning (`distance_quality = odometer`).
 * **Sluttid** = bilens positionstidsstämpel (`reported`) om den är rimlig, annars en märkt

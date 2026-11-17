@@ -316,13 +316,15 @@ def _assessment(trip: LogicalTrip) -> tuple[str | None, str | None]:
     """DriveLogs bedömning av resan för frågan: (typ, föreslaget ärende) eller (None, None)
     när resan inte är bedömd. En resa som kan vara flera körningar får frågan som förut."""
     from app.services.classify.purpose import NEEDS_CONFIRMATION_SUFFIX
-    from app.services.text_safety import sanitize_text
+    from app.services.text_safety import MAX_TEXT, sanitize_text
 
-    if messages.is_multi(trip):
+    if messages.is_multi(trip) or trip.has_mixed_categories:
+        # Blandad resa: "Godkänn" skulle bara spara ärendet, inte godkänna – frågan som förut.
         return None, None
     if trip.category == Category.WORK:
-        text = sanitize_text(trip.purpose) if isinstance(trip.purpose, str) else ""
-        if text and NEEDS_CONFIRMATION_SUFFIX not in text.lower():
+        text = sanitize_text(trip.purpose, limit=10_000) if isinstance(trip.purpose, str) else ""
+        # Ett ärende över MAX_TEXT skulle kortas i knappen och sparas kortat: inget snabbgodkännande.
+        if text and len(text) <= MAX_TEXT and NEEDS_CONFIRMATION_SUFFIX not in text.lower():
             return messages.ASSESSED_WORK_PURPOSE, text
         return messages.ASSESSED_WORK, None
     if trip.category == Category.PRIVATE:

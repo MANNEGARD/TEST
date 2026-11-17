@@ -39,6 +39,15 @@ den – till exempel för historik från tiden innan bilen kopplades in.
 När samma resa senare importeras från Volvos körjournal ersätter den verifierade resan den
 rekonstruerade, och dina beslut följer med.
 
+**När resan syns (1.5.0).** Skickar bilen position och mätarställning när du slår av
+tändningen syns resan i journalen vid första hämtningen efter ankomsten (med hämtning varannan
+minut alltså inom ett par minuter). Saknas något – till exempel mätarvärdet kommer en stund
+efter positionen – väntar DriveLog som förut tills uppgifterna har lagt sig. Kommer mätarvärdet
+efter att resan redan syns rättas resans sträcka i stället för att det blir en extra resa, och
+rättningen syns i resans historik. Frågan i telefonen kommer som förut tidigast en stund
+(normalt tio minuter) efter ankomsten, så att en körning som fortsätter efter ett kort stopp
+hinner slås ihop först.
+
 ## Självgående läge
 
 Under *Inställningar → Automatik* finns ett val: **Självgående** (standard) eller **Jag
