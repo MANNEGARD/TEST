@@ -32,6 +32,12 @@ export interface StartBasis {
   polled_before?: string | null;
   polled_running?: string | null;
   engine_reported_at?: string | null;
+  /**
+   * 1.5.0: statusen "bilen används" (CAR_IN_USE). Den förfinar starttiden bara när den slog om i
+   * samma hämtning som motorstarten; då anger start_signal vilken av bilens tidsstämplar som gav tiden.
+   */
+  start_signal?: "engine" | "car_in_use" | "engine_and_car_in_use" | string | null;
+  in_use_reported_at?: string | null;
 }
 
 /** Starttider som bilen själv har rapporterat (motorstarten); visas som vanliga tider. */
@@ -67,6 +73,8 @@ export function readBasis(raw: unknown): StartBasis {
     polled_before: str(b.polled_before),
     polled_running: str(b.polled_running),
     engine_reported_at: str(b.engine_reported_at),
+    start_signal: str(b.start_signal),
+    in_use_reported_at: str(b.in_use_reported_at),
   };
 }
 
@@ -79,8 +87,25 @@ export function marginText(basis: StartBasis): string {
 /** Grunden för en uträknad starttid i klartext, t.ex. "Bilen stod still 07:30 och var på väg 07:40." */
 export function basisText(basis: StartBasis): string {
   const parts: string[] = [];
-  if (basis.method === "engine_start" && basis.engine_reported_at) {
-    return `Bilen rapporterade själv att motorn startade ${formatTime(basis.engine_reported_at)}${basis.polled_before && basis.polled_running ? ` (mellan hämtningarna ${formatTime(basis.polled_before)} och ${formatTime(basis.polled_running)})` : ""}. Tiden ändras inte av sig själv.`;
+  if (basis.method === "engine_start") {
+    const polls =
+      basis.polled_before && basis.polled_running
+        ? ` (mellan hämtningarna ${formatTime(basis.polled_before)} och ${formatTime(basis.polled_running)})`
+        : "";
+    // Statusen "bilen används" gav tiden: den slog om i samma hämtning som motorstarten, tidigare.
+    if (basis.start_signal === "car_in_use" && basis.in_use_reported_at) {
+      const engine =
+        basis.engine_reported_at && formatTime(basis.engine_reported_at) !== formatTime(basis.in_use_reported_at)
+          ? ` Motorn startade ${formatTime(basis.engine_reported_at)}.`
+          : "";
+      return `Bilen rapporterade själv att den började användas ${formatTime(basis.in_use_reported_at)}${polls}.${engine} Tiden ändras inte av sig själv.`;
+    }
+    if (basis.start_signal === "engine_and_car_in_use" && basis.engine_reported_at) {
+      return `Bilen rapporterade själv att den började användas och att motorn startade ${formatTime(basis.engine_reported_at)}${polls}. Tiden ändras inte av sig själv.`;
+    }
+    if (basis.engine_reported_at) {
+      return `Bilen rapporterade själv att motorn startade ${formatTime(basis.engine_reported_at)}${polls}. Tiden ändras inte av sig själv.`;
+    }
   }
   if (basis.method === "poll_midpoint" && basis.polled_before && basis.polled_running) {
     return `Motorn stod still vid hämtningen ${formatTime(basis.polled_before)} och gick vid hämtningen ${formatTime(basis.polled_running)}. Tiden är minuten mitt emellan (högst ${formatNumber(Math.max(1, Math.ceil((basis.window_minutes ?? 2) / 2)), 0)} min fel). Den ändras inte av sig själv.`;

@@ -257,7 +257,17 @@ emellan hämtningarna när de ligger högst 6 minuter isär; den är uträknad o
 motorn startade 06:15 …"). Den ändras aldrig av sig själv – bara du kan ange en annan tid med
 **Ange**. Skulle motorstarten ge en orimligt hög snittfart för sträckan (en laddhybrid som
 startar på el kan starta motorn först en bit in i resan) används den inte; då gäller reglerna
-nedan. Resor från de senaste två veckorna som saknar starttid eller har en uppskattad starttid
+nedan.
+
+**Statusen "bilen används".** DriveLog läser och sparar också Volvos besked om att bilen används.
+Det är inte sett hur din bil rapporterar det, varken under färd eller när den står, så beskedet
+får bara finslipa starttiden: slår det om i samma hämtning som motorstarten och har en tidigare
+tid än motorn, blir den tiden starttiden, och grunden säger "Bilen rapporterade själv att den
+började användas 06:14". Beskedet sätter aldrig ensamt en starttid – inte heller för en resa
+helt på el där motorn aldrig startar; då blir starttiden som om beskedet inte fanns (oftast
+uppskattad ur sträckan, eller okänd). Felsökningsfilen visar vad bilen svarade.
+
+Resor från de senaste två veckorna som saknar starttid eller har en uppskattad starttid
 rättas vid nästa hämtning, och ändringen syns i resans historik – utom resor där du angett
 starttiden och resor som finns i ett underlag som redan är skapat. En resa räknas som skyddad bara om den finns i den skapade filen: har månadens fil skapats i förväg får en resa som tillkommer efteråt starttid och förbrukning som vanligt.
 

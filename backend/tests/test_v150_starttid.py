@@ -431,17 +431,58 @@ def electric_start(status: tuple[str, str | None] | None = IN_USE, *, engine_lat
     ]
 
 
-def test_electric_trip_the_status_is_the_start():
-    """Hela resan på el: statusen är det enda beskedet, och dess tid blir starttiden."""
-    kind, when, _, basis = estimate(electric_start(engine_later=False), km=12.0)
-    assert kind == "set" and when == at(-20)
-    assert basis["method"] == "engine_start" and basis["start_signal"] == "car_in_use"
-    assert basis["in_use_reported_at"] == at(-20.2).isoformat()
-    # Avläsningen vid övergången visar motorn av: dess tidsstämpel (förra avstängningen) används inte.
-    assert basis["engine_reported_at"] is None and "status_ignored" not in basis
-    assert basis["avg_speed_kmh"] == pytest.approx(35.6, abs=0.1)
-    # Utan statusen syns ingen start alls.
-    assert estimate(electric_start(status=None, engine_later=False), km=12.0)[0] == "none"
+def without_status(rows: list) -> list:
+    """Samma avläsningar med statusen bortplockad (som en bil utan command-accessibility)."""
+    out = []
+    for r in rows:
+        c = SimpleNamespace(**vars(r))
+        c.accessibility_status = c.accessibility_reason = c.accessibility_reported_at = c.car_in_use = None
+        out.append(c)
+    return out
+
+
+def assert_same_as_without_status(rows: list, ignored: str, **kw) -> tuple:
+    """Statusen lämnas: exakt samma resultat och grund som utan statusen, plus ``status_ignored``."""
+    got = estimate(rows, **kw)
+    plain = estimate(without_status(rows), **kw)
+    assert got[3].get("status_ignored") == ignored and "status_ignored" not in plain[3]
+    assert "start_signal" not in got[3] and "in_use_reported_at" not in got[3]
+    assert (got[0], got[1], got[2], {k: v for k, v in got[3].items() if k != "status_ignored"}) == plain
+    return got
+
+
+def test_electric_trip_the_status_alone_sets_no_start():
+    """Hela resan på el: statusen är det enda beskedet. Det är inte sett hur den riktiga bilen
+    rapporterar statusen, så den sätter aldrig ensam en starttid (och snävar inte in gränserna):
+    samma resultat som utan statusen – ingen starttid ur avläsningarna – plus ``status_ignored``.
+    (Förut, 1.5.0 under bygget, blev statusens tid starttiden med kvalitet reported.)"""
+    for km in (6.0, 12.0, 60.0):
+        kind, when, latest, basis = assert_same_as_without_status(
+            electric_start(engine_later=False), "no_engine_start", km=km)
+        assert (kind, when, latest, basis) == ("none", None, None, {"status_ignored": "no_engine_start"})
+    # Utan statusen syns ingen start alls, som förut.
+    assert estimate(electric_start(status=None, engine_later=False), km=12.0) == ("none", None, None, {})
+
+
+def test_status_on_half_an_hour_before_an_electric_trip_gives_no_invented_time():
+    """Bilen står en halvtimme med statusen påslagen (dörren öppnad, förvärmning) och körs sedan
+    hela vägen på el. Det går inte att skilja från en start på el: ingen påhittad tid, med eller
+    utan statusens tidsstämpel, med eller utan tidigaste gräns."""
+    rows = [
+        srow(-60, -42.5, engine=False, engine_ts=-300, status=FREE, status_ts=-300),
+        srow(-40.5, -20.5, engine=False, engine_ts=-300, status=IN_USE, status_ts=-41),  # står still
+        srow(-18.5, -6.5, engine=False, engine_ts=-300, status=IN_USE, status_ts=-41),  # kör på el
+        srow(-4.5, -0.5, engine=None, status=IN_USE, status_ts=-41),  # motorstatusen kunde inte läsas
+        srow(1.5, engine=False, engine_ts=0.4, status=FREE, status_ts=0.5),
+    ]
+    for status_ts in (-41, None):
+        for r in rows[1:4]:
+            r.accessibility_reported_at = at(status_ts) if status_ts is not None else None
+        for earliest in (-600.0, -45.0, None):
+            for latest in (None, -15.0):
+                kind, when, new_latest, _ = assert_same_as_without_status(
+                    rows, "no_engine_start", km=14.0, earliest=earliest, latest=latest)
+                assert (kind, when, new_latest) == ("none", None, None)
 
 
 def test_status_before_a_later_engine_start_leaves_the_engine_rule_alone():
@@ -468,7 +509,11 @@ def test_status_before_a_later_engine_start_leaves_the_engine_rule_alone():
         assert basis["method"] == "engine_start" and basis["status_ignored"] == "engine_later"
 
 
-def test_electric_trip_through_the_pipeline_is_fixed(db, user, vehicle, actor):
+def test_electric_trip_through_the_pipeline_gets_no_start_from_the_status(db, user, vehicle, actor):
+    """Hela resan på el genom efterbearbetningen: statusen sätter ingen starttid; resan får samma
+    utfall som utan statusen (K4 ur sträckan), och felsökningsfilen visar varför statusen lämnades."""
+    from app.services.export import month_close
+
     for r in electric_start(engine_later=False):
         sobs(db, vehicle, (r.fetched_at - ARR).total_seconds() / 60, (r.last_seen_at - ARR).total_seconds() / 60,
              engine=r.engine_running,
@@ -476,17 +521,18 @@ def test_electric_trip_through_the_pipeline_is_fixed(db, user, vehicle, actor):
              status=(r.accessibility_status, r.accessibility_reason) if r.accessibility_status else None,
              status_ts=(r.accessibility_reported_at - ARR).total_seconds() / 60 if r.accessibility_reported_at else None)
     trip = live_trip(db, vehicle, user, km=12.0, ended=ARR, earliest=ARR - timedelta(hours=3))
-    out = run_pipeline(db, user, vehicle, actor)
-    assert out["start_from_engine"] == 1
-    trip = reload_trip(db, trip.id)
-    assert trip.start_time_quality == TimeQuality.REPORTED and local(trip.started_at) == local(at(-20))
     raw = seg.ordered_raws(trip)[0]
-    assert raw.start_estimate_basis["start_signal"] == "car_in_use"
-    assert start_time.display(trip, TZ) == local(at(-20))
-    # Ligger fast och idempotent.
     assert start_time.engine_plan(db, vehicle.id) == []
-    assert run_pipeline(db, user, vehicle, actor)["start_from_engine"] == 0
-    assert reload_trip(db, trip.id).started_at == trip.started_at
+    steps = start_time.unknown_start_reasons(db, raw, month_close.protection(db, vehicle.id))
+    assert steps[:2] == ["no_engine_start", "car_in_use_ignored_no_engine_start"]
+    out = run_pipeline(db, user, vehicle, actor)
+    assert out["start_from_engine"] == 0
+    trip = reload_trip(db, trip.id)
+    raw = seg.ordered_raws(trip)[0]
+    assert trip.start_time_quality != TimeQuality.REPORTED
+    basis = raw.start_estimate_basis or {}
+    assert basis.get("method") == "distance_speed" and "start_signal" not in basis
+    assert trip.start_time_quality == TimeQuality.ESTIMATED
 
 
 def test_status_left_on_during_a_stop_does_not_reach_the_previous_trip():
@@ -516,9 +562,10 @@ def test_status_left_on_during_a_stop_does_not_reach_the_previous_trip():
         assert kind == "set" and when == at(-121) and basis["status_ignored"] == "stop"
 
 
-def test_short_coverage_gap_in_an_electric_trip_is_no_new_start():
+def test_short_coverage_gap_in_an_electric_trip_gives_no_start():
     """Hela resan på el och en hämtning mitt i med UNAVAILABLE/NO_INTERNET (eller ingen status), motorn
-    av med samma tidsstämpel som förut: glappet hör till resan, starten är statusens första tid."""
+    av med samma tidsstämpel som förut. Förut blev statusens första tid starttiden; nu sätter statusen
+    aldrig ensam en starttid, med eller utan glapp: samma resultat som utan statusen."""
     def trip(gap_status):
         return [
             srow(-150, -122.4, engine=False, engine_ts=-1169.1, status=FREE, status_ts=-1169),
@@ -527,13 +574,10 @@ def test_short_coverage_gap_in_an_electric_trip_is_no_new_start():
             srow(-106.4, -0.3, engine=False, engine_ts=-1169.1, status=IN_USE, status_ts=-106.5),
             srow(1.7, engine=False, engine_ts=0.5, status=FREE, status_ts=0.6),
         ]
-    for gap in (("UNAVAILABLE", "NO_INTERNET"), None):
+    for gap in (("UNAVAILABLE", "NO_INTERNET"), None, FREE):
         for km in (25.0, 60.0):
-            kind, when, _, basis = estimate(trip(gap), km=km)
-            assert kind == "set" and when == at(-121) and basis["start_signal"] == "car_in_use"
-    # AVAILABLE mitt emellan är bilens eget besked om att den inte används: den sista övergången räknas.
-    kind, when, _, _ = estimate(trip(FREE), km=25.0)
-    assert kind == "set" and when == at(-106)
+            kind, when, _, _ = assert_same_as_without_status(trip(gap), "no_engine_start", km=km)
+            assert (kind, when) == ("none", None)
 
 
 def test_status_and_engine_at_the_same_time():
@@ -552,25 +596,36 @@ def test_status_and_engine_at_the_same_time():
 
 
 def test_only_the_status():
-    """Hela resan på el: motorn går aldrig, bara statusen slår om."""
+    """Hela resan på el: motorn går aldrig, bara statusen slår om. Förut gav statusens tid (eller
+    minuten mitt emellan hämtningarna) starttiden; nu blir det samma som utan statusen, oavsett
+    statusens tidsstämpel."""
     rows = [
         srow(-40, -15.5, engine=False, engine_ts=-300, status=FREE, status_ts=-300),
         srow(-13.5, -6, engine=False, engine_ts=-300, status=IN_USE, status_ts=-14.6),
         srow(-4, -0.5, engine=None, status=IN_USE, status_ts=-14.6),  # motorstatusen kunde inte läsas
         srow(1.5, engine=False, engine_ts=0.4, status=FREE, status_ts=0.5),
     ]
-    kind, when, _, basis = estimate(rows, km=6.0)
-    assert kind == "set" and when == at(-15) and basis["start_signal"] == "car_in_use"
-    # Utan tidsstämpel för statusen: minuten mitt emellan hämtningarna, uträknad.
-    for r in rows:
-        r.accessibility_reported_at = None
-    kind, when, _, basis = estimate(rows, km=6.0)
-    assert kind == "set" and when == at(-14)  # mitt emellan −15,5 och −13,5, avrundat
-    assert basis["method"] == "poll_midpoint" and basis["start_signal"] == "car_in_use"
-    # Statusens tidsstämpel långt utanför fönstret (en gammal status) räknas som saknad.
-    for r in rows[1:3]:
-        r.accessibility_reported_at = at(-300)
-    assert estimate(rows, km=6.0)[3]["method"] == "poll_midpoint"
+    for status_ts in (-14.6, None, -300):
+        for r in rows[1:3]:
+            r.accessibility_reported_at = at(status_ts) if status_ts is not None else None
+        kind, when, _, _ = assert_same_as_without_status(rows, "no_engine_start", km=6.0)
+        assert (kind, when) == ("none", None)
+
+
+def test_status_in_the_same_poll_as_the_engine_start_still_refines():
+    """Fall (1) är oförändrat: statusen och motorstarten i samma hämtning, den tidigaste av bilens
+    två tidsstämplar inom fönstret blir starttiden (kvalitet reported, metod engine_start)."""
+    rows = electric_start(engine_later=False)
+    rows[1].car_in_use, rows[1].accessibility_status, rows[1].accessibility_reason = False, "AVAILABLE", None
+    rows[2].engine_running, rows[2].engine_reported_at = True, at(-9.8)
+    rows[2].accessibility_reported_at = at(-10.6)
+    kind, when, _, basis = estimate(rows, km=12.0)
+    assert kind == "set" and when == at(-11) and basis["method"] == "engine_start"
+    assert basis["start_signal"] == "car_in_use" and basis["in_use_reported_at"] == at(-10.6).isoformat()
+    assert "status_ignored" not in basis
+    # Utan statusen: motorstartens tid.
+    plain = estimate(without_status(rows), km=12.0)
+    assert plain[0] == "set" and plain[1] == at(-10) and "start_signal" not in plain[3]
 
 
 def test_status_missing_entirely_gives_exactly_todays_result():

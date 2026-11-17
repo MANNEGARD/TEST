@@ -161,6 +161,30 @@ def _started_after(obs: VehicleObservation, odo_ts: datetime | None, arrived_at:
     return started > arrived_at and (odo_ts is None or odo_ts >= started)
 
 
+def _restarted(steps: list[Step], odo_ts: datetime | None, arrived_at: datetime) -> bool:
+    """``_started_after`` för varje avläsning i ``steps`` – även de oförändrade. Ägarens bil
+    rapporterar motorstarten på en egen rad utan ny mätarställning eller position, och när
+    mätarökningen sedan kommer är motorn redan av igen."""
+    return any(_started_after(s.obs, odo_ts, arrived_at) for s in steps)
+
+
+def _engine_started_since(
+    db: Session, vehicle_id: uuid.UUID, arrived_at: datetime, until_fetched: datetime, odo_ts: datetime | None
+) -> bool:
+    """Har bilen, i någon avläsning hämtad senast ``until_fetched``, rapporterat en motorstart
+    efter ankomsten som mätarvärdet (``odo_ts``) kan vara avläst efter? Som ``_restarted``,
+    men för avläsningar som redan är bearbetade (raden med motorstarten kan vara ankaret)."""
+    conditions = [
+        VehicleObservation.vehicle_id == vehicle_id,
+        VehicleObservation.engine_running.is_(True),
+        VehicleObservation.engine_reported_at > arrived_at,
+        VehicleObservation.fetched_at <= until_fetched,
+    ]
+    if odo_ts is not None:
+        conditions.append(VehicleObservation.engine_reported_at <= odo_ts)
+    return db.execute(select(VehicleObservation.id).where(*conditions).limit(1)).first() is not None
+
+
 def _arrival_complete(anchor_eff: Eff, steps: list[Step], settings: dict[str, Any]) -> bool:
     """Är rörelsen avslutad med en ankomst vars uppgifter är kompletta (1.5.0)?
 
@@ -176,8 +200,9 @@ def _arrival_complete(anchor_eff: Eff, steps: list[Step], settings: dict[str, An
       ett mycket senare kan innehålla nästa körning;
     * mätarsträckan är minst fågelvägen (med mätarens upplösning i marginal) – annars är
       mätarvärdet bevisligen gammalt, vad tidsstämpeln än säger;
-    * en mätarökning efter ankomsten kommer inte från en avläsning som rapporterar att motorn
-      har startat igen efter ankomsten (då kan den höra till nästa körning).
+    * har mätarställningen ökat efter ankomsten har ingen avläsning efter ankomsten (även en
+      oförändrad) rapporterat att motorn har startat igen före mätarvärdet (då kan ökningen
+      höra till nästa körning).
 
     Motorstatus och "sett två gånger" krävs inte. Saknas något av detta gäller den vanliga
     väntan i ``_settled`` oförändrad.
@@ -200,7 +225,7 @@ def _arrival_complete(anchor_eff: Eff, steps: list[Step], settings: dict[str, An
     if arrived_at is None or odo_ts is None or final.pos_ts != arrived_at:
         return False
     after = steps[steps.index(arrival) + 1:]
-    if any(s.odo_moved and _started_after(s.obs, s.eff.odo_ts, arrived_at) for s in after):
+    if any(s.odo_moved for s in after) and _restarted(after, odo_ts, arrived_at):
         return False  # bilen har startat igen: ökningen kan höra till nästa körning
     if not (arrived_at - CLOCK_SKEW <= odo_ts <= arrived_at + CLOCK_SKEW):
         return False
@@ -330,7 +355,15 @@ def _build_legs(anchor: VehicleObservation, anchor_eff: Eff, steps: list[Step], 
             # 1.5.0: var mätarvärdet vid ankomsten bevisligen gammalt hör ökningen till samma
             # resa, vad tidsstämpeln än säger. Före 1.5.0 blev den en egen "resa" utan ny
             # position, och sträckan räknades två gånger (uppskattningen ur fågelvägen plus ökningen).
-            lagging = lagging or (end.eff.odo is not None and _catches_up(last_leg.start, last_leg.end, end.eff.odo, settings))
+            # Men aldrig när en avläsning efter ankomsten (även en oförändrad) har rapporterat en ny
+            # motorstart: då kan ökningen vara nästa körning, och 1.4.2:s regler gäller.
+            end_idx = next(i for i, s in enumerate(steps) if s.obs is last_leg.end_obs)
+            lagging = lagging or (
+                end.eff.odo is not None
+                and arrival_ts is not None
+                and not _restarted(steps[end_idx + 1:], end.eff.odo_ts, arrival_ts)
+                and _catches_up(last_leg.start, last_leg.end, end.eff.odo, settings)
+            )
             if lagging:
                 last_leg.end = Eff(
                     odo=end.eff.odo, odo_ts=end.eff.odo_ts, lat=last_leg.end.lat, lon=last_leg.end.lon,
@@ -637,7 +670,8 @@ def _attach_late_odometer(
 
     * bara mätarställningen har ökat, ingen ny positionsrapport har kommit sedan ankomsten
       (samma tidsstämpel), och bilen har inte rapporterat en ny motorstart efter ankomsten
-      som mätarvärdet kan vara avläst efter (``_started_after``);
+      som mätarvärdet kan vara avläst efter – varken på raden med mätarökningen eller på någon
+      tidigare rad efter ankomsten (``_started_after``, ``_engine_started_since``);
     * mätarvärdet är avläst senast vid ankomsten (bilens tidsstämpel högst ``CLOCK_SKEW``
       efter positionens) – eller, utan tidsstämpel, en ökning på högst ``LAG_KM`` medan
       väntan från före 1.5.0 ännu inte hade stängt rörelsen (då hade värdet hamnat i samma
@@ -656,7 +690,9 @@ def _attach_late_odometer(
     arrived_at = prev.pos_ts
     if arrived_at is None or not _same_instant(step.eff.pos_ts, arrived_at):
         return None
-    if _started_after(step.obs, step.eff.odo_ts, arrived_at):
+    if _started_after(step.obs, step.eff.odo_ts, arrived_at) or _engine_started_since(
+        db, vehicle.id, arrived_at, step.obs.fetched_at, step.eff.odo_ts
+    ):
         return None  # bilen har startat igen: ökningen kan höra till nästa körning
     raw = _arrival_raw(db, vehicle.id, prev)
     if raw is None or raw.odometer_start is None or raw.odometer_end is None:

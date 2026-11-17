@@ -416,6 +416,39 @@ def test_stale_odometer_shorter_than_crow_distance_waits(db, user, vehicle, car)
     assert raws(db) == []
 
 
+def _stale_arrival_then_restart(db, vehicle, car, restart_min: float) -> None:
+    """A→B där mätarvärdet för ankomsten aldrig kommer. Bilen startas sedan igen (egen rad med
+    motorstart, ingen ny mätarställning eller position) och kör en rundresa utan ny
+    positionsrapport; vid tändning av ökar mätaren 12 km."""
+    parked(db, vehicle, car)
+    engine_on(car, -15)
+    polls(db, vehicle, car, -14, -2)
+    arrive(car, PB, 0, pos_min=0.0, odo_min=None)
+    car.engine, car.engine_ts = "STOPPED", at(0.5)
+    polls(db, vehicle, car, 1.7, restart_min - 0.3)
+    engine_on(car, restart_min)
+    polls(db, vehicle, car, restart_min + 1.7, restart_min + 9.7)
+    car.odometer += 12
+    car.odo_ts = car.engine_ts = at(restart_min + 10.5)
+    car.engine = "STOPPED"
+    polls(db, vehicle, car, restart_min + 11.7, restart_min + 120)
+
+
+@pytest.mark.parametrize("restart_min", [60.0, 10.0], ids=["efter-stangd-resa", "inom-rorelsen"])
+def test_stale_arrival_then_restart_keeps_round_trip_separate(db, user, vehicle, car, restart_min):
+    """Granskningsfynd: mätarökningen efter en ny motorstart får inte föras till A→B, varken till
+    den stängda resan (``_attach_late_odometer``) eller inne i rörelsen (``_build_legs``). Raden
+    med motorstarten är en egen, oförändrad avläsning; på raden med ökningen är motorn redan av.
+    Som i 1.4.2: A→B uppskattad ur fågelvägen och rundresan med sina flaggor för granskning."""
+    _stale_arrival_then_restart(db, vehicle, car, restart_min)
+    rows = raws(db)
+    assert [(r.odometer_start, r.odometer_end) for r in rows] == [(10_000, 10_000), (10_000, 10_012)]
+    first, second = rows
+    assert first.distance_quality == DistanceQuality.ESTIMATED
+    assert "round_trip_unobserved" in second.quality_flags and second.possible_missed_trips
+    assert not db.execute(select(M.AuditEvent).where(M.AuditEvent.action == "trip.update")).scalars().all()
+
+
 # ----------------------------------------------------------------------------- frågan till telefonen
 
 

@@ -151,10 +151,13 @@ avläsningen (`vehicle_observations`):
   avläsningsrad, vars hämtningstid (`fetched_at`) visar när övergången sågs. Bilens
   tidsstämpel ingår inte i hashen (en ny tidsstämpel med samma status ger ingen ny rad).
   En rad där bara statusen har ändrats är ingen rörelse för resedetekteringen.
-* Syftet är att kunna belägga starttiden även när bilen startar på ren el och motorstatusen
-  därför inte säger något. **Hur den riktiga bilen svarar under färd är inte prövat** –
-  felsökningsfilen (`GET /api/v1/volvo/diagnostics`) visar de fyra fälten för varje
-  avläsning, så att det går att se vad bilen faktiskt svarar.
+* Statusen läses och sparas, men **ingenting är sett från den riktiga bilen** – varken om den
+  svarar `CAR_IN_USE` under färd eller vad den svarar när den står. Därför får statusen bara
+  förfina starttiden när den slår om i samma hämtning som motorstarten (se "Starttid ur
+  motorstarten" nedan). Den sätter **aldrig ensam** en starttid och snävar aldrig ensam in
+  gränserna, inte heller för en resa där motorn aldrig går (ren el). Felsökningsfilen
+  (`GET /api/v1/volvo/diagnostics`) visar de fyra fälten för varje avläsning, så att det går
+  att se vad bilen faktiskt svarar innan statusen får göra mer.
 * Kvoten: ett anrop till per hämtning mot Connected Vehicle (vid 120 s ca 3 600 anrop/dygn
   med de fem ändpunkterna, budget 9 000).
 * 403/404 gör att ändpunkten slutar hämtas på samma sätt som övriga (omprovning efter ett
@@ -247,6 +250,20 @@ Resedetekteringen (`detection.process_vehicle`) är en tillståndsmaskin:
     märks `reported`. Avläsningar där motorstatusen inte kunde läsas räknas inte.
   * Längre fönster: ingen starttid, men `start_latest` snävas in till den första avläsningen
     med motorn igång.
+  * Statusen "bilen används" (`car_in_use`): slår den om i **samma hämtning** som motorstarten
+    (avläsningen vid övergången visar både motorn igång och `CAR_IN_USE`) blir den tidigaste
+    av bilens två tidsstämplar inom fönstret starttiden, fortfarande metod `engine_start` och
+    kvalitet `reported`. Grunden anger då `start_signal` (`engine`, `car_in_use` eller
+    `engine_and_car_in_use`) och `in_use_reported_at`, och appen skriver "Bilen rapporterade
+    själv att den började användas 06:14" när statusens tid gav starttiden. I alla andra fall
+    lämnas statusen och resultatet blir exakt detsamma som utan den; grunden får
+    `status_ignored` och felsökningsfilen steget `car_in_use_ignored_<kod>`:
+    `no_engine_start` (statusen slog om men motorn gick aldrig före ankomsten, t.ex. hela
+    resan på el – ingen starttid ur statusen), `engine_later` (statusen slog om en eller flera
+    hämtningar före motorstarten – motorstarten räknas, eftersom en bil som stått med statusen
+    påslagen inte går att skilja från en start på el) och `stop` (motorn rapporterades
+    avstängd med ny tidsstämpel medan statusen låg kvar). Ingenting av detta är prövat mot den
+    riktiga bilen.
   * Rimlighet: tiden ligger aldrig före den tidigaste gränsen eller efter ankomsten, och inte
     på eller efter senaste möjliga start (t.ex. första mätarökningen). Snittfarten från
     motorstarten får vara högst dubbla tabellfarten för sträckan, aldrig över 130 km/h (under
