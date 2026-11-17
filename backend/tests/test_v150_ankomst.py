@@ -52,7 +52,9 @@ def at(minutes: float) -> datetime:
 
 
 def raws(db, vehicle=None) -> list[M.RawTrip]:
-    q = select(M.RawTrip).where(M.RawTrip.voided_at.is_(None)).order_by(M.RawTrip.odometer_start)
+    # Två resor kan börja på samma mätarställning (en uppskattad ur fågelvägen och en rundresa):
+    # slutställningen avgör då ordningen, så att den är densamma på SQLite och PostgreSQL.
+    q = select(M.RawTrip).where(M.RawTrip.voided_at.is_(None)).order_by(M.RawTrip.odometer_start, M.RawTrip.odometer_end)
     if vehicle is not None:
         q = q.where(M.RawTrip.vehicle_id == vehicle.id)
     return list(db.execute(q).scalars())
