@@ -19,8 +19,16 @@ Här finns det gemensamma:
   inställningen ``system.internal_errors`` (ingen databasmigrering), med tid, steg, undantagets
   typ, kodställena i appens egna filer (fil:rad:funktion) och meddelandet kapat till
   ``MAX_MESSAGE`` tecken och tvättat med loggens maskering (``logging_setup.redact``) – så att
-  varken nycklar, token, VIN eller kalenderlänk följer med. Felsökningsfilen
+  varken nycklar, token, VIN eller kalenderlänk följer med. Dessutom tvättas användarens egna
+  kända värden bort ordagrant och oavsett skiftläge (``private_values``: anslutningarnas
+  hemligheter, kalenderlänken, bilarnas VIN och registreringsnummer, sparade platser och de
+  senaste resornas adresser), liksom mönster för gatuadresser, postnummer med ort, koordinater
+  och registreringsnummer. En adress som varken är känd eller följer mönstren kan ändå finnas
+  kvar i meddelandet. Samma fel (steg, typ och kodställen) tar högst en plats i listan: posten
+  får ``count`` och ``first_at`` i stället för att tränga ut äldre fel. Felsökningsfilen
   (GET /api/v1/volvo/diagnostics) visar dem under ``internal_errors``.
+* **Skyddsnätet får aldrig själv fälla något**: ``describe`` och ``note_failure`` kastar aldrig,
+  inte ens för ett undantag vars text inte går att läsa.
 
 SQLite: pysqlite inleder transaktionen först vid första ändringen. En sparpunkt utan pågående
 transaktion blir då själva transaktionen, och när sparpunkten släpps checkas allt in – också
@@ -56,6 +64,8 @@ MAX_FRAMES = 16
 
 # Sessionens anteckningar om misslyckade steg (inte transaktionell: överlever en tillbakarullning).
 _FAILURES_KEY = "drivelog_step_failures"
+# Sätts när en efterbearbetning (pipeline.after_trips_changed med isolerade steg) har körts klart.
+_PIPELINE_DONE_KEY = "drivelog_pipeline_done"
 # Sessionens köade efterarbete som ett misslyckat steg inte ska lämna efter sig: jobb som väntar
 # på commit (app.jobs) och beställda omräkningar (learning.recompute).
 _INFO_KEYS = ("drivelog_deferred_jobs", "drivelog_recompute_vehicles")
@@ -171,9 +181,16 @@ def note_failure(db: Session, step: str, exc: BaseException) -> dict[str, Any]:
 
     Kodställena tas både ur undantaget (från anroparen och inåt) och ur anropsstacken utanför,
     så att det syns vilket steg i vilken väg som kraschade."""
-    logger.exception("Delsteget %s misslyckades och hoppades över", step, exc_info=exc)
-    outer = traceback.extract_stack(sys._getframe(1))[:-1]  # anroparens ram finns redan i undantaget
-    entry = describe(step, exc, outer=outer)
+    try:
+        logger.exception("Delsteget %s misslyckades och hoppades över", step, exc_info=exc)
+    except Exception:  # noqa: S110 – loggningen får aldrig fälla skyddsnätet
+        pass
+    try:
+        outer = traceback.extract_stack(sys._getframe(1))[:-1]  # anroparens ram finns redan i undantaget
+        entry = describe(step, exc, outer=outer)
+    except Exception:
+        # Sista utvägen: steg och typ räcker för att se att något hände.
+        entry = _minimal_entry(step, exc)
     db.info.setdefault(_FAILURES_KEY, []).append(entry)
     return entry
 
@@ -183,27 +200,58 @@ def take_failures(db: Session) -> list[dict[str, Any]]:
     return list(db.info.pop(_FAILURES_KEY, None) or [])
 
 
+def failure_count(db: Session) -> int:
+    """Antalet antecknade misslyckade steg i sessionen (utan att glömma dem)."""
+    return len(db.info.get(_FAILURES_KEY) or [])
+
+
+def mark_pipeline_done(db: Session) -> None:
+    """Efterbearbetningen har körts klart (med eller utan överhoppade steg)."""
+    db.info[_PIPELINE_DONE_KEY] = True
+
+
+def take_pipeline_done(db: Session) -> bool:
+    """Har en efterbearbetning körts klart sedan förra frågan? (Och glömmer svaret.)"""
+    return bool(db.info.pop(_PIPELINE_DONE_KEY, False))
+
+
 # ----------------------------------------------------------------------------- beskrivning
 
-# Utöver loggens maskering: koordinater och registreringsnummer (svenska och liknande).
+# Utöver loggens maskering: koordinater, registreringsnummer (svenska och liknande), VIN med
+# gemener, gatuadresser och postnummer med ort.
 _COORD = re.compile(r"(?<![:\d])\d{1,3}\.\d{4,}")
-_PLATE = re.compile(r"\b[A-ZÅÄÖ]{3} ?\d{2}[A-ZÅÄÖ0-9]\b")
+# Ett koordinatpar med tre decimaler (59.090,15.000 eller 59.090, 15.000).
+_COORD_PAIR = re.compile(r"(?<![\w.:])-?\d{1,3}\.\d{3,}\s*[,;]\s*-?\d{1,3}\.\d{3,}(?![\d.])")
+# Versaler med eller utan mellanrum (ABC 123, ABC12D), gemener bara utan (abc123): "got 100" är inget regnr.
+_PLATE = re.compile(r"\b(?:[A-ZÅÄÖ]{3} ?\d{2}[A-ZÅÄÖ0-9]|[A-Za-zÅÄÖåäö]{3}\d{2}[A-Za-zÅÄÖåäö0-9])\b")
+_VIN_ANY = re.compile(
+    r"(?i)\b(?=[a-hj-npr-z0-9]{17}\b)(?=[a-z0-9]*\d)(?=[a-z0-9]*[a-z])[a-hj-npr-z0-9]{17}\b"
+)
+_STREET = re.compile(
+    r"(?i)\b[\wåäöéü\-]*(?:gatan|gata|vägen|väg|gränden|gränd|torget|torg|allén|allé|stigen|backen|leden"
+    r"|platsen|plan|stranden|strand|kajen|esplanaden|street|road|avenue)\s+\d{1,4}(?:\s?[a-z](?![\wåäö]))?"
+)
+_POSTCODE_CITY = re.compile(r"\b\d{3} ?\d{2}\s+[A-ZÅÄÖ][\wåäöÅÄÖéü\-]+")
 _TYPE_RE = re.compile(r"^[A-Za-z_][\w.]{0,120}$")
 _WHERE_RE = re.compile(r"^app/[\w/.\-]+\.py:\d{1,6}:[\w<>]{1,80}$")
 _STEP_RE = re.compile(r"^[a-z0-9_.\-]{1,60}$")
 
 
-def clean_message(text: str, *, extra: tuple[str | None, ...] = ()) -> str:
-    """Loggens maskering, koordinater och registreringsnummer bort, kapat till MAX_MESSAGE."""
+def clean_message(text: str, *, extra: tuple[str | None, ...] | list[str] = ()) -> str:
+    """Kända värden (``extra``, oavsett skiftläge), loggens maskering, VIN, koordinater,
+    registreringsnummer och adressmönster bort, kapat till MAX_MESSAGE."""
     from app.logging_setup import redact
 
     out = str(text)
-    for value in extra:
-        if value and len(value) >= 3:
-            out = out.replace(value, "[DOLD]")
+    for value in sorted({v for v in extra if isinstance(v, str) and len(v.strip()) >= 3}, key=len, reverse=True):
+        out = re.sub(re.escape(value.strip()), "[DOLD]", out, flags=re.IGNORECASE)
     out = redact(out)
+    out = _VIN_ANY.sub("[DOLD]", out)
+    out = _COORD_PAIR.sub("[DOLD]", out)
     out = _COORD.sub("[DOLD]", out)
     out = _PLATE.sub("[DOLD]", out)
+    out = _STREET.sub("[DOLD]", out)
+    out = _POSTCODE_CITY.sub("[DOLD]", out)
     out = " ".join(out.split())
     if len(out) > MAX_MESSAGE:
         out = out[: MAX_MESSAGE - 1] + "…"
@@ -228,33 +276,64 @@ def _frames(exc: BaseException, outer: list[traceback.FrameSummary] | None = Non
     return out[-MAX_FRAMES:]
 
 
-def describe(step: str, exc: BaseException, *, outer: list[traceback.FrameSummary] | None = None) -> dict[str, Any]:
+def _exception_text(exc: BaseException) -> str:
+    """Undantagets text – eller en ersättning om ``__str__`` själv kastar."""
+    try:
+        return str(exc)
+    except Exception:
+        return f"<{type(exc).__name__}: texten kunde inte läsas>"
+
+
+def _now_iso() -> str:
     from app.db import utcnow
 
-    return {
-        "at": utcnow().isoformat(timespec="seconds"),
-        "step": step,
-        "type": _type_name(exc),
-        "message": clean_message(str(exc)),
-        "where": _frames(exc, outer),
-    }
+    return utcnow().isoformat(timespec="seconds")
+
+
+def _minimal_entry(step: str, exc: BaseException) -> dict[str, Any]:
+    try:
+        type_ = _type_name(exc)
+    except Exception:
+        type_ = "Exception"
+    return {"at": _now_iso(), "step": step, "type": type_, "message": "", "where": []}
+
+
+def describe(step: str, exc: BaseException, *, outer: list[traceback.FrameSummary] | None = None) -> dict[str, Any]:
+    """Posten för ett fel. Kastar aldrig: går något fält inte att ta fram blir posten minimal."""
+    try:
+        return {
+            "at": _now_iso(),
+            "step": step,
+            "type": _type_name(exc),
+            "message": clean_message(_exception_text(exc)),
+            "where": _frames(exc, outer),
+        }
+    except Exception:
+        logger.exception("Felet kunde inte beskrivas fullt ut")
+        return _minimal_entry(step, exc)
 
 
 def step_label(step: str) -> str:
     return STEP_LABELS.get(step, step)
 
 
+# Raderna under "Senaste fel" om en misslyckad bearbetning börjar alla så här (collector känner
+# igen dem och låter dem stå kvar tills bearbetningen har lyckats).
+PROCESSING_PREFIX = "Avläsningen hämtades, men "
+DETECTION_MESSAGE = (
+    PROCESSING_PREFIX + "resan kunde inte bearbetas (steg: resedetekteringen). "
+    "Avläsningarna prövas igen vid nästa hämtning. Ladda ner felsökningsfilen."
+)
+
+
 def processing_message(failures: list[dict[str, Any]]) -> str:
     """Raden under "Senaste fel" i Volvo-panelen."""
     steps = [f["step"] for f in failures]
     if "detection" in steps:
-        return (
-            "Avläsningen hämtades, men resan kunde inte bearbetas (steg: resedetekteringen). "
-            "Avläsningarna prövas igen vid nästa hämtning. Ladda ner felsökningsfilen."
-        )
+        return DETECTION_MESSAGE
     labels = ", ".join(dict.fromkeys(step_label(s) for s in steps))
     return (
-        f"Avläsningen hämtades, men ett steg i bearbetningen av resorna misslyckades (steg: {labels}). "
+        f"{PROCESSING_PREFIX}ett steg i bearbetningen av resorna misslyckades (steg: {labels}). "
         "Resorna finns i journalen. Ladda ner felsökningsfilen."
     )
 
@@ -262,24 +341,107 @@ def processing_message(failures: list[dict[str, Any]]) -> str:
 # ----------------------------------------------------------------------------- lagring
 
 
+def private_values(db: Session, user_id: Any) -> list[str]:
+    """Användarens egna värden som aldrig får följa med ett felmeddelande: anslutningarnas
+    hemligheter (åtkomst- och förnyelsetoken, klienthemlighet, API-nyckel, kalenderlänken),
+    bilarnas VIN och registreringsnummer, sparade platsers namn och adresser och de senaste
+    resornas adresser (hela och varje kommaseparerad del). Körs bara när ett fel antecknas eller
+    felsökningsfilen hämtas."""
+    from sqlalchemy import or_, select
+
+    from app.models import IntegrationConnection, KnownLocation, LogicalTrip, Vehicle
+    from app.services import integrations
+
+    values: list[str] = []
+
+    def add(value: Any, *, parts: bool = False) -> None:
+        if isinstance(value, str) and value.strip():
+            values.append(value.strip())
+            if parts:
+                values.extend(p.strip() for p in value.split(",") if len(p.strip()) >= 4)
+
+    def add_secret(value: Any) -> None:
+        if isinstance(value, dict):
+            for v in value.values():
+                add_secret(v)
+        elif isinstance(value, str) and len(value) >= 6:
+            add(value)
+
+    for conn in db.execute(select(IntegrationConnection).where(IntegrationConnection.user_id == user_id)).scalars():
+        add_secret(integrations.secrets(conn))
+    vehicle_ids = []
+    for vehicle in db.execute(select(Vehicle).where(Vehicle.owner_user_id == user_id)).scalars():
+        vehicle_ids.append(vehicle.id)
+        add(vehicle.vin)
+        add(vehicle.registration_number)
+    for loc in db.execute(select(KnownLocation).where(KnownLocation.owner_user_id == user_id)).scalars():
+        if len((loc.name or "").strip()) >= 4:
+            add(loc.name)
+        add(loc.address, parts=True)
+    if vehicle_ids:
+        rows = db.execute(
+            select(LogicalTrip.start_address, LogicalTrip.end_address)
+            .where(LogicalTrip.vehicle_id.in_(vehicle_ids),
+                   or_(LogicalTrip.start_address.is_not(None), LogicalTrip.end_address.is_not(None)))
+            .order_by(LogicalTrip.started_at.desc())
+            .limit(300)
+        ).all()
+        for start, end in rows:
+            add(start, parts=True)
+            add(end, parts=True)
+    return values
+
+
+def _same_error(a: dict[str, Any], b: dict[str, Any]) -> bool:
+    return (a.get("step"), a.get("type"), list(a.get("where") or [])) == (
+        b.get("step"), b.get("type"), list(b.get("where") or [])
+    )
+
+
 def save_failures(db: Session, user_id: Any, failures: list[dict[str, Any]], *, origin: str | None = None) -> None:
-    """Sparar felen först i användarens lista (högst MAX_ENTRIES, nyaste först)."""
+    """Sparar felen först i användarens lista (högst MAX_ENTRIES, nyaste först).
+
+    Samma fel (steg, typ och kodställen) tar högst en plats: den äldre posten tas bort och den
+    nya får ``first_at`` (när felet sågs första gången) och ``count`` (hur många gånger), så att
+    ett fel som upprepas vid varje hämtning inte tränger ut andra fel. Meddelandet tvättas en
+    gång till med användarens kända värden (``private_values``)."""
     if not failures:
         return
     from app.services import settings as settings_svc
 
     current = settings_svc.get_section(db, user_id, SECTION).get(KEY)
-    entries = list(current) if isinstance(current, list) else []
-    new = [{**f, "origin": origin} if origin else dict(f) for f in reversed(failures)]
-    settings_svc.update_section(db, user_id, SECTION, {KEY: (new + entries)[:MAX_ENTRIES]}, allow_read_only=True)
+    stored = [e for e in current if isinstance(e, dict)] if isinstance(current, list) else []
+    try:
+        known = private_values(db, user_id)
+    except Exception:
+        logger.exception("De kända värdena kunde inte läsas; meddelandet utelämnas")
+        known = None
+    for failure in failures:  # äldst först; varje ny post hamnar överst
+        entry = {**failure, "origin": origin} if origin else dict(failure)
+        entry["message"] = clean_message(str(entry.get("message") or ""), extra=known) if known is not None else ""
+        entry.setdefault("first_at", entry.get("at"))
+        entry.setdefault("count", 1)
+        for i, old in enumerate(stored):
+            if _same_error(old, entry):
+                stored.pop(i)
+                entry["first_at"] = old.get("first_at") or old.get("at")
+                previous = old.get("count")
+                entry["count"] = (previous if isinstance(previous, int) and previous > 0 else 1) + 1
+                break
+        stored.insert(0, entry)
+    settings_svc.update_section(db, user_id, SECTION, {KEY: stored[:MAX_ENTRIES]}, allow_read_only=True)
 
 
 def record_after_rollback(
     db: Session, user_id: Any, step: str, exc: BaseException, *, origin: str | None = None,
-    connection_id: Any = None,
+    connection_id: Any = None, now: Any = None,
 ) -> None:
     """Efter en tillbakarullad transaktion: antecknar felet i en egen kort transaktion och
-    (om ``connection_id`` anges) visar det under "Senaste fel". Kastar aldrig."""
+    (om ``connection_id`` anges) visar det under "Senaste fel". Kastar aldrig.
+
+    Tillbakarullningen ångrade också ``last_sync_at``; den sätts igen (som ``mark_error`` gör),
+    så att schemaläggaren väntar sitt vanliga intervall i stället för att anropa Volvo vid varje
+    tick (60 s) så länge felet består. ``last_success_at`` – "Senast synkad" – rörs inte."""
     try:
         entry = describe(step, exc)
         save_failures(db, user_id, [entry], origin=origin)
@@ -289,10 +451,12 @@ def record_after_rollback(
 
             conn = db.get(IntegrationConnection, connection_id)
             if conn is not None:
+                when = now or utcnow()
                 conn.last_error = (
                     f"Ett internt fel inträffade (steg: {step_label(step)}). Ladda ner felsökningsfilen."
                 )
-                conn.last_error_at = utcnow()
+                conn.last_error_at = when
+                conn.last_sync_at = when
         db.commit()
     except Exception:
         logger.exception("Kunde inte anteckna det interna felet")
@@ -309,21 +473,39 @@ def entries(db: Session, user_id: Any) -> list[dict[str, Any]]:
     return [e for e in value if isinstance(e, dict)] if isinstance(value, list) else []
 
 
+def _iso_or_none(value: Any) -> str | None:
+    text = str(value or "")
+    return text if re.fullmatch(r"[0-9T:+\-.Z]{10,40}", text) else None
+
+
 def public_entries(db: Session, user_id: Any, *, scrub: tuple[str | None, ...] = ()) -> list[dict[str, Any]]:
     """Felen för felsökningsfilen. Varje fält prövas och tvättas på nytt (även poster som
-    sparats av en äldre version): bara kända former släpps igenom."""
+    sparats av en äldre version): bara kända former släpps igenom, och meddelandet tvättas med
+    användarens kända värden (``private_values``) och ``scrub``. Går de kända värdena inte att
+    läsa utelämnas meddelandet."""
+    stored = entries(db, user_id)[:MAX_ENTRIES]
+    if not stored:
+        return []
+    try:
+        known: list[str] | None = [*private_values(db, user_id), *(v for v in scrub if v)]
+    except Exception:
+        logger.exception("De kända värdena kunde inte läsas; meddelandena utelämnas")
+        known = None
     out: list[dict[str, Any]] = []
-    for e in entries(db, user_id)[:MAX_ENTRIES]:
+    for e in stored:
         step = str(e.get("step") or "")
         type_ = str(e.get("type") or "")
-        at = str(e.get("at") or "")
         origin = str(e.get("origin") or "")
+        count = e.get("count")
+        at = _iso_or_none(e.get("at"))
         out.append({
-            "at": at if re.fullmatch(r"[0-9T:+\-.Z]{10,40}", at) else None,
+            "at": at,
+            "first_at": _iso_or_none(e.get("first_at")) or at,
+            "count": count if isinstance(count, int) and not isinstance(count, bool) and 0 < count < 10**9 else 1,
             "step": step if _STEP_RE.fullmatch(step) else None,
             "origin": origin if _STEP_RE.fullmatch(origin) else None,
             "type": type_ if _TYPE_RE.fullmatch(type_) else None,
-            "message": clean_message(str(e.get("message") or ""), extra=scrub),
+            "message": clean_message(str(e.get("message") or ""), extra=known) if known is not None else "",
             "where": [w for w in (e.get("where") or []) if isinstance(w, str) and _WHERE_RE.fullmatch(w)][-MAX_FRAMES:],
         })
     return out
@@ -335,8 +517,11 @@ __all__ = [
     "clean_message",
     "describe",
     "entries",
+    "failure_count",
     "is_tolerant",
+    "mark_pipeline_done",
     "note_failure",
+    "private_values",
     "processing_message",
     "public_entries",
     "record_after_rollback",
@@ -344,5 +529,6 @@ __all__ = [
     "save_failures",
     "step_label",
     "take_failures",
+    "take_pipeline_done",
     "tolerant_mode",
 ]

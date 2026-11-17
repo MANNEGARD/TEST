@@ -590,6 +590,9 @@ def poll_vehicle(
             "new_trip_ids": [],
         }
     settings = settings_svc.get_section(db, user_id, "volvo")
+    # Raden under "Senaste fel" före hämtningen: mark_success tömmer den, men en rad om en
+    # misslyckad bearbetning ska stå kvar tills bearbetningen faktiskt har lyckats (_process).
+    previous_error = (conn.last_error, conn.last_error_at)
     run = integrations.start_run(db, conn, "demo_poll" if vehicle.is_demo else "poll")
     stats: dict[str, Any] = {"endpoints": {}, "observation": "none", "new_trips": 0}
     results: dict[str, ApiResult] = {}
@@ -666,7 +669,9 @@ def poll_vehicle(
     new_trips: list[Any] = []
     processing_error: dict[str, Any] | None = None
     if detect and obs is not None:
-        new_trips, processing_error = _process(db, conn, vehicle, user_id, settings, now, origin=run.kind)
+        new_trips, processing_error = _process(
+            db, conn, vehicle, user_id, settings, now, origin=run.kind, previous_error=previous_error
+        )
     stats["new_trips"] = len(new_trips)
     stats["calls"] = sum(r.attempts for r in results.values())
     if processing_error is not None:
@@ -694,6 +699,7 @@ def _process(
     now: datetime,
     *,
     origin: str,
+    previous_error: tuple[str | None, datetime | None] = (None, None),
 ) -> tuple[list[Any], dict[str, Any] | None]:
     """Resedetekteringen och efterbearbetningen efter en hämtning (1.4.1).
 
@@ -704,17 +710,25 @@ def _process(
     (``pipeline.after_trips_changed(isolate_steps=True)``). Misslyckade steg antecknas
     (``system.internal_errors``) och visas under "Senaste fel". I testmiljön (strängt läge)
     kastas undantagen vidare som förut.
+
+    Raden under "Senaste fel" försvinner först när bearbetningen har lyckats: ett fel i
+    detekteringen när detekteringen sedan körs utan fel, ett fel i ett delsteg när en
+    efterbearbetning sedan körs klart utan fel. En hämtning utan något att bearbeta lämnar raden
+    kvar (``previous_error`` är raden före hämtningen, som mark_success har tömt).
     """
     from app.services import internal_errors
     from app.services.volvo import detection
 
     internal_errors.take_failures(db)  # inget gammalt från en tidigare hämtning i sessionen
+    internal_errors.take_pipeline_done(db)
     created = internal_errors.run_step(
         db, "detection", detection.process_vehicle, db, vehicle, user_id=user_id, settings=settings, now=now,
         default=None,
     )
     failures = internal_errors.take_failures(db)
+    pipeline_done = internal_errors.take_pipeline_done(db)
     if not failures:
+        _keep_unresolved_processing_line(conn, vehicle, previous_error, pipeline_done=pipeline_done)
         return list(created or []), None
     internal_errors.save_failures(db, user_id, failures, origin=origin)
     message = internal_errors.processing_message(failures)
@@ -726,6 +740,30 @@ def _process(
         conn.last_error_at = now
     step = "detection" if "detection" in steps else steps[0]
     return list(created or []), {"step": step, "steps": steps, "message": message}
+
+
+def _keep_unresolved_processing_line(
+    conn: IntegrationConnection,
+    vehicle: Vehicle,
+    previous_error: tuple[str | None, datetime | None],
+    *,
+    pipeline_done: bool,
+) -> None:
+    """Lägger tillbaka raden om en misslyckad bearbetning om inget har bearbetats om.
+
+    Ett fel i detekteringen är löst när detekteringen har körts utan fel (avläsningarna har då
+    prövats igen). Ett fel i ett delsteg är löst först när en efterbearbetning har körts klart
+    utan fel – annars saknar resan t.ex. sin fråga eller sin klassning och ingenting görs om."""
+    from app.services import internal_errors
+
+    message, at = previous_error
+    if vehicle.is_demo or conn.last_error is not None or not message:
+        return  # demobilen rör inte raden; ett nytt fel i den här hämtningen går före
+    if not message.startswith(internal_errors.PROCESSING_PREFIX):
+        return
+    if message == internal_errors.DETECTION_MESSAGE or pipeline_done:
+        return
+    conn.last_error, conn.last_error_at = message, at
 
 
 def _due(conn: IntegrationConnection, interval: float, now: datetime) -> bool:
@@ -785,7 +823,7 @@ def poll_due(
                 from app.services import internal_errors
 
                 internal_errors.record_after_rollback(
-                    db, conn.user_id, "volvo.poll", exc, origin="poll", connection_id=conn.id
+                    db, conn.user_id, "volvo.poll", exc, origin="poll", connection_id=conn.id, now=now
                 )
                 out["errors"] += 1
                 continue

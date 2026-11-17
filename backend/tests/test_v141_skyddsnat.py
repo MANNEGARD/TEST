@@ -209,18 +209,61 @@ def test_strict_mode_raises_the_same_exception(name, module, attr, db, user, veh
         drive_until_processed(db, vehicle, car)
 
 
-def test_line_disappears_when_processing_succeeds_again(client, db, user, vehicle, car, monkeypatch, tolerant):
-    real = autopilot.run_vehicle
-    break_step(monkeypatch, autopilot, "run_vehicle")
+def drive_another_trip(db, vehicle, car, start: float = 130) -> dict:
+    """En andra resa efter drive_until_processed; returnerar hämtningen som skapade den."""
+    car.moving(4, m(start))
+    poll(db, vehicle, car, m(start + 1))
+    car.drive_to((59.0, 15.0), 6, m(start + 10))
+    t, result = start + 15, {}
+    while t < start + 130 and not (result.get("new_trips") or result.get("processing_error")):
+        result = poll(db, vehicle, car, m(t))
+        t += 5
+    assert result.get("new_trips") == 1, result
+    return result
+
+
+@pytest.mark.parametrize(("module", "attr", "label"), [
+    (autopilot, "run_vehicle", "autopiloten"),
+    (notifier, "enqueue_for_changes", "notiser"),
+], ids=["autopilot", "notify"])
+def test_line_stays_until_processing_succeeds_again(module, attr, label, client, db, user, vehicle, car, monkeypatch,
+                                                    tolerant):
+    """Granskningsfynd (1.4.2): raden försvann vid nästa lyckade hämtning, även när ingenting
+    hade bearbetats om – resan saknade fortfarande sin fråga (eller autopilot) men panelen visade
+    "Senaste fel: Inga". Nu står raden kvar tills en efterbearbetning har körts utan fel."""
+    real = getattr(module, attr)
+    break_step(monkeypatch, module, attr)
     drive_until_processed(db, vehicle, car)
     db.commit()
-    assert "autopiloten" in client.get(f"{API}/status").json()["last_error"]
-    monkeypatch.setattr(autopilot, "run_vehicle", real)
-    result = poll(db, vehicle, car, m(120))
+    line = client.get(f"{API}/status").json()["last_error"]
+    assert label in line
+    # Nästa hämtning: bilen står still, ingen ny resa, steget är fortfarande trasigt.
+    result = poll(db, vehicle, car, m(100))
+    db.commit()
+    assert result["status"] in ("ok", "partial") and "processing_error" not in result
+    status = client.get(f"{API}/status").json()
+    assert status["last_error"] == line and status["is_connected"] is True
+    # Steget är lagat men ingenting har bearbetats om: raden står kvar.
+    monkeypatch.setattr(module, attr, real)
+    poll(db, vehicle, car, m(110))
+    db.commit()
+    assert client.get(f"{API}/status").json()["last_error"] == line
+    # En ny resa bearbetas utan fel: raden försvinner.
+    result = drive_another_trip(db, vehicle, car)
     db.commit()
     assert "processing_error" not in result
     assert client.get(f"{API}/status").json()["last_error"] is None
     assert len(internal_errors.entries(db, user.id)) == 1  # posten ligger kvar för felsökningsfilen
+
+
+def test_a_new_error_in_the_fetch_replaces_the_processing_line(client, db, user, vehicle, car, monkeypatch, tolerant):
+    break_step(monkeypatch, notifier, "enqueue_for_changes")
+    drive_until_processed(db, vehicle, car)
+    db.commit()
+    monkeypatch.setattr(car, "fetch", lambda name, vin: collector.ApiResult("error", 500, message="Volvo svarar inte"))
+    poll(db, vehicle, car, m(100))
+    db.commit()
+    assert "Volvo svarar inte" in client.get(f"{API}/status").json()["last_error"]
 
 
 def test_review_items_fall_back_to_one_trip_at_a_time(db, user, vehicle, car, monkeypatch, tolerant):
@@ -490,6 +533,218 @@ def test_settings_api_does_not_show_or_accept_internal_errors(client, db, user):
     resp = client.patch("/api/v1/settings/system", json={"internal_errors": []})
     assert resp.status_code == 400
     assert len(internal_errors.entries(db, user.id)) == 1
+
+
+# ----------------------------------------------------------------------------- granskningen av 1.4.1
+
+
+def _recording_autopilot(monkeypatch) -> list:
+    """Självgående läge, och autopiloten bara noterar att den körts (godkänner inget)."""
+    ran: list = []
+    monkeypatch.setattr(autopilot, "is_active", lambda db, user_id: True)
+    monkeypatch.setattr(autopilot, "run_vehicle", lambda db, **kw: ran.append(True) or {})
+    return ran
+
+
+def _crash(*args, **kwargs):
+    raise Boom("steget kraschade")
+
+
+# Steg före autopiloten vars utfall den bygger på. merge = det tidigare regelverket (by_category
+# av), som ägarens installation har sedan migreringen 0004: då körs sammanslagningen före.
+AUTOPILOT_INPUTS = [
+    ("start_time", start_time, "fill_from_distance"),
+    ("merge", merge, "evaluate_vehicle"),
+    ("gaps", gaps, "recompute"),
+    ("places", places_registry, "recount_visits"),
+    ("patterns", patterns, "rebuild"),
+    ("calendar", calendar_matching, "match_vehicle"),
+    ("classify", classify_engine, "classify_pending"),
+    ("journeys", journeys, "detect"),
+]
+
+
+@pytest.mark.parametrize(("name", "module", "attr"), AUTOPILOT_INPUTS, ids=[s[0] for s in AUTOPILOT_INPUTS])
+def test_autopilot_is_skipped_when_a_step_it_builds_on_failed(name, module, attr, db, user, vehicle, car,
+                                                              monkeypatch, tolerant):
+    """Granskningsfynd (1.4.2): autopiloten kördes fast t.ex. kalendersteget hade hoppats över.
+    Utan kalendermatchningen finns ingen kalenderkonflikt, och resan kunde godkännas automatiskt.
+    Nu körs autopiloten inte; resan förblir oavgjord och får sitt ärende i Granskning."""
+    if name == "merge":
+        settings_svc.update_section(db, user.id, "merge", {"by_category": False})
+    ran = _recording_autopilot(monkeypatch)
+    monkeypatch.setattr(module, attr, _crash)
+    result = drive_until_processed(db, vehicle, car)
+    db.commit()
+    assert result["new_trips"] == 1
+    assert f"pipeline.{name}" in result["processing_error"]["steps"]
+    assert "pipeline.autopilot" not in result["processing_error"]["steps"]
+    assert ran == []
+    (trip,) = seg.active_trips(db, vehicle.id)
+    assert trip.review_status == "needs_review" and trip.approval_source is None
+    if name != "journeys":  # utan resekedjor finns ändå ärendet (det skapas av granskningsärendena)
+        items = db.execute(select(M.ReviewItem.logical_trip_id).where(M.ReviewItem.kind == ReviewKind.CATEGORY))
+        assert trip.id in items.scalars().all()
+
+
+def test_autopilot_still_runs_when_only_consumption_failed(db, user, vehicle, car, monkeypatch, tolerant):
+    ran = _recording_autopilot(monkeypatch)
+    monkeypatch.setattr(consumption, "fill_vehicle", _crash)
+    result = drive_until_processed(db, vehicle, car)
+    assert result["processing_error"]["steps"] == ["pipeline.consumption"]
+    assert ran == [True]
+
+
+def test_autopilot_runs_when_nothing_failed(db, user, vehicle, car, monkeypatch, tolerant):
+    ran = _recording_autopilot(monkeypatch)
+    result = drive_until_processed(db, vehicle, car)
+    assert "processing_error" not in result and ran == [True]
+
+
+class Unprintable(Exception):
+    """Ett undantag vars text inte går att läsa."""
+
+    def __str__(self) -> str:
+        raise TypeError("går inte att skriva ut")
+
+
+def test_unprintable_exception_does_not_break_the_safety_net(client, db, user, vehicle, car, monkeypatch, tolerant):
+    """Granskningsfynd (1.4.2): str(exc) i describe kastade, run_step kastade vidare och hela
+    resan rullades tillbaka. Nu hoppas bara steget över, och posten säger att texten inte gick att läsa."""
+    def broken(*args, **kwargs):
+        raise Unprintable()
+
+    monkeypatch.setattr(gaps, "recompute", broken)
+    result = drive_until_processed(db, vehicle, car)
+    db.commit()
+    assert result["new_trips"] == 1 and result["processing_error"]["steps"] == ["pipeline.gaps"]
+    assert len(seg.active_trips(db, vehicle.id)) == 1
+    (entry,) = internal_errors.entries(db, user.id)
+    assert entry["type"].endswith("Unprintable") and "texten kunde inte läsas" in entry["message"]
+    assert entry["where"]
+
+
+def test_unprintable_exception_in_detection_and_outside_the_steps(client, db, user, vehicle, car, monkeypatch,
+                                                                  tolerant):
+    def broken(*args, **kwargs):
+        raise Unprintable()
+
+    db.commit()
+    monkeypatch.setattr(collector, "client_for", lambda *a, **k: car)
+    monkeypatch.setattr(detection, "process_vehicle", broken)
+    resp = client.post(f"{API}/sync", json={})
+    assert resp.status_code == 200 and resp.json()["result"]["processing_error"]["step"] == "detection"
+    # Utanför stegen: fortfarande 500 (TestClient kastar vidare), men felet antecknas.
+    monkeypatch.setattr(collector, "store_observation", broken)
+    with pytest.raises(Unprintable):
+        client.post(f"{API}/sync", json={})
+    db.expire_all()
+    steps = [e["step"] for e in internal_errors.entries(db, user.id)]
+    assert steps == ["volvo.poll", "detection"]
+
+
+def test_note_failure_never_raises_even_if_describe_fails(db, monkeypatch, tolerant):
+    def broken_frames(*args, **kwargs):
+        raise RuntimeError("kodställena gick inte att läsa")
+
+    monkeypatch.setattr(internal_errors, "_frames", broken_frames)
+    assert internal_errors.run_step(db, "test.step", _crash, default="hoppat") == "hoppat"
+    (failure,) = internal_errors.take_failures(db)
+    assert failure["step"] == "test.step" and failure["type"].endswith("Boom") and failure["where"] == []
+
+
+def _raise_here(message: str) -> Boom:
+    try:
+        raise Boom(message)
+    except Boom as exc:
+        return exc
+
+
+def test_repeated_error_takes_one_place_and_keeps_older_errors(db, user):
+    """Granskningsfynd (1.4.2): ett fel som upprepas vid varje hämtning fyllde listan på 20 och
+    trängde ut äldre fel. Nu tar samma fel (steg, typ, kodställen) en plats, med antal och första tid."""
+    internal_errors.save_failures(db, user.id, [internal_errors.describe("pipeline.gaps", _raise_here("en gång"))])
+    first = internal_errors.entries(db, user.id)[0]["at"]
+    for i in range(25):
+        internal_errors.save_failures(
+            db, user.id, [internal_errors.describe("pipeline.start_time", _raise_here(f"ihållande {i}"))], origin="poll"
+        )
+    stored = internal_errors.entries(db, user.id)
+    assert [e["step"] for e in stored] == ["pipeline.start_time", "pipeline.gaps"]
+    assert stored[0]["count"] == 25 and stored[0]["message"] == "ihållande 24" and stored[0]["first_at"]
+    assert stored[1]["count"] == 1 and stored[1]["at"] == first
+    (newest, older) = internal_errors.public_entries(db, user.id)
+    assert newest["count"] == 25 and newest["first_at"] == stored[0]["first_at"] and older["count"] == 1
+    # Ett annat fel i samma steg (annan typ) får en egen plats.
+    internal_errors.save_failures(db, user.id, [internal_errors.describe("pipeline.start_time", ValueError("x"))])
+    assert len(internal_errors.entries(db, user.id)) == 3
+
+
+def test_poll_due_waits_its_interval_after_an_error_outside_the_steps(db, user, vehicle, car, monkeypatch, tolerant):
+    """Granskningsfynd (1.4.2): tillbakarullningen ångrade last_sync_at, så schemaläggaren anropade
+    Volvo vid varje tick (60 s). Nu väntar den sitt intervall (300 s), och felet tar en plats."""
+    monkeypatch.setattr(collector, "client_for", lambda *a, **k: car)
+    monkeypatch.setattr(collector, "store_observation", _crash)
+    db.commit()
+    polls = 0
+    for minute in range(25):
+        before = len(car.calls)
+        out = collector.poll_due(db, now=m(minute))
+        polls += len(car.calls) > before
+        assert out["errors"] == (1 if minute % 5 == 0 else 0)
+    assert polls == 5
+    db.expire_all()
+    (entry,) = internal_errors.entries(db, user.id)
+    assert entry["step"] == "volvo.poll" and entry["count"] == 5
+    conn = db.execute(select(M.IntegrationConnection)).scalar_one()
+    assert conn.last_success_at is None  # "Senast synkad" påstår ingen lyckad hämtning
+    assert "hämtningen" in conn.last_error
+
+
+LEAKS = {
+    "adress": "Storgatan 12, 702 10 Örebro",
+    "token": "AT-gammal-0000000000",
+    "vin_gemener": VIN.lower(),
+    "regnr_gemener": "abc123",
+    "kalender": "https://example.com/feeds/x?token=abcdef0123456789",
+    "koordinat_kort": "59.090,15.000",
+    "koordinat_mellanrum": "59.090, 15.180",
+    "plats": "Sommarstugan Bäckaskog",
+    "platsadress": "Bäckaskog 5",
+    "klienthemlighet": "klienthemlighet-xyz",
+}
+
+
+def test_message_leaks_are_masked_in_storage_and_diagnostics(client, db, user, vehicle, car, monkeypatch, tolerant):
+    """Granskningsfynd (1.4.2): adress, token utan nyckelnamn, VIN och regnr med gemener och korta
+    koordinater följde med till felsökningsfilen. Nu tvättas också användarens kända värden
+    (oavsett skiftläge) och adress-, regnr- och koordinatmönster."""
+    vehicle.registration_number = "ABC123"
+    db.add(M.KnownLocation(owner_user_id=user.id, name=LEAKS["plats"], address="Bäckaskog 5, 291 94 Kristianstad"))
+    db.flush()
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("Fel vid " + " | ".join(LEAKS.values()))
+
+    monkeypatch.setattr(gaps, "recompute", broken)
+    drive_until_processed(db, vehicle, car)
+    db.commit()
+    stored = json.dumps(internal_errors.entries(db, user.id), ensure_ascii=False)
+    diag = client.get("/api/v1/volvo/diagnostics").text
+    for text in (stored, diag, json.dumps(json.loads(diag), ensure_ascii=False)):
+        leaked = {k: v for k, v in LEAKS.items() if v.lower() in text.lower()}
+        assert leaked == {}, leaked
+    assert json.loads(diag)["internal_errors"][0]["message"].startswith("Fel vid ")
+
+
+def test_clean_message_masks_patterns_but_keeps_ordinary_text():
+    text = internal_errors.clean_message(
+        "Kungsvägen 3B, 111 22 Stockholm; Lilla Torget 4; yv1pza3test000042; abc123; 59.090,15.000 – got 100 rows "
+        "in 1.234 s at 12:30:45.123, version 1.4.1"
+    )
+    for leak in ("Kungsvägen 3B", "111 22 Stockholm", "Torget 4", "yv1pza3test000042", "abc123", "59.090"):
+        assert leak not in text, leak
+    assert "got 100 rows" in text and "1.234 s" in text and "12:30:45.123" in text and "1.4.1" in text
 
 
 # ----------------------------------------------------------------------------- utan fel: som 1.4.0

@@ -28,6 +28,9 @@ from app.services.places import registry as places
 from app.services.trips import gaps, merge, review, start_time
 from app.services.trips import segments as seg
 
+# Steg vars utfall autopiloten inte läser: hoppas de över får autopiloten ändå köras (1.4.2).
+AUTOPILOT_INDEPENDENT_STEPS = frozenset({"consumption"})
+
 _TRIP_KINDS = (
     ReviewKind.CATEGORY,
     ReviewKind.PURPOSE,
@@ -183,15 +186,27 @@ def after_trips_changed(
     (strängt läge) och utan ``isolate_steps`` är allt som förut: samma ordning, samma frågor,
     och undantagen kastas vidare. Följden av ett överhoppat steg är ofarlig – se
     ``internal_errors`` och testerna i test_v141_skyddsnat.py.
+
+    Ett undantag: autopiloten bygger på stegen före den. Har något av dem (utom den uppskattade
+    förbrukningen, som autopiloten inte läser) hoppats över i samma körning körs inte heller
+    autopiloten – resorna förblir oavgjorda och frågas på vanligt sätt. Annars kunde en resa
+    godkännas automatiskt fast t.ex. kalenderkonflikten (calendar), flaggan för flera körningar
+    (gaps), sammanslagningen (merge) eller starttiden (start_time) saknades.
     """
     from app.services import internal_errors
     from app.services.classify import engine as classify_engine
     from app.services.learning import patterns
 
+    failed: list[str] = []  # steg som hoppats över i den här körningen
+
     def step(name: str, fn: Any, *args: Any, default: Any = None, **kwargs: Any) -> Any:
         if not isolate_steps:
             return fn(*args, **kwargs)
-        return internal_errors.run_step(db, f"pipeline.{name}", fn, *args, default=default, **kwargs)
+        before = internal_errors.failure_count(db)
+        result = internal_errors.run_step(db, f"pipeline.{name}", fn, *args, default=default, **kwargs)
+        if internal_errors.failure_count(db) > before:
+            failed.append(name)
+        return result
 
     merge_cfg = settings_svc.get_section(db, user_id, "merge")
     scope = settings_svc.journal_scope(db, user_id)
@@ -251,7 +266,13 @@ def after_trips_changed(
         return active
 
     journeys_before = out["journeys"]
-    self_driving = step("autopilot", _autopilot, default=None)
+    # Steg som autopiloten inte bygger på; hoppas något annat steg över körs den inte (se ovan).
+    blocking = [name for name in failed if name not in AUTOPILOT_INDEPENDENT_STEPS]
+    if blocking:
+        out["autopilot_skipped"] = blocking
+        self_driving = None
+    else:
+        self_driving = step("autopilot", _autopilot, default=None)
     if self_driving is None:
         # Autopiloten hoppades över: resorna förblir oavgjorda. Läget behövs ändå för notiserna.
         out.pop("autopilot", None)
@@ -302,4 +323,6 @@ def after_trips_changed(
             merge_items=merge_result["questions"], trip_items=new_trip_items,
         )
     db.flush()
+    if isolate_steps:
+        internal_errors.mark_pipeline_done(db)
     return out
