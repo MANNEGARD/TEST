@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Låtsas-curl för proven: https-adresser svarar enligt $PROV_TILL/https ("ok" = tjänsten svarar
+# redan med giltigt certifikat, annars fel som när adressen inte nås). Allt annat (file://) går till
+# den riktiga curl.
+set -uo pipefail
+T="${PROV_TILL:?PROV_TILL saknas}"
+printf '%s\n' "curl $*" >>"$T/anrop.log"
+for a in "$@"; do
+  if [[ "$a" == https://* ]]; then
+    if [[ "$(cat "$T/https" 2>/dev/null)" == ok ]]; then
+      echo '{"ok":true,"version":"1.1.0"}'
+      exit 0
+    fi
+    echo "curl: (6) Could not resolve host" >&2
+    exit 6
+  fi
+done
+for c in /usr/bin/curl /bin/curl /usr/local/bin/curl; do
+  [[ -x "$c" ]] && exec "$c" "$@"
+done
+exit 127

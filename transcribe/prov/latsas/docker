@@ -1,0 +1,266 @@
+#!/usr/bin/env bash
+# Låtsas-docker för proven i transcribe/prov/. Tillståndet ligger i filer under $PROV_TILL:
+#   taggar            rader "<ref> <id>": lokala avbilder
+#   fjarr             rader "<ref> <id>": det som "docker pull" hämtar
+#   bilder/<id>/      etikett (versionsetiketten, kan saknas eller vara konstig), pkg (versionen i
+#                     package.json), beteende (frisk|trasig|hanger|sjuk|utan_kontroll),
+#                     utan_upptagen (finns = 1.0.0), planterar (finns = lägger en länk i volymen)
+#   container/<namn>/ bild (id), status (running|exited|restarting), omstarter, kontroller, starter
+#   volym/            datakatalogen (Source för monteringen på /data)
+#   upptagen          "<kod> <text>" för "node dist/cli.js upptagen" (standard: 0 ledig)
+#   fel/<namn>        finns = kommandot misslyckas (pull, stop, tag, info, up)
+#   krok              "<n> <mönster>": det n:te anropet som innehåller mönstret skriver krok_nadd
+#                     och väntar sedan tills filen slapp finns (så att provet kan avbryta där)
+#   anrop.log         alla anrop
+set -uo pipefail
+T="${PROV_TILL:?PROV_TILL saknas}"
+VILA=/bin/sleep
+printf '%s\n' "docker $*" >>"$T/anrop.log"
+mkdir -p "$T/bilder" "$T/container" "$T/fel"
+touch "$T/taggar" "$T/fjarr"
+
+ETIKETT='{{index .Config.Labels "org.opencontainers.image.version"}}'
+TILLSTAND='{{.State.Status}} {{.RestartCount}} {{if .State.Health}}{{.State.Health.Status}}{{else}}ingen{{end}}'
+MONTERING='{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}'
+
+# Kroken: låter provet stoppa en körning mitt i ett visst anrop.
+if [[ -f "$T/krok" ]]; then
+  read -r krok_n krok_m <"$T/krok"
+  if [[ "docker $*" == *"$krok_m"* ]]; then
+    n=$(($(cat "$T/krok_raknare" 2>/dev/null || echo 0) + 1))
+    echo "$n" >"$T/krok_raknare"
+    if [[ "$n" == "$krok_n" ]]; then
+      echo "$$" >"$T/krok_nadd"
+      while [[ ! -e "$T/slapp" ]]; do "$VILA" 0.05; done
+    fi
+  fi
+fi
+
+slumpid() { printf 'sha256:%s' "$(printf '%s' "$1" | sha256sum | cut -c1-64)"; }
+upplos() { # ref eller id → id (lokalt)
+  if [[ "$1" =~ ^sha256:[0-9a-f]{64}$ && -d "$T/bilder/${1#sha256:}" ]]; then printf '%s' "$1"; return 0; fi
+  local id
+  id="$(awk -v r="$1" '$1 == r { print $2 }' "$T/taggar" | tail -n 1)"
+  [[ -n "$id" ]] || return 1
+  printf '%s' "$id"
+}
+satt_tagg() { # fil ref id
+  grep -v "^$2 " "$1" >"$1.ny" || true
+  printf '%s %s\n' "$2" "$3" >>"$1.ny"
+  mv "$1.ny" "$1"
+}
+bild() { printf '%s/bilder/%s' "$T" "${1#sha256:}"; }
+cont() { printf '%s/container/%s' "$T" "$1"; }
+las() { cat "$1" 2>/dev/null || printf '%s' "${2:-}"; }
+
+# En start: varje version "migrerar" databasen (skriver en rad i transcribe.db), som en riktig
+# uppgradering kan göra. Beteendet avgör vad som händer sedan.
+starta() { # namn
+  local c id b
+  c="$(cont "$1")"
+  id="$(las "$c/bild")"
+  b="$(bild "$id")"
+  printf 'start %s\n' "$(las "$b/pkg" "?")" >>"$T/volym/transcribe.db"
+  # En elak version byter ut secret.key mot en länk till en fil utanför datakatalogen.
+  if [[ -f "$b/planterar" ]]; then
+    rm -f "$T/volym/secret.key"
+    ln -s "$T/offer" "$T/volym/secret.key"
+  fi
+  echo 0 >"$c/kontroller"
+  echo $(($(las "$c/starter" 0) + 1)) >"$c/starter"
+  case "$(las "$b/beteende" frisk)" in
+    trasig) echo restarting >"$c/status" ;;
+    *) echo running >"$c/status" ;;
+  esac
+}
+skapa() { # namn id
+  local c
+  c="$(cont "$1")"
+  rm -rf "$c"
+  mkdir -p "$c"
+  printf '%s' "$2" >"$c/bild"
+  echo 0 >"$c/omstarter"
+  starta "$1"
+}
+
+inspektera_container() { # format namn
+  local c b status beteende k
+  c="$(cont "$2")"
+  [[ -d "$c" ]] || { echo "Error: No such object: $2" >&2; exit 1; }
+  b="$(bild "$(las "$c/bild")")"
+  status="$(las "$c/status")"
+  beteende="$(las "$b/beteende" frisk)"
+  case "$1" in
+    '{{.State.Running}}') [[ "$status" == running ]] && echo true || echo false ;;
+    "$ETIKETT") if [[ -f "$b/etikett" ]]; then cat "$b/etikett"; echo; else echo; fi ;;
+    '{{.Image}}') las "$c/bild"; echo ;;
+    "$MONTERING") echo "$T/volym" ;;
+    "$TILLSTAND")
+      k=$(($(las "$c/kontroller" 0) + 1))
+      echo "$k" >"$c/kontroller"
+      if [[ "$status" == restarting ]]; then
+        echo $(($(las "$c/omstarter" 0) + 1)) >"$c/omstarter"
+      fi
+      local halsa=ingen
+      if [[ "$status" == running ]]; then
+        case "$beteende" in
+          frisk) if ((k > $(las "$b/starttid" 1))); then halsa=healthy; else halsa=starting; fi ;;
+          hanger) halsa=starting ;;
+          sjuk) halsa=unhealthy ;;
+          utan_kontroll) halsa=ingen ;;
+        esac
+      elif [[ "$status" == restarting ]]; then
+        halsa=starting
+      else
+        halsa=unhealthy
+      fi
+      echo "$status $(las "$c/omstarter" 0) $halsa"
+      ;;
+    *) echo "OKÄNT FORMAT: $1" >>"$T/anrop.log"; echo "låtsas-docker: okänt format $1" >&2; exit 99 ;;
+  esac
+}
+
+compose_varde() { # namn standard → miljön, annars .env (som compose), annars standard
+  local v="${!1:-}"
+  if [[ -z "$v" && -f .env ]]; then
+    v="$(grep -E "^$1=" .env | tail -n 1 | cut -d= -f2- | tr -d '\r')"
+  fi
+  printf '%s' "${v:-$2}"
+}
+
+compose() {
+  [[ -f docker-compose.yml ]] || { echo "no configuration file provided" >&2; exit 1; }
+  local ref id c
+  if grep -qE '^[[:space:]]*image:.*TRANSCRIBE_VERSION' docker-compose.yml; then
+    ref="$(compose_varde TRANSCRIBE_IMAGE ghcr.io/smgd-mp/transcribe):$(compose_varde TRANSCRIBE_VERSION latest)"
+  else
+    ref=ghcr.io/smgd-mp/transcribe:latest
+  fi
+  printf '%s\n' "compose-ref $ref" >>"$T/anrop.log"
+  case "$1" in
+    up)
+      [[ ! -e "$T/fel/up" ]] || exit 1
+      if ! id="$(upplos "$ref")"; then
+        id="$(awk -v r="$ref" '$1 == r { print $2 }' "$T/fjarr" | tail -n 1)"
+        [[ -n "$id" ]] || { echo "pull access denied for $ref" >&2; exit 1; }
+        satt_tagg "$T/taggar" "$ref" "$id"
+      fi
+      c="$(cont transcribe)"
+      if [[ -d "$c" && "$(las "$c/bild")" == "$id" ]]; then
+        [[ "$(las "$c/status")" == running ]] || starta transcribe
+      else
+        skapa transcribe "$id"
+      fi
+      ;;
+    pull)
+      id="$(awk -v r="$ref" '$1 == r { print $2 }' "$T/fjarr" | tail -n 1)"
+      [[ -n "$id" ]] && satt_tagg "$T/taggar" "$ref" "$id"
+      ;;
+    logs) loggar ;;
+    *) ;;
+  esac
+}
+
+loggar() {
+  echo "transcribe  | Servern lyssnar på port 8080"
+  if [[ -f "$T/inbjudan" ]]; then
+    echo "transcribe  | Inget konto finns än. Skapa administratörskontot här (giltig i 2 dygn): $(cat "$T/inbjudan")"
+  fi
+}
+
+kommando="${1:-}"
+shift || true
+case "$kommando" in
+  info) [[ ! -e "$T/fel/info" ]] ;;
+  network)
+    case "${1:-}" in
+      inspect) [[ -e "$T/natverk-$2" ]] ;;
+      create) touch "$T/natverk-$2" ;;
+    esac
+    ;;
+  compose) compose "$@" ;;
+  logs) loggar ;;
+  pull)
+    [[ "${1:-}" == -q ]] && shift
+    [[ ! -e "$T/fel/pull" ]] || { echo "Error response from daemon: nätet är nere" >&2; exit 1; }
+    id="$(awk -v r="$1" '$1 == r { print $2 }' "$T/fjarr" | tail -n 1)"
+    [[ -n "$id" ]] || exit 1
+    satt_tagg "$T/taggar" "$1" "$id"
+    echo "$1"
+    ;;
+  tag)
+    [[ ! -e "$T/fel/tag" ]] || exit 1
+    id="$(upplos "$1")" || exit 1
+    satt_tagg "$T/taggar" "$2" "$id"
+    ;;
+  rmi)
+    grep -q "^$1 " "$T/taggar" || exit 1
+    grep -v "^$1 " "$T/taggar" >"$T/taggar.ny" || true
+    mv "$T/taggar.ny" "$T/taggar"
+    ;;
+  images)
+    # docker images --format '{{.Repository}}:{{.Tag}}' <repo>
+    awk -v r="${3:-}" 'index($1, r ":") == 1 { print $1 }' "$T/taggar"
+    ;;
+  image)
+    [[ "$1" == inspect ]] || exit 99
+    if [[ "${2:-}" == -f ]]; then
+      id="$(upplos "$4")" || { echo "Error: No such image: $4" >&2; exit 1; }
+      case "$3" in
+        "$ETIKETT") if [[ -f "$(bild "$id")/etikett" ]]; then cat "$(bild "$id")/etikett"; echo; else echo; fi ;;
+        '{{.Id}}') echo "$id" ;;
+        *) echo "OKÄNT FORMAT: $3" >>"$T/anrop.log"; exit 99 ;;
+      esac
+    else
+      upplos "$2" >/dev/null || exit 1
+    fi
+    ;;
+  inspect)
+    if [[ "${1:-}" == -f ]]; then
+      inspektera_container "$2" "$3"
+    else
+      [[ -d "$(cont "$1")" ]]
+    fi
+    ;;
+  container)
+    # docker container inspect -f … (samma som inspect)
+    [[ "$1" == inspect ]] || exit 99
+    shift
+    if [[ "${1:-}" == -f ]]; then inspektera_container "$2" "$3"; else [[ -d "$(cont "$1")" ]]; fi
+    ;;
+  stop)
+    [[ "$1" == -t ]] && shift 2
+    [[ ! -e "$T/fel/stop" ]] || exit 1
+    [[ -d "$(cont "$1")" ]] || exit 1
+    echo exited >"$(cont "$1")/status"
+    ;;
+  start)
+    [[ -d "$(cont "$1")" ]] || exit 1
+    starta "$1"
+    ;;
+  rm)
+    [[ "$1" == -f ]] && shift
+    rm -rf "$(cont "$1")"
+    ;;
+  exec)
+    c="$(cont "$1")"
+    [[ -d "$c" && "$(las "$c/status")" == running ]] || { echo "container is not running" >&2; exit 1; }
+    b="$(bild "$(las "$c/bild")")"
+    shift
+    case "$*" in
+      "node -p require('/app/package.json').version") [[ -f "$b/pkg" ]] || exit 1; cat "$b/pkg"; echo ;;
+      "node dist/cli.js upptagen")
+        if [[ -f "$b/utan_upptagen" ]]; then
+          printf 'Användning:\n  node dist/cli.js inbjudan [admin|user]\n'
+          exit 1
+        fi
+        read -r kod text <<<"$(las "$T/upptagen" "0 ledig")"
+        echo "$text"
+        exit "$kod"
+        ;;
+      "node dist/cli.js inbjudan admin") echo "Inbjudan (administratör, giltig i 2 dygn):"; echo "https://transcribe.example.com/#/inbjudan/nyinbjudan" ;;
+      *) echo "OKÄNT EXEC: $*" >>"$T/anrop.log"; exit 99 ;;
+    esac
+    ;;
+  *) echo "OKÄNT KOMMANDO: $kommando" >>"$T/anrop.log"; exit 99 ;;
+esac

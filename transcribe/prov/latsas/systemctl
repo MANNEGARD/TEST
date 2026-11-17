@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Låtsas-systemctl för proven: loggar anropen och håller enheternas läge i $PROV_TILL/systemd/.
+# Finns filen $PROV_TILL/utan_systemd svarar den som på en server utan systemd.
+set -uo pipefail
+T="${PROV_TILL:?PROV_TILL saknas}"
+printf '%s\n' "systemctl $*" >>"$T/anrop.log"
+mkdir -p "$T/systemd"
+[[ ! -e "$T/utan_systemd" ]] || { echo "System has not been booted with systemd as init system (PID 1). Can't operate." >&2; exit 1; }
+kommando="${1:-}"
+shift || true
+nu=0
+[[ "${1:-}" == --now ]] && { nu=1; shift; }
+case "$kommando" in
+  show-environment) echo "PATH=/usr/bin" ;;
+  daemon-reload | reset-failed | start | stop) exit 0 ;;
+  enable) touch "$T/systemd/enabled-$1"; [[ "$nu" == 0 ]] || touch "$T/systemd/active-$1" ;;
+  disable) rm -f "$T/systemd/enabled-$1"; [[ "$nu" == 0 ]] || rm -f "$T/systemd/active-$1" ;;
+  is-active) if [[ -e "$T/systemd/active-$1" ]]; then echo active; else echo inactive; exit 3; fi ;;
+  is-enabled) if [[ -e "$T/systemd/enabled-$1" ]]; then echo enabled; else echo disabled; exit 1; fi ;;
+  *) echo "OKÄNT: systemctl $kommando" >>"$T/anrop.log"; exit 99 ;;
+esac

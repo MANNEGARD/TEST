@@ -8,8 +8,12 @@ COPY src ./src
 RUN npm run build && npm prune --omit=dev
 
 FROM node:22-bookworm-slim
+# Versionen (ur package.json, skickas med av .github/workflows/transcribe.yml). Den automatiska
+# uppdateringen på servern (uppdatera.sh) läser etiketten för att veta vilken version en avbild är.
+ARG VERSION=0.0.0
 LABEL org.opencontainers.image.source="https://github.com/SMGD-MP/TEST" \
-      org.opencontainers.image.description="SMGD Transkribering – svensk transkribering med talaruppdelning"
+      org.opencontainers.image.description="SMGD Transkribering – svensk transkribering med talaruppdelning" \
+      org.opencontainers.image.version="${VERSION}"
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ffmpeg tini \
   && rm -rf /var/lib/apt/lists/*

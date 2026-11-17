@@ -2,7 +2,7 @@
 import fastifyCookie from "@fastify/cookie";
 import fastifyStatic from "@fastify/static";
 import fastifyWebsocket from "@fastify/websocket";
-import Fastify from "fastify";
+import Fastify, { type FastifyRequest } from "fastify";
 import fs from "node:fs";
 import { registerApi } from "./api.js";
 import { createInvite, inviteUrl, sameOrigin, userFromRequest } from "./auth.js";
@@ -42,6 +42,23 @@ const CSP = [
   "frame-ancestors 'none'",
 ].join("; ");
 
+/**
+ * Gäller anropet API:t? Fastify avkodar sökvägen innan den matchas mot rutterna, så
+ * /%61pi/... når samma rutter som /api/... – titta därför både på rutten och på den avkodade
+ * sökvägen, aldrig bara på den råa adressen.
+ */
+function isApiRequest(req: FastifyRequest): boolean {
+  if (req.routeOptions.url?.startsWith("/api/")) return true;
+  const raw = req.url.split("?")[0] ?? "";
+  let decoded = raw;
+  try {
+    decoded = decodeURIComponent(raw);
+  } catch {
+    /* ogiltig kodning: använd den råa sökvägen */
+  }
+  return decoded.startsWith("/api/");
+}
+
 app.addHook("onRequest", async (req, reply) => {
   req.user = userFromRequest(req);
   reply.header("Content-Security-Policy", CSP);
@@ -49,11 +66,13 @@ app.addHook("onRequest", async (req, reply) => {
   reply.header("X-Frame-Options", "DENY");
   reply.header("Referrer-Policy", "same-origin");
   reply.header("Permissions-Policy", "microphone=(self), display-capture=(self), camera=(), geolocation=()");
+  const api = isApiRequest(req);
+  if (api) reply.header("Cache-Control", "no-store");
+  // Ursprungskontrollen gäller alla ändrande anrop, oavsett hur sökvägen är skriven.
   const m = req.method;
-  if (req.url.startsWith("/api/") && m !== "GET" && m !== "HEAD" && m !== "OPTIONS" && !sameOrigin(req)) {
+  if (m !== "GET" && m !== "HEAD" && m !== "OPTIONS" && !sameOrigin(req)) {
     return reply.code(403).send({ error: "Otillåten begäran (fel ursprung)." });
   }
-  if (req.url.startsWith("/api/")) reply.header("Cache-Control", "no-store");
 });
 
 registerApi(app);
@@ -69,7 +88,7 @@ await app.register(fastifyStatic, {
 });
 
 app.setNotFoundHandler((req, reply) => {
-  if (req.url.startsWith("/api/")) return reply.code(404).send({ error: "Finns inte." });
+  if (isApiRequest(req)) return reply.code(404).send({ error: "Finns inte." });
   return reply.code(404).type("text/plain").send("Finns inte.");
 });
 

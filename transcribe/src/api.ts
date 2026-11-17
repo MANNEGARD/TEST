@@ -26,8 +26,8 @@ import { deepgramEnabled } from "./engines/deepgram.js";
 import { whisperEnabled } from "./engines/whisper.js";
 import { enqueue, queuePosition } from "./jobs.js";
 import {
-  ensureWritable,
   deleteKey,
+  ensureWritable,
   isKeyName,
   KEY_NAMES,
   KeyStoreError,
@@ -209,11 +209,6 @@ export function registerApi(app: FastifyInstance): void {
   app.setErrorHandler((err, req, reply) => {
     if (err instanceof HttpError) return reply.code(err.status).send({ error: err.message });
     const status = (err as { statusCode?: number }).statusCode;
-    // Felaktig JSON: svara utan tolkens meddelande, som kan citera det som skickades (t.ex. en nyckel).
-    const code = (err as { code?: string }).code ?? "";
-    if (status === 400 && (err instanceof SyntaxError || code.startsWith("FST_ERR_CTP_"))) {
-      return reply.code(400).send({ error: "Begäran har fel format." });
-    }
     if (status && status < 500) return reply.code(status).send({ error: err.message });
     req.log.error({ err }, "Oväntat fel");
     return reply.code(500).send({ error: "Något gick fel på servern." });

@@ -1552,7 +1552,8 @@ const KEY_INFO = {
 // Besked på korten (aldrig nyckeln själv) – ligger kvar om sidan ritas om.
 let keyNotes = {};
 
-const isGroq = (k) => /(^|\.)groq\.com$/i.test(k.host || "");
+// Samma regel som servern: Whisper-nyckeln krävs bara när adressen pekar på Groq.
+const isGroq = (k) => k.name === "whisper" && k.required;
 const serviceName = (k) => (k.name === "deepgram" ? "Deepgram" : isGroq(k) ? "Groq" : "Whisper-servern");
 const sentence = (s) => (s && !/[.!?]$/.test(s.trim()) ? `${s.trim()}.` : (s || "").trim());
 
@@ -1680,7 +1681,7 @@ function keyCard(initial) {
     const svc = serviceName(k);
     const v = keyView(k);
     titleEl.textContent = svc;
-    whatEl.textContent = name === "whisper" && !isGroq(k) ? `Slutversionens text, via ${k.host}.` : info.what;
+    whatEl.textContent = name === "whisper" && !isGroq(k) ? "Slutversionens text (Whisper)." : info.what;
     pill.className = `pill ${v.tone}`;
     pill.textContent = v.label;
     statusEl.replaceChildren(...v.body.filter(Boolean));
@@ -1689,7 +1690,8 @@ function keyCard(initial) {
     labelEl.textContent = k.set ? "Byt till en ny nyckel" : k.required ? `Klistra in nyckeln till ${svc}` : "Nyckel (behövs bara om servern kräver det)";
     helpEl.textContent = `Nyckeln kontrolleras hos ${k.host} innan den sparas.`;
     testBtn.hidden = !k.set;
-    delBtn.hidden = k.source !== "ui";
+    // En oläslig sparad nyckel ska också gå att ta bort.
+    delBtn.hidden = !(k.source === "ui" || k.unreadable);
     link.hidden = name === "whisper" && !isGroq(k);
     card.classList.toggle("attention", v.tone === "warn" || v.tone === "err");
   }

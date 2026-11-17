@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Låtsas-sleep för proven: väntetider i skripten tar ingen tid (låtsas-docker räknar kontroller).
+exit 0

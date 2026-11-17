@@ -872,6 +872,8 @@ h2.section {
   align-items: center;
   flex-wrap: wrap;
   margin-top: 10px;
+  /* Samma höjd med och utan knappar, så att fälten ligger i linje mellan korten. */
+  min-height: 40px;
 }
 .keycard-link {
   margin-left: auto;
@@ -983,5 +985,21 @@ h2.section {
   }
   .player {
     top: 53px;
+  }
+}
+
+/* Mycket smala skärmar: namnet i toppraden göms visuellt (skärmläsare läser det fortfarande),
+   annars hamnar kontomenyn utanför skärmen. */
+@media (max-width: 420px) {
+  .topbar {
+    gap: 8px;
+  }
+  .topbar .brand span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
   }
 }

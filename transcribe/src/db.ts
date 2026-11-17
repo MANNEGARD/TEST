@@ -124,7 +124,7 @@ const MIGRATIONS: string[] = [
   // 2: API-nycklar som lagts in i webbgränssnittet, krypterade (se keys.ts).
   `
   CREATE TABLE service_keys (
-    name TEXT PRIMARY KEY CHECK (name IN ('deepgram','whisper')),
+    name TEXT PRIMARY KEY, -- vilka namn som finns avgörs i koden (keys.ts)
     ciphertext BLOB NOT NULL,
     updated_at TEXT NOT NULL,
     updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL
