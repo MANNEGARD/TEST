@@ -14,6 +14,7 @@ from sqlalchemy import func, select, text
 from app import __version__, jobs
 from app.api import errors
 from app.api.router import api_router
+from app.body_limit import BodyLimitMiddleware
 from app.config import get_config
 from app.db import Base, get_engine, session_scope
 from app.logging_setup import configure_logging
@@ -119,6 +120,8 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         for p in problems:
             logger.error("Konfigurationsfel: %s", p)
         raise RuntimeError("Osäker produktionskonfiguration: " + " ".join(problems))
+    for w in cfg.production_warnings():
+        logger.warning("Konfigurationsvarning: %s", w)
     logger.info("%s.", cfg.mode_description())
     for d in (cfg.data_dir, cfg.uploads_dir, cfg.exports_dir, cfg.backups_dir):
         d.mkdir(parents=True, exist_ok=True)
@@ -160,6 +163,8 @@ def create_app() -> FastAPI:
         redoc_url=None,
         lifespan=lifespan,
     )
+    # Kroppar som tolkas i minnet får ett tak innan de läses (uppladdningar berörs inte).
+    app.add_middleware(BodyLimitMiddleware)
     origins = [o.strip() for o in cfg.cors_origins.split(",") if o.strip()]
     if origins:
         app.add_middleware(

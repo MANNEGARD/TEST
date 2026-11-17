@@ -275,9 +275,16 @@ def _insufficient(ctx: TripContext, rules: RuleResult) -> PurposeProposal | None
 # --------------------------------------------------------------------- fabriceringsskydd
 
 
-def grounding_corpus(ctx: TripContext, extra_texts: list[str] | None = None) -> set[str]:
+def grounding_corpus(
+    ctx: TripContext, extra_texts: list[str] | None = None, *, scrub_contacts: bool = False
+) -> set[str]:
     """Alla ord som är belagda i underlaget för en resa (platsnamn, orter, företag,
-    kalenderrubriker, tidigare bekräftade syften, egna förkortningar)."""
+    kalenderrubriker, tidigare bekräftade syften, egna förkortningar).
+
+    Orden räknas både som ``textnorm.tokens`` och i alla skriftsystem (``textnorm.words``, även i
+    kompatibilitetsform). Med ``scrub_contacts`` räknas inte ord som bara står i en e-postadress
+    eller länk (domänspärren: ett företagsnamn får inte hämtas ur en adress i rubriken).
+    """
     texts: list[str] = []
     for loc in (ctx.origin, ctx.destination):
         if loc is not None:
@@ -301,9 +308,15 @@ def grounding_corpus(ctx: TripContext, extra_texts: list[str] | None = None) -> 
         texts += [k, v]
     texts.append(str(ctx.ai.get("about_work") or ""))
     texts += extra_texts or []
+    if scrub_contacts:
+        from app.services.classify.underlag import _EMAIL_RE, _LINK_RE
+
+        texts = [_LINK_RE.sub(" ", _EMAIL_RE.sub(" ", t)) for t in texts]
     corpus: set[str] = set()
     for t in texts:
         for tok in textnorm.tokens(t):
+            corpus.add(fold(tok))
+        for tok in textnorm.words(t) + textnorm.words(textnorm.compat(t)):
             corpus.add(fold(tok))
     return corpus
 
@@ -434,6 +447,20 @@ def unsupported_words(text: str, corpus: set[str]) -> list[str]:
             continue
         # Ett belagt bindestrecksord (t.ex. "Coca-Cola") godtas som helhet.
         if len(parts) > 1 and fold(tok) in corpus:
+            continue
+        missing.append(tok)
+    return missing
+
+
+def foreign_words(text: str, corpus: set[str]) -> list[str]:
+    """Ord med tecken utanför ``textnorm.tokens`` (kyrilliska, grekiska, Ł, ń …) som saknar stöd
+    i underlaget. Ord som ``unsupported_words`` redan prövar hoppas över."""
+    missing: list[str] = []
+    for tok in textnorm.words(text):
+        if textnorm.tokens(tok) == [tok]:
+            continue
+        parts = [p for p in re.split(r"[-']", tok) if p]
+        if all(_word_supported(fold(p), corpus) for p in parts) or fold(tok) in corpus:
             continue
         missing.append(tok)
     return missing
@@ -604,7 +631,8 @@ def check_generated(
     utan stöd eller en text som bara är ett allmänt ord behålls men får ``supported=False``."""
     if not text or not text.strip():
         return GeneratedCheck(False, False, ["tomt"])
-    cleaned = text.strip()
+    # Prövas i kompatibilitetsform: helbreddstecken ("ｈｔｔｐｓ：／／", "Ｂｏｌａｇ") blir vanliga.
+    cleaned = textnorm.compat(text).strip()
     if len(cleaned) > AI_PURPOSE_MAX or "\n" in cleaned or "\r" in cleaned:
         return GeneratedCheck(False, False, ["för långt eller flera rader"])
     lowered = fold(cleaned)
@@ -613,7 +641,11 @@ def check_generated(
     corpus = grounding_corpus(ctx, extra_texts)
     corpus |= {fold(w) for w in textnorm.GENERIC_WORDS}
     missing = unsupported_words(cleaned, corpus)
-    missing += [w for w in domain_guesses(cleaned, corpus, domain_heads) if w not in missing]
+    missing += [w for w in foreign_words(cleaned, corpus) if w not in missing]
+    if domain_heads:
+        contacts_free = grounding_corpus(ctx, extra_texts, scrub_contacts=True)
+        contacts_free |= {fold(w) for w in textnorm.GENERIC_WORDS}
+        missing += [w for w in domain_guesses(cleaned, contacts_free, domain_heads) if w not in missing]
     if missing:
         return GeneratedCheck(False, False, ["namn utan stöd i underlaget"], names=missing)
     types = unsupported_types(cleaned, ctx, rules, rule_proposal)

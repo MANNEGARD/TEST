@@ -13,11 +13,13 @@ Skriptet sänker aldrig versionen och ändrar ingenting annat i filen.
     python3 .github/scripts/erbjud_version.py            # skriver "andrad" eller "oforandrad"
     python3 .github/scripts/erbjud_version.py --visa     # skriver bara versionen i drivelog/VERSION
     python3 .github/scripts/erbjud_version.py --avbild   # kod 0 bara om avbilden går att hämta
+    python3 .github/scripts/erbjud_version.py --namn     # skriver "image=<avbild>" (för publiceringen)
 """
 
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 import urllib.error
@@ -79,6 +81,17 @@ def avbildens_namn(config_text: str) -> str:
     return traffar[0]
 
 
+def publiceringsnamn(config_text: str, agare: str) -> str:
+    """Avbildens namn för publiceringen: under ghcr.io/<ägaren>/, med gemener, utan {arch}."""
+    avbild = avbildens_namn(config_text)
+    agare = agare.lower()
+    if not agare or not avbild.startswith(f"ghcr.io/{agare}/"):
+        raise Fel(f"image i config.yaml ({avbild}) måste ligga under ghcr.io/{agare}/ och vara gemener")
+    if "{arch}" in avbild:
+        raise Fel("avbilden publiceras för flera arkitekturer under ett namn")
+    return avbild
+
+
 def plattformar_i_manifest(manifest: dict) -> set[str]:
     """Plattformarna i en flerarkitektursavbild (tom mängd för en avbild med bara en arkitektur)."""
     funna = set()
@@ -128,6 +141,10 @@ def main(argv: list[str]) -> int:
         version = las_versionsfil(VERSIONSFIL.read_text(encoding="utf-8"))
         if argv[1:] == ["--visa"]:
             print(version)
+            return 0
+        if argv[1:] == ["--namn"]:
+            avbild = publiceringsnamn(CONFIG.read_text(encoding="utf-8"), os.environ.get("GITHUB_REPOSITORY_OWNER", ""))
+            print(f"image={avbild}")
             return 0
         if argv[1:] == ["--avbild"]:
             avbild = avbildens_namn(CONFIG.read_text(encoding="utf-8"))

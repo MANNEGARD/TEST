@@ -8,12 +8,15 @@ att AI-genererade syften inte innehåller påhittade uppgifter.
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 
 from app.models.enums import Subcategory
 from app.services.places.normalize import clean, fold
 
 _TOKEN = re.compile(r"[0-9A-Za-zÀ-ÖØ-öø-ÿ]+(?:[-'][0-9A-Za-zÀ-ÖØ-öø-ÿ]+)*")
+# Alla bokstäver och siffror i alla skriftsystem (namnspärren för AI-ärendet, se ``words``).
+_WORD = re.compile(r"[^\W_]+(?:[-'][^\W_]+)*")
 
 # (nyckelord i fold()-form, typ). Ordningen avgör vid flera träffar.
 _TYPE_RULES: tuple[tuple[tuple[str, ...], str], ...] = (
@@ -64,6 +67,62 @@ class NormalizedPurpose:
 
 def tokens(text: str | None) -> list[str]:
     return _TOKEN.findall(text or "")
+
+
+def words(text: str | None) -> list[str]:
+    """Ord i alla skriftsystem (kyrilliska, grekiska, Ł …), till skillnad från ``tokens``."""
+    return _WORD.findall(text or "")
+
+
+def compat(text: str) -> str:
+    """Kompatibilitetsform (NFKC): helbreddstecken och liknande blir vanliga tecken."""
+    return unicodedata.normalize("NFKC", text)
+
+
+def strip_hidden(text: str) -> str:
+    """Tar bort styrtecken och osynliga formattecken (bidi, nollbredd) ur en text från AI:n.
+
+    Radbrytning, vagnretur och tabb lämnas (formkontrollen avvisar flera rader), och rad- och
+    styckeavgränsare (U+2028/U+2029) blir radbrytningar. Synlig text ändras inte.
+    """
+    out: list[str] = []
+    for ch in text:
+        if ch in "\t\n\r":
+            out.append(ch)
+            continue
+        cat = unicodedata.category(ch)
+        if cat in ("Zl", "Zp"):
+            out.append("\n")
+        elif cat not in ("Cc", "Cf"):
+            out.append(ch)
+    return "".join(out)
+
+
+def vehicle_pattern(terms: list[str | None]) -> re.Pattern[str] | None:
+    """Mönster för bilens VIN och registreringsnummer i alla skrivformer.
+
+    Den sparade strängen som den står (som förut) och dessutom tecken för tecken med valfria
+    blanksteg, bindestreck eller punkter emellan ("ABC 123", "ABC-123"), avgränsad så att den
+    inte träffar mitt i ett längre ord. Texten jämförs i kompatibilitetsform (``redact``).
+    """
+    parts: list[str] = []
+    for term in terms:
+        raw = (term or "").strip()
+        bare = re.sub(r"[^0-9A-Za-z]", "", compat(raw))
+        if len(raw) >= 3:
+            parts.append(re.escape(raw))
+        if len(bare) >= 3:
+            parts.append(r"(?<![0-9A-Za-z])" + r"[\s\-.]*".join(re.escape(c) for c in bare) + r"(?![0-9A-Za-z])")
+    return re.compile("|".join(parts), re.IGNORECASE) if parts else None
+
+
+def redact(text: str, pattern: re.Pattern[str] | None, replacement: str) -> str:
+    """Ersätter träffar av ``pattern``, prövat i kompatibilitetsform (så att även helbreddstecken
+    träffar). En text utan träff lämnas orörd."""
+    if pattern is None:
+        return text
+    normalized = compat(text)
+    return pattern.sub(replacement, normalized) if pattern.search(normalized) else text
 
 
 def expand_abbreviations(text: str, abbreviations: dict[str, str]) -> str:

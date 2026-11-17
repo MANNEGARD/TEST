@@ -38,7 +38,7 @@ from app.models.enums import (
 )
 from app.services import settings as settings_svc
 from app.services.calendar import calendar_text
-from app.services.classify import calendar_context, lunch
+from app.services.classify import calendar_context, lunch, textnorm
 from app.services.classify import signals as sig
 from app.services.text_safety import sanitize_text
 from app.services.trips import segments as seg
@@ -53,9 +53,15 @@ _LONG_TOKEN_RE = re.compile(r"\S{32,}")
 _LINK_RE = re.compile(r"(https?://|www\.)\S+|\b" + calendar_text.MEETING_HOSTS + r"(?:/\S*)?", re.IGNORECASE)
 _EMAIL_RE = re.compile(r"\b[\w.+-]+@[\w-]+(?:\.[\w-]+)+\b")
 # Koder och lösenord i fritext: resten av raden efter nyckelordet tas bort.
+# Böjda former ("Portkoden", "Lösenordet") och "är" som avgränsare ("Portkoden är 4711") räknas.
 _SECRET_RE = re.compile(
-    r"(?i)\b(\w*kod|lösenord|password|passcode|pin|mötes-?id|meeting\s+id|konferens-?id|conference\s+id|"
-    r"access\s+code)\b(\s*[:=]|\s+(?=\d)).*$"
+    r"(?i)\b(\w*kod(?:en|er|erna)?|lösenord(?:et|en)?|password|passcode|pin|mötes-?id|meeting\s+id|"
+    r"konferens-?id|conference\s+id|access\s+code|wi-?fi|wlan|nätverksnyckeln?|(?:teams|zoom|webex)-?id|"
+    r"token|api-?(?:key|nyckel))\b(\s*[:=]|\s+är\b|\s+(?=\d)).*$"
+)
+# En kod med några ord före siffrorna ("Kod till grinden 2580"): bara när en siffra följer.
+_SECRET_WORDS_RE = re.compile(
+    r"(?i)\b(\w*kod(?:en|er|erna)?|lösenord(?:et|en)?)\b(\s+(?:[^\W\d_]+\s+){1,3})(?=\S*\d).*$"
 )
 
 LIMITS = {
@@ -94,7 +100,8 @@ def _clean(value: Any, kind: str = "name", *, free_text: bool = False) -> str | 
         return None
     raw = str(value)
     if free_text:
-        lines = [_SECRET_RE.sub(lambda m: f"{m.group(1)}{m.group(2)} {_REDACTED}", line)
+        lines = [_SECRET_WORDS_RE.sub(lambda m: f"{m.group(1)}{m.group(2)} {_REDACTED}",
+                                      _SECRET_RE.sub(lambda m: f"{m.group(1)}{m.group(2)} {_REDACTED}", line))
                  for line in raw.replace("\r", "\n").split("\n")]
         raw = "\n".join(lines)
     text = sanitize_text(_scrub(raw), limit=10_000)
@@ -112,8 +119,16 @@ def _redact_terms(value: Any, pattern: re.Pattern[str] | None) -> Any:
     if isinstance(value, list):
         return [_redact_terms(v, pattern) for v in value]
     if isinstance(value, str):
-        return pattern.sub(_REDACTED, value)
+        return textnorm.redact(value, pattern, _REDACTED)
     return value
+
+
+def owner_vehicle_terms(db: Session, user_id: uuid.UUID) -> list[str]:
+    """VIN och registreringsnummer för alla ägarens bilar (förekommer aldrig i underlaget)."""
+    rows = db.execute(
+        select(Vehicle.vin, Vehicle.registration_number).where(Vehicle.owner_user_id == user_id)
+    ).all()
+    return [t for row in rows for t in row if t]
 
 
 # ----------------------------------------------------------------------------- byggstenar
@@ -519,10 +534,10 @@ def build_full_document(
         "tax": {"note": _clean(rules.tax_note, "body"), "car_benefit": bool(ctx.tax.get("car_benefit"))},
     }
     # Bilens identitet förekommer aldrig, var den än skulle ha hamnat (t.ex. i en anteckning).
-    terms = [t for t in ((vehicle.vin if vehicle else None), (vehicle.registration_number if vehicle else None))
-             if t and len(t.strip()) >= 3]
-    pattern = re.compile("|".join(re.escape(t.strip()) for t in terms), re.IGNORECASE) if terms else None
-    return _redact_terms(doc, pattern)
+    # Alla skrivformer ("ABC 123", "ABC-123", helbredd) och ägarens alla bilar.
+    terms = [(vehicle.vin if vehicle else None), (vehicle.registration_number if vehicle else None)]
+    terms += owner_vehicle_terms(db, user_id)
+    return _redact_terms(doc, textnorm.vehicle_pattern(terms))
 
 
 def document_domains(doc: dict[str, Any]) -> set[str]:

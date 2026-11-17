@@ -41,6 +41,34 @@ const demoConfig: NextConfig = {
   turbopack,
 };
 
+/**
+ * Content-Security-Policy för webbappen (gäller i drift: Caddy skickar huvudet vidare oförändrat).
+ * Ett extra lager om en XSS någon gång skulle hittas: inga externa skript, ingen <base>, inga
+ * <object>/<embed>, ingen inramning och formulär bara till samma ursprung.
+ * - script-src 'unsafe-inline': Next lägger in inline-skript (och temaskriptet i layout.tsx).
+ * - style-src 'unsafe-inline': Radix och sonner sätter stilar.
+ * - img-src/connect-src https: http:: ägaren kan välja egen kartserver i inställningarna
+ *   (http eller https), och MapLibres arbetare hämtar plattorna med fetch.
+ * - worker-src 'self' blob:: MapLibres arbetare (public/vendor) och tjänstearbetaren sw.js.
+ * Under `next dev` behöver React dessutom eval; det gäller aldrig bygget.
+ * Demobygget (statiskt) får sin policy ur demo-static/_headers.
+ */
+const scriptSrc = process.env.NODE_ENV === "development" ? "'self' 'unsafe-inline' 'unsafe-eval'" : "'self' 'unsafe-inline'";
+const CONTENT_SECURITY_POLICY = [
+  "default-src 'self'",
+  `script-src ${scriptSrc}`,
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob: https: http:",
+  "connect-src 'self' https: http:",
+  "worker-src 'self' blob:",
+  "font-src 'self' data:",
+  "manifest-src 'self'",
+  "frame-ancestors 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "object-src 'none'",
+].join("; ");
+
 const nextConfig: NextConfig = {
   output: "standalone",
   poweredByHeader: false,
@@ -76,6 +104,7 @@ const nextConfig: NextConfig = {
           { key: "X-Content-Type-Options", value: "nosniff" },
           { key: "Referrer-Policy", value: "same-origin" },
           { key: "X-Frame-Options", value: "DENY" },
+          { key: "Content-Security-Policy", value: CONTENT_SECURITY_POLICY },
         ],
       },
     ];

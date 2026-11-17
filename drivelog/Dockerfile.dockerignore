@@ -10,8 +10,8 @@
 **/*.tsbuildinfo
 .git
 .github
-.env
-.env.*
+**/.env
+**/.env.*
 **/data
 **/backups
 **/*.sqlite

@@ -144,7 +144,41 @@ class AppConfig(BaseSettings):
                     "SQLite i produktion kräver enprocessläget (DRIVELOG_JOBS_EAGER=true); "
                     "Celery-processer kan inte dela en SQLite-fil säkert."
                 )
+            origins = [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+            if any(o == "*" or not o.lower().startswith("https://") for o in origins):
+                # CORS med kakor: "*" speglar varje anropares ursprung och ger läsrätt till API:t.
+                problems.append(
+                    "DRIVELOG_CORS_ORIGINS får inte innehålla \"*\" eller adresser utan https i produktion."
+                )
         return problems
+
+    def production_warnings(self) -> list[str]:
+        """Varningar i produktion som inte stoppar starten.
+
+        Krypteringsnycklarna: en lista som bara är blanksteg eller kommatecken gör att hemligheterna
+        krypteras med en nyckel härledd ur DRIVELOG_SECRET_KEY, och en nyckel i fel format ger fel
+        först när en hemlighet ska läsas eller sparas. Starten stoppas inte – en installation som
+        fungerar i dag ska starta likadant, och dess sparade hemligheter går bara att läsa med den
+        nyckel som används nu – men det sägs tydligt i loggen.
+        """
+        warnings: list[str] = []
+        if self.is_production and self.encryption_keys:
+            from cryptography.fernet import Fernet
+
+            keys = [k.strip() for k in self.encryption_keys.split(",") if k.strip()]
+            if not keys:
+                warnings.append(
+                    "DRIVELOG_ENCRYPTION_KEYS innehåller ingen nyckel; hemligheterna krypteras med en nyckel "
+                    "härledd ur DRIVELOG_SECRET_KEY. Byt inte nyckeln utan att först koppla från och "
+                    "ansluta integrationerna igen."
+                )
+            for k in keys:
+                try:
+                    Fernet(k.encode())
+                except (ValueError, TypeError):
+                    warnings.append("DRIVELOG_ENCRYPTION_KEYS innehåller en nyckel som inte är en giltig Fernet-nyckel.")
+                    break
+        return warnings
 
 
 @lru_cache

@@ -313,10 +313,18 @@ def test_token(body: TestTokenIn, principal: WebPrincipalDep, db: DbDep) -> dict
 
 
 @router.get("/vehicles", summary="Bilar på det anslutna Volvo-kontot (maskerade VIN)")
-def list_account_vehicles(principal: PrincipalDep, db: DbDep, refresh: bool = False) -> dict[str, Any]:
+def list_account_vehicles(
+    principal: PrincipalDep, db: DbDep, request: Request, refresh: bool = False
+) -> dict[str, Any]:
     conn = _conn(db, principal, create=False)
     if conn is None:
         return {"vehicles": [], "selected_ref": None}
+    # Uppdateringen anropar Volvo (räknas mot dagskvoten). En navigering från en annan webbplats
+    # skickar med sessionskakan (SameSite=Lax) men får bara den sparade listan. Webbappens egna
+    # anrop kommer från samma ursprung; saknas huvudet (äldre webbläsare, anrop från servern)
+    # görs uppdateringen som förut.
+    if refresh and (request.headers.get("sec-fetch-site") or "").lower() == "cross-site":
+        refresh = False
     if refresh:
         try:
             collector.discover_vehicles(db, conn)

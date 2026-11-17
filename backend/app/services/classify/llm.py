@@ -138,7 +138,13 @@ def _coerce(data: Any) -> dict[str, Any]:
         # "… – syfte behöver bekräftas" och varianter: platshållaren tas bort; blir inget kvar
         # finns inget ärende.
         purpose = _PLACEHOLDER.sub("", purpose).strip() if "behöver bekräftas" in purpose.lower() else purpose.strip()
-    evidence = [str(e)[:200] for e in (data.get("evidence") or []) if isinstance(e, (str, int, float))][:8]
+    evidence = [str(e) for e in (data.get("evidence") or []) if isinstance(e, (str, int, float))][:8]
+    # Visas för ägaren ("AI-förslag utifrån: …"): osynliga tecken och styrtecken, länkar och
+    # e-postadresser bort, som i underlaget.
+    from app.services.classify.underlag import _scrub
+    from app.services.text_safety import sanitize_text
+
+    evidence = [t for t in (sanitize_text(_scrub(e), 200) for e in evidence) if t]
     return {
         "category": category,
         "confidence": max(0.0, min(1.0, confidence)),

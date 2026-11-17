@@ -720,22 +720,18 @@ jobs:
       publicerad: ${{ steps.finns.outputs.finns == 'false' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # Jobbet gör inga git-operationer: dess token (packages: write) ska inte ligga i .git/config.
+          persist-credentials: false
 
       - name: Läs versionen ur drivelog/VERSION och avbildens namn ur drivelog/config.yaml
         id: meta
+        # Inga paket från PyPI i det här jobbet: skriptet läser och kontrollerar avbildens namn
+        # (under ghcr.io/<ägaren>/, gemener, ett namn för alla arkitekturer).
         run: |
           echo "version=$(python3 .github/scripts/erbjud_version.py --visa)" >> "$GITHUB_OUTPUT"
-          python3 -m pip install --quiet pyyaml
-          python3 - <<'EOF' >> "$GITHUB_OUTPUT"
-          import os, yaml
-          c = yaml.safe_load(open("drivelog/config.yaml", encoding="utf-8"))
-          bild = c["image"]
-          agare = os.environ["GITHUB_REPOSITORY_OWNER"].lower()
-          assert bild == bild.lower() and bild.startswith(f"ghcr.io/{agare}/"), (
-              f"image i config.yaml ({bild}) måste ligga under ghcr.io/{agare}/ och vara gemener")
-          assert "{arch}" not in bild, "avbilden publiceras för flera arkitekturer under ett namn"
-          print(f"image={bild}")
-          EOF
+          namn="$(python3 .github/scripts/erbjud_version.py --namn)"
+          echo "$namn" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
         with:

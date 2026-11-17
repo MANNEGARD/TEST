@@ -20,7 +20,7 @@
  *   WORK_DIR     katalog för nedladdade filer (standard SHOTS_DIR)
  *
  * Misslyckas (exitkod 1) vid konsolfel, sidfel, oväntade 4xx/5xx-svar, nätverksfel,
- * saknade nyckeltexter eller avvikande siffror.
+ * överträdelser av Content-Security-Policy, saknade nyckeltexter eller avvikande siffror.
  */
 import { createRequire } from "node:module";
 import { execFileSync } from "node:child_process";
@@ -76,8 +76,21 @@ function fail(tag, msg) {
   problems.push(`[${tag}] ${msg}`);
 }
 
+/** Sidornas avsnittsnamn, för överträdelser av Content-Security-Policy. */
+const pageTags = new WeakMap();
+/** URL:er till arbetare som sidorna startat (MapLibres arbetare ska starta på kartsidan). */
+const workerUrls = [];
+const CSP_TEXT = /Content[- ]Security[- ]Policy/i;
+
 function watch(page, tag) {
+  pageTags.set(page, tag);
+  page.on("worker", (w) => workerUrls.push(w.url()));
   page.on("console", (m) => {
+    // Överträdelser av Content-Security-Policy (fel eller varning) fäller alltid testet.
+    if (CSP_TEXT.test(m.text())) {
+      problems.push(`[${tag}] Content-Security-Policy: ${m.text().slice(0, 300)}`);
+      return;
+    }
     if (m.type() !== "error") return;
     const text = m.text();
     if (/Failed to load resource/.test(text)) return; // bevakas via response-händelsen nedan
@@ -128,6 +141,16 @@ async function newContext(browser, { mobile = false, theme = "light", storageSta
     const req = route.request();
     if (/\/\d+\/\d+\/\d+\.png(\?|$)/.test(req.url())) tileRequests.push({ url: req.url(), referer: await req.headerValue("referer") });
     await route.fulfill({ status: 200, contentType: "image/png", body: PNG });
+  });
+  // Content-Security-Policy: webbläsarens securitypolicyviolation-händelser på varje sida. En
+  // spärrad förfrågan ger en händelse innan den lämnar sidan, alltså även utan nät.
+  await ctx.exposeBinding("__drivelogCspViolation", ({ page }, v) => {
+    problems.push(`[${(page && pageTags.get(page)) ?? "?"}] Content-Security-Policy spärrade ${v.directive}: ${v.blocked || "(inline)"} på ${v.href}`);
+  });
+  await ctx.addInitScript(() => {
+    document.addEventListener("securitypolicyviolation", (e) => {
+      window.__drivelogCspViolation?.({ directive: e.effectiveDirective, blocked: e.blockedURI, href: location.href });
+    });
   });
   return ctx;
 }
@@ -279,8 +302,16 @@ async function checkTileReferer(page, tag, tripId) {
     fail(tag, "kartan hämtade inga kartbilder");
     return;
   }
-  const policy = (await page.request.get(`${BASE}/journal/${tripId}`)).headers()["referrer-policy"];
+  const headers = (await page.request.get(`${BASE}/journal/${tripId}`)).headers();
+  const policy = headers["referrer-policy"];
   if (policy !== "same-origin") fail(tag, `sidans Referrer-Policy är ${policy}, väntade same-origin`);
+  // Content-Security-Policy finns, och kartan ritas ändå: arbetaren startar och kartytan syns.
+  const csp = headers["content-security-policy"] ?? "";
+  for (const part of ["default-src 'self'", "object-src 'none'", "base-uri 'self'", "frame-ancestors 'none'", "form-action 'self'"]) {
+    if (!csp.includes(part)) fail(tag, `sidans Content-Security-Policy saknar ${part}: ${JSON.stringify(csp)}`);
+  }
+  if (!workerUrls.some((u) => u.includes("/vendor/maplibre-gl-worker.mjs"))) fail(tag, "MapLibres arbetare startade inte");
+  await page.locator("canvas.maplibregl-canvas").first().waitFor({ state: "visible", timeout: 10000 }).catch(() => fail(tag, "kartan ritades inte"));
   const origin = `${new URL(BASE).origin}/`;
   const wrong = seen.filter((r) => r.referer !== origin);
   if (wrong.length) fail(tag, `${wrong.length} av ${seen.length} kartbilder hade Referer ${JSON.stringify(wrong[0].referer)} i stället för ${origin}`);

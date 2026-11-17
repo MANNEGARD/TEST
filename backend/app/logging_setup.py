@@ -18,6 +18,11 @@ _SECRET_KV = re.compile(
     r"(?i)(authorization|vcc-api-key|x-api-key|api[_-]?key|password|client_secret|refresh_token|access_token"
     r"|id_token|code_verifier)(\"?\s*[:=]\s*\"?)(?:bearer\s+|basic\s+)?([^\s\",&]+)"
 )
+# Frågesträngens parametrar i adresser (åtkomstloggen): OAuth-återkomstens code och state m.fl.
+# Bara efter ? eller &, så att felkoder i vanlig text ("code=invalid_credentials") lämnas orörda.
+_QUERY_SECRET = re.compile(r"(?i)([?&](?:code|state|session_state|token|secret)=)[^&\s\"']+")
+# JWT utan "Bearer" framför.
+_JWT = re.compile(r"\beyJ[\w-]+\.eyJ[\w-]+\.[\w-]+")
 _BEARER = re.compile(r"(?i)(bearer\s+)([A-Za-z0-9._~+/\-]{12,}=*)")
 # VIN: 17 tecken (utan I, O, Q) med både siffror och bokstäver. Sista fyra visas.
 _VIN = re.compile(r"\b(?=[A-HJ-NPR-Z0-9]{17}\b)(?=[A-HJ-NPR-Z0-9]*\d)(?=[A-HJ-NPR-Z0-9]*[A-HJ-NPR-Z])"
@@ -30,7 +35,12 @@ _PUBLIC_LINK = re.compile(r"(/public/exports/)[^\s\"'?#]+")
 # sedan med vanliga strängsökningar – linjär tid även på elak indata, som en frågesträng full av
 # "https://" i accessloggen.
 _URL_TOKEN = re.compile(r"(?i)\b(?:webcals?|https?)://[^\s\"'<>]*")
-_CALENDAR_PATHS = ("/owa/calendar/", "/calendar/published/")
+_CALENDAR_PATHS = (
+    "/owa/calendar/", "/calendar/published/",
+    # iCloud (https://pNN-caldav.icloud.com/published/…), Nextcloud (…/public-calendars/…),
+    # Google (…/calendar/ical/…) och andra CalDAV-tjänster (…/calendars/…).
+    "/published/", "/public-calendars/", "/ical/", "/calendars/",
+)
 _WORD_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_-")
 
 
@@ -59,6 +69,8 @@ def redact(text: str) -> str:
     """Maskerar hemligheter och VIN i en loggtext."""
     out = _URL_TOKEN.sub(_mask_calendar_link, text)  # först, så att resten inte delar upp adressen
     out = _SECRET_KV.sub(r"\1\2[DOLD]", out)
+    out = _QUERY_SECRET.sub(r"\1[DOLD]", out)
+    out = _JWT.sub("[DOLD]", out)
     out = _BEARER.sub(r"\1[DOLD]", out)
     out = _PUBLIC_LINK.sub(r"\1[DOLD]", out)
     return _VIN.sub(r"[VIN …\1]", out)
@@ -75,6 +87,21 @@ def _redact_arg(value: object) -> object:
     return redacted
 
 
+def _redact_traceback(record: logging.LogRecord) -> None:
+    """Undantagets text och stackinformationen maskeras också: formatteraren lägger till dem efter
+    filtret. Tracebacken formateras en gång och läggs maskerad i ``exc_text``, som formatteraren
+    då använder i stället för att formatera om ``exc_info``."""
+    try:
+        if record.exc_info and not record.exc_text:
+            record.exc_text = logging.Formatter().formatException(record.exc_info)
+        if record.exc_text:
+            record.exc_text = redact(record.exc_text)
+        if record.stack_info:
+            record.stack_info = redact(record.stack_info)
+    except Exception:  # noqa: S110 – loggningen får aldrig falla på maskeringen
+        pass
+
+
 class RedactingFilter(logging.Filter):
     """Tar bort uppenbara hemligheter ur loggrader (tokens, nycklar, lösenord, VIN, länkar).
 
@@ -85,6 +112,7 @@ class RedactingFilter(logging.Filter):
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
+        _redact_traceback(record)
         try:
             msg = record.getMessage()
         except Exception:

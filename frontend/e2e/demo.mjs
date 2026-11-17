@@ -7,7 +7,8 @@
  *
  * Testet FALLER om ett anrop mot /api lämnar webbläsaren, om konsolen får fel, om en sida
  * fastnar i laddning eller visar ett felmeddelande, om demot får ett anrop det inte känner
- * igen, eller om ett flöde inte får den följd som syns i appen.
+ * igen, om Content-Security-Policy (ur _headers) spärrar något, eller om ett flöde inte får den
+ * följd som syns i appen.
  *
  * Användning: npm run build:demo && npm run e2e:demo
  *   DEMO_DIR    katalogen (standard out-demo)
@@ -92,8 +93,15 @@ const step = (msg) => console.log(`• ${msg}`);
 const tileRequests = [];
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64");
 
+/** URL:er till arbetare som sidorna startat (MapLibres arbetare ska starta på kartsidan). */
+const workerUrls = [];
+const CSP_TEXT = /Content[- ]Security[- ]Policy/i;
+
 function watch(page) {
+  page.on("worker", (w) => workerUrls.push(w.url()));
   page.on("console", (m) => {
+    // Överträdelser av Content-Security-Policy (fel eller varning) fäller alltid testet.
+    if (CSP_TEXT.test(m.text())) return fail(`Content-Security-Policy: ${m.text().slice(0, 300)}`);
     if (m.type() !== "error") return;
     // Den medvetna 404-provningen (/finns-inte) ger webbläsarens eget meddelande.
     if (current === "statiska filer" && /status of 404/.test(m.text())) return;
@@ -116,6 +124,16 @@ async function newContext(browser, opts = {}) {
   await ctx.route(/tile\.openstreetmap\.org/, async (r) => {
     tileRequests.push({ url: r.request().url(), referer: await r.request().headerValue("referer") });
     await r.fulfill({ status: 200, contentType: "image/png", body: PNG });
+  });
+  // Content-Security-Policy: webbläsarens securitypolicyviolation-händelser på varje sida, även i
+  // sidor som inte bevakas med watch(). En spärrad förfrågan ger en händelse även utan nät.
+  await ctx.exposeBinding("__drivelogCspViolation", (_src, v) => {
+    fail(`Content-Security-Policy spärrade ${v.directive}: ${v.blocked || "(inline)"} på ${v.href}`);
+  });
+  await ctx.addInitScript(() => {
+    document.addEventListener("securitypolicyviolation", (e) => {
+      window.__drivelogCspViolation?.({ directive: e.effectiveDirective, blocked: e.blockedURI, href: location.href });
+    });
   });
   return ctx;
 }
@@ -323,6 +341,7 @@ try {
     const before = tileRequests.length;
     const res = await page.goto(`${BASE}/journal/${withMap.id}/`);
     if (res.headers()["referrer-policy"] !== "same-origin") fail(`sidans Referrer-Policy är ${res.headers()["referrer-policy"]}`);
+    if (!/object-src 'none'/.test(res.headers()["content-security-policy"] ?? "")) fail("sidan saknar Content-Security-Policy (demo-static/_headers)");
     const deadline = Date.now() + 15000;
     while (tileRequests.length === before && Date.now() < deadline) await page.waitForTimeout(250);
     const seen = tileRequests.slice(before);
@@ -330,6 +349,9 @@ try {
     const wrong = seen.filter((r) => r.referer !== `${BASE}/`);
     if (wrong.length) fail(`${wrong.length} av ${seen.length} kartbilder hade Referer ${JSON.stringify(wrong[0].referer)} i stället för ${BASE}/`);
     else if (seen.length) step(`  ${seen.length} kartbilder med Referer ${BASE}/`);
+    // Kartan ritas under policyn: arbetaren startar och kartytan syns.
+    if (!workerUrls.some((u) => u.includes("/vendor/maplibre-gl-worker.mjs"))) fail("MapLibres arbetare startade inte");
+    await page.locator("canvas.maplibregl-canvas").first().waitFor({ state: "visible", timeout: 10000 }).catch(() => fail("kartan ritades inte"));
     await page.screenshot({ path: path.join(SHOTS, "karta-resa.png"), fullPage: true });
   });
 

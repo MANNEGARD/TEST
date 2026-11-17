@@ -98,6 +98,9 @@ def _build_engine(url: str) -> Engine:
         kwargs["pool_pre_ping"] = True
         kwargs["pool_size"] = 10
         kwargs["max_overflow"] = 10
+    # Databasfel ska inte bära de bundna värdena (VIN, e-post, hashvärden) in i felets text och
+    # därmed i loggen.
+    kwargs["hide_parameters"] = True
     engine = create_engine(url, **kwargs)
 
     if sqlite:

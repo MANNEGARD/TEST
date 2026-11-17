@@ -20,7 +20,10 @@ import hashlib
 import json
 import logging
 import re
+import threading
+import time
 import uuid
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -57,6 +60,27 @@ _WEEKDAYS = ["måndag", "tisdag", "onsdag", "torsdag", "fredag", "lördag", "sö
 _CTRL = re.compile(r"[\x00-\x1f\x7f]")
 _DECIDED = (ReviewStatus.APPROVED, ReviewStatus.IMPORTED)
 LLM_MAX_CONFIDENCE = 0.7  # ett rent AI-förslag kan som mest ge "begär godkännande"
+# Dygnstak för AI-anrop per användare – ett kostnadsskydd långt över vanlig användning. Över
+# taket bedöms resan av reglerna (som utan leverantör) och AI prövas igen när taket släpper.
+# Räknas i processen; en omstart nollställer räkningen.
+LLM_DAILY_LIMIT = 2000
+_LLM_WINDOW = 24 * 3600.0
+_llm_calls: dict[uuid.UUID, deque[float]] = {}
+_llm_lock = threading.Lock()
+
+
+def _llm_allowed(user_id: uuid.UUID, *, force: bool = False) -> bool:
+    """Räknar ett AI-anrop, eller svarar False när dygnstaket är nått. En bedömning som ägaren
+    själv startar (``force``) räknas men stoppas aldrig."""
+    now = time.monotonic()
+    with _llm_lock:
+        calls = _llm_calls.setdefault(user_id, deque())
+        while calls and calls[0] <= now - _LLM_WINDOW:
+            calls.popleft()
+        if not force and len(calls) >= LLM_DAILY_LIMIT:
+            return False
+        calls.append(now)
+        return True
 
 
 @dataclass
@@ -77,6 +101,7 @@ class Assessment:
     suggested_category: str | None = None  # modellens lutning även när resan lämnas oavgjord
     llm: dict[str, Any] | None = None
     changed: bool = True
+    llm_deferred: bool = False  # dygnstaket nått: bara regler nu, AI prövas igen senare
 
     def as_dict(self) -> dict[str, Any]:
         """Strukturerat resultat enligt specifikationens exempel."""
@@ -272,6 +297,7 @@ def build_llm_document(
     proposal: PurposeProposal | None,
     *,
     private_terms: list[str] | None = None,
+    vehicle_terms: list[str] | None = None,
 ) -> dict[str, Any]:
     """Minimalt, avidentifierat underlag till AI-leverantören.
 
@@ -348,7 +374,21 @@ def build_llm_document(
         }
     terms = _redaction_terms(ctx, send_street, send_subjects, private_terms or [])
     pattern = re.compile("|".join(re.escape(t) for t in terms), re.IGNORECASE) if terms else None
-    return _redact(doc, pattern, send_street)
+    return _redact_vehicle(_redact(doc, pattern, send_street), textnorm.vehicle_pattern(list(vehicle_terms or [])))
+
+
+def _redact_vehicle(value: Any, pattern: re.Pattern[str] | None) -> Any:
+    """Bilens VIN och registreringsnummer (alla skrivformer) och VIN-liknande strängar: aldrig,
+    på någon nivå."""
+    from app.services.classify.underlag import _VIN_RE
+
+    if isinstance(value, dict):
+        return {k: _redact_vehicle(v, pattern) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_redact_vehicle(v, pattern) for v in value]
+    if isinstance(value, str):
+        return _VIN_RE.sub(_REDACTED, textnorm.redact(value, pattern, _REDACTED))
+    return value
 
 
 def _place_needs_ai(ctx: TripContext) -> bool:
@@ -556,6 +596,7 @@ def _assess(
     user_id: uuid.UUID,
     provider: llm_mod.LLMProvider | None,
     cache: dict[str, Any],
+    force: bool = False,
 ) -> Assessment:
     ai, ctx, rules, proposal = prep.ai, prep.ctx, prep.rules, prep.proposal
     category, confidence, requires_review = rules.category, rules.confidence, rules.requires_review
@@ -564,7 +605,9 @@ def _assess(
     suggested = rules.category if rules.category != Category.UNDECIDED else None
 
     place_ai = provider is not None and _place_needs_ai(ctx) and _autopilot_holds(db, trip, user_id, cache)
-    if provider is not None and _should_call_llm(rules, proposal, ctx, place_ai=place_ai):
+    call_llm = provider is not None and _should_call_llm(rules, proposal, ctx, place_ai=place_ai)
+    deferred = call_llm and not _llm_allowed(user_id, force=force)
+    if call_llm and not deferred:
         extra_texts: list[str] | None = None
         domain_heads: set[str] | None = None
         if _level(ai) == settings_svc.CONTEXT_FULL:
@@ -576,7 +619,12 @@ def _assess(
         else:
             if "private_terms" not in cache:
                 cache["private_terms"] = private_location_terms(db, user_id)
-            document = build_llm_document(ctx, rules, proposal, private_terms=cache["private_terms"])
+            if "vehicle_terms" not in cache:
+                from app.services.classify import underlag
+
+                cache["vehicle_terms"] = underlag.owner_vehicle_terms(db, user_id)
+            document = build_llm_document(ctx, rules, proposal, private_terms=cache["private_terms"],
+                                          vehicle_terms=cache["vehicle_terms"])
         try:
             result = provider.assess(document)
             _report_llm_outcome(db, user_id, None)
@@ -640,6 +688,7 @@ def _assess(
         caps=rules.caps,
         suggested_category=suggested,
         llm=llm_info,
+        llm_deferred=deferred,
     )
     return assessment
 
@@ -687,6 +736,10 @@ def _ai_purpose(
     if purpose_mod.is_fixed(proposal) and support != "strong":
         return proposal
     text = data.get("purpose")
+    if text:
+        # Osynliga tecken och styrtecken bort, helbredd och liknande i vanlig form – det som
+        # prövas är det som sparas.
+        text = textnorm.compat(textnorm.strip_hidden(text)).strip()
     accepted: PurposeProposal | None = None
     if text:
         check = purpose_mod.check_generated(text, ctx, rules=rules, rule_proposal=proposal, extra_texts=extra_texts,
@@ -791,13 +844,13 @@ def classify_trip(
         assessment.changed = False
         return assessment
 
-    assessment = _assess(db, trip, prep, user_id=user_id, provider=active_provider, cache=cache)
+    assessment = _assess(db, trip, prep, user_id=user_id, provider=active_provider, cache=cache, force=force)
     if assessment.review_status == ReviewStatus.AUTO and _autopilot_holds(db, trip, user_id, cache):
         # Självgående läge: motorns "automatisk preliminär" blir ett förslag, så att resan
         # antingen godkänns av autopiloten (med skäl) eller ger en fråga (byggkontraktet C.3).
         assessment.review_status = ReviewStatus.PROPOSED
         assessment.requires_review = True
-    llm_failed = any(s.kind == "ai_unavailable" for s in assessment.signals)
+    llm_failed = assessment.llm_deferred or any(s.kind == "ai_unavailable" for s in assessment.signals)
     if not force and retry_llm and llm_failed:
         assessment.changed = False
         return assessment
