@@ -1,0 +1,107 @@
+# SMGD Transkribering (transcribe/): tester, bygge av Docker-avbilden, provstart – och på
+# standardgrenen publicering till ghcr.io/<ägare>/transcribe.
+#
+# Actions är fästa vid commit-SHA (versionen står som kommentar), samma som övriga arbetsflöden.
+name: Transkribering
+
+on:
+  push:
+    branches:
+      - main
+      - "claude/friendly-cray-irdv3u"
+    paths:
+      - "transcribe/**"
+      - ".github/workflows/transcribe.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: transcribe-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Typkontroll och tester
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: transcribe
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: transcribe/package-lock.json
+      - name: Installera
+        run: npm ci --no-audit --no-fund
+      - name: Typkontroll
+        run: npm run typecheck
+      - name: Tester
+        run: npm test
+      - name: Webbappens skript är giltig JavaScript
+        run: node --check web/app.js && node --check web/pcm-worklet.js
+
+  image:
+    name: Bygg och provstarta avbilden
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      - name: Bygg
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: transcribe
+          load: true
+          tags: transcribe:ci
+      - name: Provstart (ingen nyckel – tjänsten ska ändå starta och svara)
+        run: |
+          docker network create smgd
+          docker run -d --name transcribe --network smgd -p 127.0.0.1:8080:8080 \
+            -e TRANSCRIBE_PUBLIC_URL=http://localhost:8080 transcribe:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8080/api/health; then break; fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:8080/api/health
+          curl -fsS http://127.0.0.1:8080/ | grep -q "<title>Transkribering</title>"
+          docker logs transcribe 2>&1 | grep -q "Skapa administratörskontot här"
+          # ffmpeg med AAC-kodare och SQLite med FTS5 finns i avbilden.
+          docker exec transcribe ffmpeg -hide_banner -f lavfi -i "sine=frequency=440:duration=1" -c:a aac -f mp4 /tmp/t.m4a
+          docker exec transcribe node -e "const D=require('better-sqlite3');new D(':memory:').exec('create virtual table f using fts5(a)')"
+          docker exec transcribe node dist/cli.js inbjudan user | grep -q "/#/inbjudan/"
+          # Hälsokontrollen i avbilden blir "healthy".
+          for i in $(seq 1 40); do
+            [ "$(docker inspect -f '{{.State.Health.Status}}' transcribe)" = healthy ] && break
+            sleep 2
+          done
+          docker inspect -f '{{.State.Health.Status}}' transcribe | grep -q healthy
+      - name: Logg vid fel
+        if: failure()
+        run: docker logs transcribe || true
+      - name: Logga in på GHCR
+        if: github.ref == 'refs/heads/main'
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publicera
+        if: github.ref == 'refs/heads/main'
+        run: |
+          owner="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
+          version="$(node -p "require('./transcribe/package.json').version")"
+          for tag in latest "$version"; do
+            docker tag transcribe:ci "ghcr.io/${owner}/transcribe:${tag}"
+            docker push "ghcr.io/${owner}/transcribe:${tag}"
+          done

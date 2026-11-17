@@ -1,0 +1,27 @@
+# Tillägg när transkriberingen körs ensam på en server (utan DriveLog): en egen Caddy med
+# automatisk HTTPS på port 80/443.
+#
+#   docker network create smgd 2>/dev/null || true
+#   docker compose -f docker-compose.yml -f docker-compose.fristaende.yml up -d
+services:
+  proxy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      TRANSCRIBE_DOMAIN: ${TRANSCRIBE_DOMAIN:?Sätt TRANSCRIBE_DOMAIN i .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      - smgd
+    depends_on:
+      - transcribe
+
+volumes:
+  caddy-data:
+  caddy-config:

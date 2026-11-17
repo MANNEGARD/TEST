@@ -27,6 +27,7 @@ integrationer som kan slås på var för sig; allt fungerar även utan dem.
 | Drift | [`docker-compose.yml`](docker-compose.yml), [`deploy/`](deploy/) | Docker Compose, Caddy (HTTPS), backup-skript |
 | Home Assistant-app (tillägg) | [`drivelog/`](drivelog/), [`repository.yaml`](repository.yaml) | En container: API, webbapp och Caddy; SQLite; avbilder för amd64/aarch64 |
 | Dokumentation | [`docs/`](docs/) | Svenska guider |
+| Transkribering (frist. tjänst, transcribe.smgd.se) | [`transcribe/`](transcribe/) | Node.js, Fastify, SQLite, Deepgram + Whisper, ffmpeg |
 
 ## Två sätt att köra DriveLog
 
