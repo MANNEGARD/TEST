@@ -44,6 +44,8 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: transcribe/package-lock.json
+      - name: ffmpeg (proven kör hela kedjan med riktigt ljud)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ffmpeg
       - name: Installera
         run: npm ci --no-audit --no-fund
       - name: Typkontroll
