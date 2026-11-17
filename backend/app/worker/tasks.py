@@ -63,6 +63,7 @@ def tick() -> dict[str, Any]:
         out["snoozed_woken"] = _safe("review.wake_snoozed", review.wake_snoozed, db)
     # Omräkningar efter ägarens beslut som blivit kvar (t.ex. efter en omstart).
     out["recompute"] = _safe("learning.recompute.run_due", recompute.run_due)
+    out["anomalies"] = _safe("anomalies.scan_after_start", scan_anomalies_after_start)
     out["geocode"] = _safe("places.geocode.run_pending", geocode.run_pending)
     with session_scope() as db:
         out["questions"] = _safe("ha.notifier.ensure_open_questions", notifier.ensure_open_questions, db)
@@ -75,6 +76,23 @@ def tick() -> dict[str, Any]:
     with session_scope() as db:
         out["month_close"] = _safe("export.month_close.run_due", month_close.run_due, db)
     return out
+
+
+# Avvikelsesökningen körs en gång i varje process strax efter start (första ticken), inte bara
+# natten efter: en uppgradering som ändrar reglerna (1.3.2) rensar då kön direkt, och ärenden
+# som de nya reglerna inte längre ställer stängs av sig själva utan att ägaren behöver vänta.
+_anomalies_scanned_since_start = False
+
+
+def scan_anomalies_after_start() -> dict[str, Any]:
+    global _anomalies_scanned_since_start
+    if _anomalies_scanned_since_start:
+        return {"skipped": True}
+    _anomalies_scanned_since_start = True
+    from app.services.stats import anomalies
+
+    with session_scope() as db:
+        return anomalies.scan_all(db)
 
 
 @jobs.register("calendar.sync_due")

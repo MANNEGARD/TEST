@@ -28,7 +28,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useTripActions } from "@/components/trips/use-trip-actions";
 import { api, errorMessage } from "@/lib/api";
-import { formatDate, formatNumber, formatPercent } from "@/lib/format";
+import { formatDate, formatNumber, formatPercent, formatTime } from "@/lib/format";
 import { CATEGORY_LABELS, decisionSourceInSentence, label, REVIEW_KIND_LABELS, REVIEW_KIND_SHORT } from "@/lib/labels";
 import { invalidateJournalData, qk } from "@/lib/queries/keys";
 import { HIDDEN_REVIEW_KINDS, useAnswerMerge, useReviewAction, useReviewItems } from "@/lib/queries/review";
@@ -37,13 +37,39 @@ import type { CategoryCode, ReviewItem, Trip } from "@/lib/types";
 import { cn, isTypingTarget } from "@/lib/utils";
 import { useIsMutating, useQueryClient } from "@tanstack/react-query";
 import { AiReviewDialog } from "@/components/trips/ai-review-dialog";
-import { TripSummary } from "./trip-summary";
+import { AnomalyBody, anomalyTrips } from "./anomaly-card";
+import { TripSummary, tripPlace } from "./trip-summary";
 
-/** Ärendetyper där man klassar resan direkt i snabbflödet. */
-const TRIP_DECISION_KINDS = new Set(["category", "purpose", "tax_uncertain", "mixed_allocation", "anomaly", "calendar_conflict", "missing_odometer"]);
+/** Ärendetyper där man klassar resan direkt i snabbflödet. Avvikelser hör inte hit: där
+ *  öppnar man resan och rättar den (A, P och G gör ingenting på en avvikelse). */
+const TRIP_DECISION_KINDS = new Set(["category", "purpose", "tax_uncertain", "mixed_allocation", "calendar_conflict", "missing_odometer"]);
 
 function hasProposal(t: Trip | null | undefined): boolean {
   return !!t && (t.review_status === "proposed" || t.review_status === "auto") && t.category !== "undecided";
+}
+
+/** Resorna som ärendet gäller (en eller två), för kön och kortet. */
+function itemTrips(item: ReviewItem): Trip[] {
+  if (item.kind === "anomaly") return anomalyTrips(item);
+  if (item.first_trip || item.second_trip) return [item.first_trip, item.second_trip].filter((t): t is Trip => !!t);
+  return item.trip ? [item.trip] : [];
+}
+
+/** Platsens korta form i kön: namnet, eller adressen fram till första kommatecknet. */
+function shortPlace(t: Trip, end: "start" | "end"): string {
+  return tripPlace(t, end).split(",")[0];
+}
+
+/** Kön: det som skiljer ärenden med samma rubrik åt – datum, klockslag och från → till. */
+function queueMeta(item: ReviewItem): string | null {
+  const trips = itemTrips(item);
+  if (!trips.length) return null;
+  const [a, b] = trips;
+  const when = a.started_at ?? a.sort_time;
+  const time = (t: Trip) => (t.started_at ? formatTime(t.started_at) : null);
+  const times = [time(a), b && formatDate(b.started_at ?? b.sort_time) === formatDate(when) ? time(b) : null].filter(Boolean).join(" och ");
+  const route = b ? `${shortPlace(a, "start")} → ${shortPlace(b, "end")}` : `${shortPlace(a, "start")} → ${shortPlace(a, "end")}`;
+  return `${formatDate(when)}${times ? ` ${times}` : ""} · ${route}`;
 }
 
 // ----------------------------------------------------------------------------- ärendekort
@@ -562,6 +588,7 @@ export function ReviewView() {
                   data-testid="review-current"
                   data-item-id={current.id}
                   data-trip-id={current.trip?.id}
+                  data-kind={current.kind}
                 >
                   <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
                     <Badge tone={current.kind === "merge" ? "accent" : current.kind === "category" ? "undecided" : "neutral"}>
@@ -580,10 +607,12 @@ export function ReviewView() {
                     </p>
                   ) : null}
                   <h2 className="mb-1 text-lg font-semibold tracking-tight">{current.title}</h2>
-                  {current.detail && current.kind !== "merge" ? <p className="mb-4 text-sm text-fg-muted">{current.detail}</p> : <div className="mb-4" />}
+                  {current.detail && current.kind !== "merge" && current.kind !== "anomaly" ? <p className="mb-4 text-sm text-fg-muted">{current.detail}</p> : <div className="mb-4" />}
 
                   {current.kind === "merge" ? (
                     <MergeQuestion item={current} onAnswer={answerMerge} />
+                  ) : current.kind === "anomaly" ? (
+                    <AnomalyBody item={current} onResolve={() => itemAction("resolve")} onClick={once} />
                   ) : current.trip && TRIP_DECISION_KINDS.has(current.kind) ? (
                     <TripDecision
                       key={current.trip.id}
@@ -612,7 +641,7 @@ export function ReviewView() {
                     <Button variant="ghost" size="sm" onClick={(e) => once(e, () => itemAction("dismiss"))}>
                       <X aria-hidden /> Avfärda
                     </Button>
-                    {current.trip ? (
+                    {current.trip && current.kind !== "anomaly" ? (
                       <Button variant="ghost" size="sm" asChild className="ml-auto">
                         <Link href={`/journal/${current.trip.id}`}>
                           Öppna resan <ExternalLink aria-hidden />
@@ -627,33 +656,41 @@ export function ReviewView() {
                   Sparar {formatNumber(saving, 0)} svar …
                 </p>
               ) : null}
-              <p className="mt-3 hidden flex-wrap items-center gap-x-4 gap-y-1 text-xs text-fg-muted sm:flex" aria-label="Kortkommandon">
-                <span className="inline-flex items-center gap-1.5"><Kbd>A</Kbd> Arbete</span>
-                <span className="inline-flex items-center gap-1.5"><Kbd>P</Kbd> Privat</span>
-                <span className="inline-flex items-center gap-1.5"><Kbd>G</Kbd> Godkänn förslag</span>
-                <span className="inline-flex items-center gap-1.5"><Kbd>J</Kbd>/<Kbd>N</Kbd> Slå samman ja/nej</span>
-                <span className="inline-flex items-center gap-1.5"><Kbd>→</Kbd> Nästa</span>
-              </p>
+              {current ? (
+                <p className="mt-3 hidden flex-wrap items-center gap-x-4 gap-y-1 text-xs text-fg-muted sm:flex" aria-label="Kortkommandon" data-testid="review-shortcuts">
+                  {current.kind !== "merge" && current.trip && TRIP_DECISION_KINDS.has(current.kind) ? (
+                    <>
+                      <span className="inline-flex items-center gap-1.5"><Kbd>A</Kbd> Arbete</span>
+                      <span className="inline-flex items-center gap-1.5"><Kbd>P</Kbd> Privat</span>
+                      {hasProposal(current.trip) ? <span className="inline-flex items-center gap-1.5"><Kbd>G</Kbd> Godkänn förslag</span> : null}
+                    </>
+                  ) : null}
+                  {current.kind === "merge" ? (
+                    <span className="inline-flex items-center gap-1.5"><Kbd>J</Kbd>/<Kbd>N</Kbd> Slå samman ja/nej</span>
+                  ) : null}
+                  {queue.length > 1 ? <span className="inline-flex items-center gap-1.5"><Kbd>→</Kbd> Nästa</span> : null}
+                </p>
+              ) : null}
             </section>
 
             <aside aria-label="Kö" className="hidden lg:block">
               <Card className="overflow-hidden">
                 <h2 className="border-b border-border px-4 py-3 text-[13px] font-semibold">I kön</h2>
                 <ol className="scrollbar-thin max-h-[560px] divide-y divide-border overflow-y-auto">
-                  {queue.map((i, idx) => (
-                    <li key={i.id} className={cn("px-4 py-2.5 text-sm", idx === 0 && "bg-accent-soft/50")}>
-                      <p className="text-xs text-fg-muted">{label(REVIEW_KIND_SHORT, i.kind)}{skipped.includes(i.id) ? " · överhoppad" : ""}</p>
-                      <p className="truncate">
-                        {i.trip ? (
-                          <>
-                            <span className="num text-xs text-fg-muted">{formatDate(i.trip.started_at ?? i.trip.sort_time)}</span> {i.trip.end_address ?? i.title}
-                          </>
-                        ) : (
-                          i.title
-                        )}
-                      </p>
-                    </li>
-                  ))}
+                  {queue.map((i, idx) => {
+                    const meta = queueMeta(i);
+                    return (
+                      <li key={i.id} className={cn("px-4 py-2.5 text-sm", idx === 0 && "bg-accent-soft/50")} data-testid="review-queue-item" data-item-id={i.id}>
+                        <p className="text-xs text-fg-muted">{label(REVIEW_KIND_SHORT, i.kind)}{skipped.includes(i.id) ? " · överhoppad" : ""}</p>
+                        <p className="truncate" title={i.title}>{i.title}</p>
+                        {meta ? (
+                          <p className="num truncate text-xs text-fg-muted" title={meta} data-testid="review-queue-meta">
+                            {meta}
+                          </p>
+                        ) : null}
+                      </li>
+                    );
+                  })}
                 </ol>
               </Card>
             </aside>

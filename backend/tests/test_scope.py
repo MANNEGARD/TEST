@@ -728,20 +728,17 @@ def test_gap_based_anomalies_are_created_for_a_complete_journal(db, user, vehicl
 def test_other_anomalies_are_kept_when_only_business_trips_are_reported(db, user, vehicle, trips):
     build_gap_anomalies(db, vehicle, trips)
     # Körsträcka som inte stämmer med mätaren, bakåtgående mätarställning, dubblett och överlapp.
+    # 1.3.2: resebundna avvikelser skapas bara för resor som inte är avgjorda som privata – för två
+    # resor räcker det att en är tjänst eller oavgjord (dubbletten nedan: en oavgjord, en privat).
     t = trips.trip(A, C, category=Category.WORK, purpose="Möte", km=10.0, gap_minutes=600, minutes=30)
     raw = t.segments[0].raw_trip
     raw.odometer_end = raw.odometer_start + 40
-    back = trips.trip(C, A, category=Category.PRIVATE, km=10.0, gap_minutes=600)
+    back = trips.trip(C, A, km=10.0, gap_minutes=600)
     back.segments[0].raw_trip.odometer_end = back.segments[0].raw_trip.odometer_start - 5
-    d1 = trips.trip(A, B, category=Category.PRIVATE, km=10.0, gap_minutes=600, minutes=30)
+    d1 = trips.trip(A, B, km=10.0, gap_minutes=600, minutes=30)
     raw1 = d1.segments[0].raw_trip
     trips.trip(A, B, category=Category.PRIVATE, km=10.2, start_at=raw1.started_at + timedelta(seconds=40),
                odometer_start=raw1.odometer_end + 1)
-    # Onormal förbrukning: 22 resor kring 6,5–6,9 l/100 km och en på 40 l/100 km.
-    raws = [trips.trip(km=20.0, gap_minutes=120).segments[0].raw_trip for _ in range(22)]
-    for i, r in enumerate(raws):
-        r.fuel_liters = round(20.0 * (0.065 + 0.001 * (i % 5)), 3)
-    raws[5].fuel_liters = 20.0 * 0.40
     # Fordonsrapporter: orimligt hopp (+1 600 km på två timmar) och därefter lägre mätarställning.
     observation(db, vehicle, NOW - timedelta(days=4), 10700)
     observation(db, vehicle, NOW - timedelta(days=4, hours=-2), 12300)
@@ -749,7 +746,7 @@ def test_other_anomalies_are_kept_when_only_business_trips_are_reported(db, user
 
     result = scan(db, user, vehicle)
     assert {"odometer_mismatch", "odometer_backwards", "possible_duplicate", "time_overlap",
-            "abnormal_consumption", "odometer_jump"} <= set(result["created"])
+            "odometer_jump"} <= set(result["created"])
     assert result["created"]["odometer_jump"] == 1
     # Bakåt inom en resa, mellan två resor (efter den felaktiga sträckan) och i en fordonsrapport.
     assert result["created"]["odometer_backwards"] == 3

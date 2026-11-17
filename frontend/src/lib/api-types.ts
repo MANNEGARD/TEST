@@ -669,7 +669,15 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Ärenden i granskningscentret */
+        /**
+         * Ärenden i granskningscentret
+         * @description Ärendena med resorna de gäller.
+         *
+         *     Avvikelser (``kind`` = anomaly) som gäller en resa har ``trip`` och ``logical_trip_id``;
+         *     avvikelser som gäller två resor har ``first_trip`` och ``second_trip`` (och ``trip`` = null),
+         *     som sammanslagningsfrågorna. Resorna slås upp ur ärendets data även för äldre ärenden som
+         *     saknar ``logical_trip_id``. Antalet databasfrågor beror inte på antalet ärenden.
+         */
         get: operations["list_items_api_v1_review_get"];
         put?: never;
         post?: never;
@@ -4171,6 +4179,30 @@ export interface components {
                 [key: string]: unknown;
             };
             trip?: components["schemas"]["TripOut"] | null;
+            /** Kind Label */
+            kind_label?: string | null;
+            first_trip?: components["schemas"]["TripOut"] | null;
+            second_trip?: components["schemas"]["TripOut"] | null;
+        };
+        /** ReviewListOut */
+        ReviewListOut: {
+            /** Items */
+            items: components["schemas"]["ReviewItemOut"][];
+            /** Open Counts */
+            open_counts: {
+                [key: string]: number;
+            };
+            /** Open Total */
+            open_total: number;
+            /** Kind Labels */
+            kind_labels: {
+                [key: string]: string;
+            };
+            /**
+             * Recompute Pending
+             * @default false
+             */
+            recompute_pending: boolean;
         };
         /** ReviewRowOut */
         ReviewRowOut: {
@@ -6141,9 +6173,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["ReviewListOut"];
                 };
             };
             /** @description Validation Error */

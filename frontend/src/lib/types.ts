@@ -268,6 +268,13 @@ export interface ReviewItem extends Omit<ReviewItemBase, "data" | "kind"> {
     minutes_low?: number;
     minutes_high?: number;
     exact?: boolean;
+    /** Avvikelsens typ (kind "anomaly"): odometer_mismatch, odometer_backwards, possible_duplicate,
+     *  time_conflict, overlap, large_gap, missed_trips, odometer_jump, stale_vehicle_data. */
+    type?: string;
+    /** Avvikelsens tal (finns när typen har dem): resans sträcka, mätarställningens ändring, km. */
+    distance_km?: number;
+    odometer_km?: number;
+    km?: number;
   };
   kind_label: string;
   first_trip?: Trip | null;

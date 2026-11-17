@@ -2230,6 +2230,7 @@
      "Review"
     ],
     "summary": "Ärenden i granskningscentret",
+    "description": "Ärendena med resorna de gäller.\n\nAvvikelser (``kind`` = anomaly) som gäller en resa har ``trip`` och ``logical_trip_id``;\navvikelser som gäller två resor har ``first_trip`` och ``second_trip`` (och ``trip`` = null),\nsom sammanslagningsfrågorna. Resorna slås upp ur ärendets data även för äldre ärenden som\nsaknar ``logical_trip_id``. Antalet databasfrågor beror inte på antalet ärenden.",
     "operationId": "list_items_api_v1_review_get",
     "parameters": [
      {
@@ -2309,9 +2310,7 @@
       "content": {
        "application/json": {
         "schema": {
-         "type": "object",
-         "additionalProperties": true,
-         "title": "Response List Items Api V1 Review Get"
+         "$ref": "#/components/schemas/ReviewListOut"
         }
        }
       }
@@ -13258,6 +13257,37 @@
         "type": "null"
        }
       ]
+     },
+     "kind_label": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Kind Label"
+     },
+     "first_trip": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/TripOut"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "second_trip": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/TripOut"
+       },
+       {
+        "type": "null"
+       }
+      ]
      }
     },
     "type": "object",
@@ -13276,6 +13306,48 @@
      "resolution"
     ],
     "title": "ReviewItemOut"
+   },
+   "ReviewListOut": {
+    "properties": {
+     "items": {
+      "items": {
+       "$ref": "#/components/schemas/ReviewItemOut"
+      },
+      "type": "array",
+      "title": "Items"
+     },
+     "open_counts": {
+      "additionalProperties": {
+       "type": "integer"
+      },
+      "type": "object",
+      "title": "Open Counts"
+     },
+     "open_total": {
+      "type": "integer",
+      "title": "Open Total"
+     },
+     "kind_labels": {
+      "additionalProperties": {
+       "type": "string"
+      },
+      "type": "object",
+      "title": "Kind Labels"
+     },
+     "recompute_pending": {
+      "type": "boolean",
+      "title": "Recompute Pending",
+      "default": false
+     }
+    },
+    "type": "object",
+    "required": [
+     "items",
+     "open_counts",
+     "open_total",
+     "kind_labels"
+    ],
+    "title": "ReviewListOut"
    },
    "ReviewRowOut": {
     "properties": {

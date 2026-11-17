@@ -72,6 +72,8 @@ export interface DemoState {
   v130ai?: boolean;
   /** 1.3.0, omgång drift: uppskattad förbrukning på resor från bilen och notisvalet för nya versioner. */
   v130drift?: boolean;
+  /** 1.3.2: avvikelser som visar sin resa (en om en resa och en om två resor). */
+  v132?: boolean;
 }
 
 type Runtime = "seedNow" | "homeMarked" | "imports" | "linksRevokedAt" | "nextTrip" | "nextQuestion";

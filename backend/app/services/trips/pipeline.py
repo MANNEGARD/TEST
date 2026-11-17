@@ -243,6 +243,10 @@ def after_trips_changed(
             new_trip_items.append((trip, created))
     out["new_review_trips"] = len(new_trip_items)
     out["closed_orphaned_items"] = review.close_orphaned(db, vehicle.id)
+    # Avvikelser för borttagna eller (när bara tjänst redovisas) privata resor stängs direkt.
+    from app.services.stats import anomalies
+
+    out["closed_anomalies"] = sum(anomalies.close_noise(db, vehicle.id, scope=scope).values())
 
     if notify:
         from app.services.ha import notifier

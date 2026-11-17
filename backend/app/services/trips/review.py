@@ -164,14 +164,14 @@ def close_stale(
     *,
     prefixes: tuple[str, ...],
     keep: set[str],
-    data_type: str,
+    data_type: str | None,
     note: str,
     when: Callable[[ReviewItem], bool] | None = None,
 ) -> int:
     """Stänger öppna (och uppskjutna) ärenden vars villkor inte längre är uppfyllt.
 
     Gäller ärenden med nyckel som börjar med något av ``prefixes`` och ``data["type"]`` lika
-    med ``data_type``, vars nyckel inte finns i ``keep`` (de som fortfarande gäller). Ärenden
+    med ``data_type`` (``None`` = vilken typ som helst), vars nyckel inte finns i ``keep`` (de som fortfarande gäller). Ärenden
     som ägaren har avgjort eller avfärdat rörs inte. Lösningen visar varför ärendet stängdes.
     """
     items = (
@@ -187,7 +187,9 @@ def close_stale(
     )
     closed = 0
     for item in items:
-        if item.dedupe_key in keep or (item.data or {}).get("type") != data_type or (when and not when(item)):
+        if item.dedupe_key in keep or (when and not when(item)):
+            continue
+        if data_type is not None and (item.data or {}).get("type") != data_type:
             continue
         item.snoozed_until = None
         resolve(db, item, by="system", resolution={"auto": True, "reason": NO_LONGER_REASON, "note": note})

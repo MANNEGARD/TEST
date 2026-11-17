@@ -94,23 +94,16 @@ def test_large_gap(db, user, vehicle, complete_scope):
     assert items(db, vehicle)[0].title == "Ovanligt stort kilometergap: 700 km"
 
 
-def test_abnormal_consumption_uses_verified_values_only(db, user, vehicle, trips):
+def test_consumption_gives_no_anomaly(db, user, vehicle, trips):
+    """1.3.2: förbrukningen redovisas inte till arbetsgivaren och blir aldrig ett ärende."""
     raws = [trips.trip(km=20.0, gap_minutes=60).segments[0].raw_trip for _ in range(22)]
     for i, r in enumerate(raws):
         r.fuel_liters = round(20.0 * (0.065 + 0.001 * (i % 5)), 3)  # 6,5–6,9 l/100 km
         r.energy_kwh, r.energy_quality = None, "unknown"
     raws[5].fuel_liters = 20.0 * 0.40  # 40 l/100 km
-    raws[6].fuel_liters, raws[6].fuel_quality = 20.0 * 0.50, "estimated"  # uppskattat – räknas inte
     db.flush()
     result = scan(db, user, vehicle)
-    assert result["created"] == {"abnormal_consumption": 1}
-    (item,) = items(db, vehicle)
-    assert item.data["raw_trip_id"] == str(raws[5].id) and item.data["value"] == 40.0
-
-
-def test_too_few_samples_no_consumption_anomaly():
-    assert anomalies.robust_outliers([5.0] * 5 + [50.0]) == []
-    assert anomalies.robust_outliers([5.0] * 25 + [50.0]) == [25]
+    assert result["created"] == {} and items(db, vehicle) == []
 
 
 def test_observation_jump_backwards_and_missed_trips(db, user, vehicle, trips, complete_scope):

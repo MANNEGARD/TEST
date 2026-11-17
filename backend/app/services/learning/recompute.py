@@ -288,3 +288,7 @@ def _recompute(vehicle_id: uuid.UUID) -> None:
         merge.close_stale_overlaps(db, vehicle_id, odometer_tolerance=tol)
         # Ärenden för resor som inte längre är aktiva (t.ex. en borttagen resa).
         review.close_orphaned(db, vehicle_id)
+        # Avvikelser för borttagna resor, och för resor som ägaren just avgjort som privata.
+        from app.services.stats import anomalies
+
+        anomalies.close_noise(db, vehicle_id, scope=settings_svc.journal_scope(db, user_id))

@@ -17,10 +17,11 @@ from app.api.serializers import trip_out, trips_out
 from app.db import utcnow
 from app.models import DataGap, LogicalTrip, ReviewItem
 from app.models.enums import REVIEW_KIND_LABELS_SV, GapStatus, LogicalState, ReviewKind, ReviewState
-from app.schemas.common import GapOut, ReviewItemOut, TripOut
+from app.schemas.common import GapOut, ReviewItemOut, ReviewListOut, TripOut
 from app.services import audit
 from app.services import settings as settings_svc
 from app.services.learning import recompute
+from app.services.stats import anomalies
 from app.services.trips import gaps, pipeline, review
 from app.services.trips import segments as seg
 
@@ -49,7 +50,7 @@ def _owned_gap(db, principal, gap_id: uuid.UUID) -> DataGap:
     return gap
 
 
-@router.get("/review", summary="Ärenden i granskningscentret")
+@router.get("/review", response_model=ReviewListOut, summary="Ärenden i granskningscentret")
 def list_items(
     principal: PrincipalDep,
     db: DbDep,
@@ -58,7 +59,14 @@ def list_items(
     status: str = Query(default="open", pattern="^(open|resolved|dismissed|snoozed|all)$"),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
-) -> dict[str, Any]:
+) -> ReviewListOut:
+    """Ärendena med resorna de gäller.
+
+    Avvikelser (``kind`` = anomaly) som gäller en resa har ``trip`` och ``logical_trip_id``;
+    avvikelser som gäller två resor har ``first_trip`` och ``second_trip`` (och ``trip`` = null),
+    som sammanslagningsfrågorna. Resorna slås upp ur ärendets data även för äldre ärenden som
+    saknar ``logical_trip_id``. Antalet databasfrågor beror inte på antalet ärenden.
+    """
     vehicle = get_vehicle(db, principal, vehicle_id)
     review.wake_snoozed(db)
     base = select(ReviewItem).where(ReviewItem.vehicle_id == vehicle.id)
@@ -72,37 +80,64 @@ def list_items(
     if kind:
         base = base.where(ReviewItem.kind.in_(kind))
     items = list(db.execute(base.order_by(ReviewItem.created_at.desc()).offset(offset).limit(limit)).scalars())
-    trip_ids = {i.logical_trip_id for i in items if i.logical_trip_id}
-    for i in items:  # sammanslagningsfrågor refererar två resor
-        for key in ("first_trip_id", "second_trip_id"):
-            if i.kind == ReviewKind.MERGE and i.data.get(key):
-                trip_ids.add(uuid.UUID(i.data[key]))
+
+    # Resorna per ärende: (en resa, eller två resor) som journalresornas id.
+    single: dict[uuid.UUID, uuid.UUID | None] = {}
+    pairs: dict[uuid.UUID, tuple[uuid.UUID | None, uuid.UUID | None]] = {}
+    merge_trip: dict[uuid.UUID, uuid.UUID] = {}  # sammanslagningsfrågan har även sin "egen" resa
+    for i in items:
+        if i.kind == ReviewKind.MERGE:
+            ids = [_as_id(i.data.get(key)) for key in ("first_trip_id", "second_trip_id")]
+            pairs[i.id] = (ids[0], ids[1])
+            if i.logical_trip_id:
+                merge_trip[i.id] = i.logical_trip_id
+        elif i.kind != ReviewKind.ANOMALY and i.logical_trip_id:
+            single[i.id] = i.logical_trip_id
+    anomaly_refs = anomalies.resolve_trip_ids(db, [i for i in items if i.kind == ReviewKind.ANOMALY])
+    for item_id, refs in anomaly_refs.items():
+        firsts = [ids[0] if ids else None for ids in refs]
+        if len(firsts) >= 2:
+            pairs[item_id] = (firsts[0], firsts[1])
+        else:
+            single[item_id] = firsts[0]
+    trip_ids = {t for t in single.values() if t} | {t for p in pairs.values() for t in p if t}
+    trip_ids |= set(merge_trip.values())
     trips: dict[uuid.UUID, TripOut] = {}
     if trip_ids:
         rows = db.execute(select(LogicalTrip).where(LogicalTrip.id.in_(trip_ids))).scalars().all()
         trips = {t.id: t for t in trips_out(db, rows)}
-    out = []
+
+    out: list[ReviewItemOut] = []
     for i in items:
         item = ReviewItemOut.model_validate(i)
-        item.trip = trips.get(i.logical_trip_id) if i.logical_trip_id else None
-        payload = item.model_dump(mode="json")
-        payload["kind_label"] = REVIEW_KIND_LABELS_SV.get(ReviewKind(i.kind), i.kind) if i.kind in set(ReviewKind) else i.kind
-        if i.kind == ReviewKind.MERGE:
-            payload["first_trip"] = (trips[uuid.UUID(i.data["first_trip_id"])].model_dump(mode="json")
-                                     if i.data.get("first_trip_id") and uuid.UUID(i.data["first_trip_id"]) in trips else None)
-            payload["second_trip"] = (trips[uuid.UUID(i.data["second_trip_id"])].model_dump(mode="json")
-                                      if i.data.get("second_trip_id") and uuid.UUID(i.data["second_trip_id"]) in trips else None)
-        out.append(payload)
+        item.kind_label = REVIEW_KIND_LABELS_SV.get(ReviewKind(i.kind), i.kind) if i.kind in set(ReviewKind) else i.kind
+        if i.id in pairs:
+            first, second = pairs[i.id]
+            item.first_trip = trips.get(first) if first else None
+            item.second_trip = trips.get(second) if second else None
+            item.trip = trips.get(merge_trip[i.id]) if i.id in merge_trip else None
+        elif i.id in single:
+            trip_id = single[i.id]
+            item.trip = trips.get(trip_id) if trip_id else None
+            if i.kind == ReviewKind.ANOMALY and trip_id is not None:
+                item.logical_trip_id = trip_id  # äldre avvikelser saknar id:t i databasen
+        out.append(item)
     pending = recompute.is_pending(db, vehicle.id)
     db.commit()
-    return {
-        "items": out,
-        "open_counts": {k: counts.get(k, 0) for k in ReviewKind},
-        "open_total": sum(counts.values()),
-        "kind_labels": {k: v for k, v in REVIEW_KIND_LABELS_SV.items()},
-        # Förslag och ärenden räknas om efter ägarens senaste beslut (webbappen hämtar då om listan).
-        "recompute_pending": pending,
-    }
+    return ReviewListOut(
+        items=out,
+        open_counts={k: counts.get(k, 0) for k in ReviewKind},
+        open_total=sum(counts.values()),
+        kind_labels={k: v for k, v in REVIEW_KIND_LABELS_SV.items()},
+        recompute_pending=pending,
+    )
+
+
+def _as_id(value: Any) -> uuid.UUID | None:
+    try:
+        return uuid.UUID(str(value)) if value else None
+    except ValueError:
+        return None
 
 
 @router.post("/review/{item_id}/dismiss", response_model=ReviewItemOut, summary="Avfärda ett ärende")

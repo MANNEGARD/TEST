@@ -148,7 +148,23 @@ class ReviewItemOut(ORM):
     created_at: datetime
     resolved_at: datetime | None
     resolution: dict[str, Any]
+    # Resan som ärendet gäller (klassningsärenden och avvikelser som gäller en resa).
     trip: TripOut | None = None
+    # Ärendetypen i klartext ("Avvikelse", "Sammanslagning" …).
+    kind_label: str | None = None
+    # De två resorna när ärendet gäller två resor (sammanslagning, dubblett, överlapp …);
+    # ``trip`` är då null.
+    first_trip: TripOut | None = None
+    second_trip: TripOut | None = None
+
+
+class ReviewListOut(BaseModel):
+    items: list[ReviewItemOut]
+    open_counts: dict[str, int]
+    open_total: int
+    kind_labels: dict[str, str]
+    # Förslag och ärenden räknas om efter ägarens senaste beslut (webbappen hämtar då om listan).
+    recompute_pending: bool = False
 
 
 class GapOut(ORM):

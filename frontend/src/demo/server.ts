@@ -60,6 +60,7 @@ function boot(): Promise<void> {
     if (!state.v130) applyV130(state);
     if (!state.v130ai) applyV130Ai(state);
     if (!state.v130drift) applyV130Drift(state);
+    if (!state.v132) applyV132(state);
     // Körtiden saknas på de rekonstruerade resorna i inspelningen; räkna den ur start- och sluttid.
     // Med en uträknad starttid lämnas den tom som i den riktiga servern, så resans sida visar "≈".
     for (const d of Object.values(state.trips)) {
@@ -922,6 +923,95 @@ function applyV130Drift(s: DemoState): void {
   s.v130drift = true;
 }
 
+/** Demots avvikelse om en resa (början av resans id): sträckan stämmer inte med mätarställningen 12/11. */
+const MISMATCH_TRIP = "b01e1597";
+/** Demots avvikelse om två resor (början av resornas id): mätarställningen går bakåt mellan resorna 16/11. */
+const BACKWARDS_TRIPS = ["3fb26e09", "a67ea1f4"];
+
+/**
+ * Det som 1.3.2 tillför: två avvikelser enligt kontraktet – en om en resa (trip) och en om två
+ * resor (first_trip, second_trip) – med resornas värden ändrade så att avvikelsen syns på resan.
+ * Ett förbrukningsärende finns inte längre (tas bort om ett äldre tillstånd har ett).
+ * Avvikelsernas resor sparas i `trip_ids` (inte `trip_id`), så att ett beslut om resan inte
+ * stänger dem: de stängs bara när alla resorna är privata eller borta (reviewOpen).
+ */
+function applyV132(s: DemoState): void {
+  s.review = s.review.filter((r) => !(r.kind === "anomaly" && r.data?.type === "abnormal_consumption"));
+  const find = (prefix: string) => Object.values(s.trips).find((d) => d.trip.id.startsWith(prefix));
+  const now = s.seedNow ?? nowIso();
+  const item = (title: string, detail: string, data: Json, tripIds: string[]) => ({
+    id: crypto.randomUUID(),
+    vehicle_id: s.vehicleId,
+    kind: "anomaly",
+    title,
+    detail,
+    data,
+    status: "open",
+    logical_trip_id: tripIds.length === 1 ? tripIds[0] : null,
+    snoozed_until: null,
+    created_at: now,
+    resolved_at: null,
+    resolution: {},
+    kind_label: s.reviewMeta.kind_labels?.anomaly ?? "Avvikelse",
+    trip_ids: tripIds,
+  });
+
+  // En resa: bilen angav 21,4 km men mätarställningen ökade 15 km.
+  const mm = find(MISMATCH_TRIP);
+  if (mm) {
+    const km = 21.4;
+    mm.trip.distance_km = km;
+    splitKm(mm.trip);
+    for (const r of [...(mm.raw_trips ?? []), ...(mm.segments ?? [])]) r.distance_km = km;
+    const odo = Number(mm.trip.odometer_end) - Number(mm.trip.odometer_start);
+    s.review.push(
+      item(
+        "Körsträckan stämmer inte med mätarställningen",
+        `Resan anger ${km} km men mätarställningen ändras ${odo} km.`,
+        {
+          type: "odometer_mismatch",
+          raw_trip_id: mm.raw_trips?.[0]?.id ?? null,
+          odometer_start: mm.trip.odometer_start,
+          odometer_end: mm.trip.odometer_end,
+          distance_km: km,
+          odometer_km: odo,
+          reported: "distance_km",
+          reported_km: km,
+          difference_km: Math.round((odo - km) * 10) / 10,
+        },
+        [mm.trip.id],
+      ),
+    );
+  }
+
+  // Två resor: den första resans mätarställning slutar 4 km efter där nästa börjar.
+  const [a, b] = BACKWARDS_TRIPS.map(find);
+  if (a && b) {
+    a.trip.odometer_start = Number(a.trip.odometer_start) + 4;
+    a.trip.odometer_end = Number(a.trip.odometer_end) + 4;
+    for (const r of a.raw_trips ?? []) {
+      r.odometer_start = a.trip.odometer_start;
+      r.odometer_end = a.trip.odometer_end;
+    }
+    s.review.push(
+      item(
+        "Motstridiga mätarställningar",
+        `En senare resa börjar på ${b.trip.odometer_start} km trots att föregående resa slutade på ${a.trip.odometer_end} km.`,
+        {
+          type: "odometer_backwards",
+          first_raw_trip_id: a.raw_trips?.[0]?.id ?? null,
+          second_raw_trip_id: b.raw_trips?.[0]?.id ?? null,
+          first_odometer_end: a.trip.odometer_end,
+          second_odometer_start: b.trip.odometer_start,
+          overlap_km: Number(a.trip.odometer_end) - Number(b.trip.odometer_start),
+        },
+        [a.trip.id, b.trip.id],
+      ),
+    );
+  }
+  s.v132 = true;
+}
+
 /** Ärendet kom ur kalendern och står kvar som det sattes (ägaren har inte rättat det). */
 function fromCalendar(d: Json | undefined): boolean {
   return !!d && !!d.trip.purpose_confirmed && !!(d.purpose_history ?? []).find((p: Json) => p.is_current)?.from_calendar;
@@ -1135,17 +1225,38 @@ function bulkDelete(ids: string[]): Json {
 
 // ----------------------------------------------------------------------------- granskning
 
+/**
+ * Gäller ärendet fortfarande (som backenden 1.3.2): en avvikelse vars resa inte finns längre
+ * stängs, och när endast tjänsteresor redovisas räknas en avvikelse bara så länge minst en av
+ * dess resor är tjänst eller oavgjord. Ändras resan tillbaka (Ångra) gäller ärendet igen.
+ */
+function reviewOpen(r: Json): boolean {
+  if (r.status !== "open") return false;
+  if (r.kind !== "anomaly" || !r.trip_ids) return !!S().trips[r.trip_id];
+  const trips = (r.trip_ids as string[]).map((id) => S().trips[id]?.trip);
+  return trips.every(Boolean) && trips.some((t) => t.category !== "private");
+}
+
+/** Ärendet som API:t lämnar det: resan (trip) eller resorna (first_trip, second_trip). */
+function reviewOut(r: Json): Json {
+  const { trip_id, trip_ids, ...rest } = r;
+  const trip = (id: string | undefined) => (id && S().trips[id] ? clone(S().trips[id].trip) : null);
+  if (Array.isArray(trip_ids) && trip_ids.length === 2) return { ...clone(rest), trip: null, logical_trip_id: null, first_trip: trip(trip_ids[0]), second_trip: trip(trip_ids[1]) };
+  if (Array.isArray(trip_ids)) return { ...clone(rest), trip: trip(trip_ids[0]), logical_trip_id: trip_ids[0] ?? null };
+  return { ...clone(rest), trip: trip(trip_id) };
+}
+
 function reviewList(q: URLSearchParams): Json {
   const s = S();
   const status = q.get("status") ?? "open";
   const limit = Number(q.get("limit") ?? 200);
   const items = s.review
-    .filter((r) => (status === "all" ? true : status === "open" ? r.status === "open" : r.status !== "open"))
-    .filter((r) => s.trips[r.trip_id])
+    .filter((r) => (status === "all" ? true : status === "open" ? reviewOpen(r) : r.status !== "open"))
+    .filter((r) => (r.trip_ids ? true : s.trips[r.trip_id]))
     .slice(0, limit)
-    .map(({ trip_id, ...r }) => ({ ...clone(r), trip: clone(s.trips[trip_id].trip) }));
+    .map(reviewOut);
   const counts: Record<string, number> = Object.fromEntries(Object.keys(s.reviewMeta.open_counts).map((k) => [k, 0]));
-  for (const r of s.review) if (r.status === "open") counts[r.kind] = (counts[r.kind] ?? 0) + 1;
+  for (const r of s.review) if (reviewOpen(r)) counts[r.kind] = (counts[r.kind] ?? 0) + 1;
   return {
     items,
     open_counts: counts,
@@ -1161,8 +1272,7 @@ function reviewItem(id: string): Json {
 }
 
 function reviewItemOut(r: Json): Json {
-  const { trip_id, ...rest } = r;
-  return { ...clone(rest), trip: S().trips[trip_id] ? clone(S().trips[trip_id].trip) : null };
+  return reviewOut(r);
 }
 
 // ----------------------------------------------------------------------------- frågor (notiser)

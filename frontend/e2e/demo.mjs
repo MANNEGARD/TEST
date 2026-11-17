@@ -206,6 +206,58 @@ const poolTripId = (n) => `00000000-0000-4000-8000-${String(n + 1).padStart(12, 
 const importedTripId = (n) => poolTripId(40 - 1 - n);
 // Demoresan vars ärende kom ur kalendern när den godkändes av ägarens regel (server.ts CALENDAR_TRIP).
 const CALENDAR_TRIP = "2e40532a-d7f6-45e3-9e7d-ed7f9a66e8e1";
+// Demots avvikelser (1.3.2, server.ts applyV132): en om en resa och en om två resor.
+const MISMATCH_TRIP = trips.find((t) => t.id.startsWith("b01e1597"));
+const BACKWARDS_TRIPS = ["3fb26e09", "a67ea1f4"].map((p) => trips.find((t) => t.id.startsWith(p)));
+/** Antal öppna ärenden när testet börjar (startdatat plus demots avvikelser). */
+let startReviewTotal = null;
+
+/** Platsen som granskningen visar för resan: bekräftad plats med namn, annars adressen. */
+const placeOf = (t, end) => (t[`${end}_location`]?.confirmed ? t[`${end}_location`].name : t[`${end}_address`]);
+
+/** Visar avvikelsen av typen `type` i Granskning (hoppar över ärenden med →). Returnerar kortet eller null. */
+async function showAnomaly(page, type) {
+  await visit(page, "/review/");
+  const card = page.getByTestId("review-current");
+  await card.waitFor({ timeout: 8000 });
+  const list = await api(page, "GET", `/review?status=open&limit=200&vehicle_id=${seed.vehicleId}`);
+  const want = list.items.find((i) => i.kind === "anomaly" && i.data?.type === type)?.id;
+  for (let n = 0; want && n < 20; n++) {
+    if ((await card.getAttribute("data-item-id")) === want) return card;
+    const prev = await card.getAttribute("data-item-id");
+    await page.keyboard.press("ArrowRight");
+    await page
+      .waitForFunction((id) => document.querySelector('[data-testid="review-current"]')?.getAttribute("data-item-id") !== id, prev, { timeout: 1500 })
+      .catch(() => {});
+  }
+  fail(`avvikelsen ${type} visas inte i Granskning`);
+  return null;
+}
+
+/** Mobil: kortet och dess knappar ryms i bredden (inget kapas, inget hamnar utanför). */
+async function fitsWidth(page, card, what) {
+  const r = await card.evaluate((el) => {
+    const box = el.getBoundingClientRect();
+    const outside = [...el.querySelectorAll("a, button")]
+      .filter((b) => b.getClientRects().length)
+      .filter((b) => {
+        const bb = b.getBoundingClientRect();
+        return bb.left < box.left - 1 || bb.right > box.right + 1;
+      })
+      .map((b) => b.textContent.trim());
+    const clipped = [...el.querySelectorAll("p, dd, dt, span, a, button")]
+      // Skärmläsartext (sr-only, 1 px bred) räknas inte.
+      .filter((x) => x.getClientRects().length && x.clientWidth > 1 && x.scrollWidth > x.clientWidth + 1 && getComputedStyle(x).overflow !== "visible")
+      .map((x) => x.textContent.trim().slice(0, 40));
+    return { wide: el.scrollWidth - el.clientWidth, outside, clipped, right: box.right };
+  });
+  if (r.wide > 1) fail(`${what}: kortet är ${r.wide} px för brett`);
+  if (r.outside.length) fail(`${what}: knappar utanför kortet: ${r.outside.join(", ")}`);
+  if (r.clipped.length) fail(`${what}: text kapas: ${r.clipped.join(" | ")}`);
+  const vw = await page.evaluate(() => window.innerWidth);
+  if (r.right > vw + 1) fail(`${what}: kortet går utanför skärmen`);
+}
+
 /** Antal rader texten i elementet bryts på (1 = får plats på en rad). */
 const lineCount = (locator) =>
   locator.evaluate((el) => {
@@ -319,6 +371,7 @@ try {
       const s = page.getByTestId(`get-started-step-${id}`);
       if ((await s.count()) && (await s.getAttribute("data-done")) !== "true") fail(`steget ${id} är inte klart`);
     }
+    startReviewTotal = (await api(page, "GET", `/review?status=open&limit=200&vehicle_id=${seed.vehicleId}`)).open_total;
     await page.getByTestId("get-started-home-button").click();
     // Sista steget: kortet byts mot "Klart – resten sköter sig självt" (som i appen).
     await page.getByTestId("get-started-done").waitFor({ timeout: 8000 });
@@ -421,6 +474,96 @@ try {
     await expectText(page, "Ändringen är ångrad.");
     await page.waitForTimeout(600);
     if ((await reviewTotal()) !== before) fail(`Ångra återställde inte granskningen (${before} → ${await reviewTotal()})`);
+  });
+
+  await section("avvikelse i granskningen", async () => {
+    step("Granskning: avvikelsen visar resan, vad som inte stämmer och leder till resan; kön skiljer ärendena åt");
+    if (!MISMATCH_TRIP || BACKWARDS_TRIPS.some((t) => !t)) return fail("demots avvikelseresor saknas i startdatat");
+    const list = await api(page, "GET", `/review?status=open&limit=200&vehicle_id=${seed.vehicleId}`);
+    const anomalies = list.items.filter((i) => i.kind === "anomaly");
+    if (anomalies.some((i) => i.data?.type === "abnormal_consumption")) fail("demot har fortfarande ett förbrukningsärende");
+    const one = anomalies.find((i) => i.data?.type === "odometer_mismatch");
+    const two = anomalies.find((i) => i.data?.type === "odometer_backwards");
+    if (!one || one.trip?.id !== MISMATCH_TRIP.id || one.logical_trip_id !== MISMATCH_TRIP.id) fail("avvikelsen om en resa följer inte kontraktet (trip, logical_trip_id)");
+    if (!two || two.trip !== null || two.first_trip?.id !== BACKWARDS_TRIPS[0].id || two.second_trip?.id !== BACKWARDS_TRIPS[1].id) fail("avvikelsen om två resor följer inte kontraktet (first_trip, second_trip)");
+
+    // Tangentraden på ett klassningsärende: A och P gäller där.
+    await visit(page, "/review/");
+    const card = page.getByTestId("review-current");
+    await card.waitFor({ timeout: 8000 });
+    if ((await card.getAttribute("data-kind")) !== "anomaly" && (await page.getByTestId("decide-work").count())) {
+      const keys = await page.getByLabel("Kortkommandon").innerText();
+      if (!keys.includes("Arbete") || !keys.includes("Privat")) fail(`tangentraden på ett klassningsärende saknar A/P: "${keys}"`);
+      if (keys.includes("Slå samman")) fail("tangentraden visar J/N på ett klassningsärende");
+    }
+
+    // Kön: varje resebundet ärende har en andra rad med datum och från → till.
+    const rows = page.locator('aside[aria-label="Kö"] li');
+    const rowCount = await rows.count();
+    if (!rowCount) fail("kön visas inte");
+    const seenMeta = new Map();
+    for (let i = 0; i < rowCount; i++) {
+      const row = rows.nth(i);
+      const meta = row.getByTestId("review-queue-meta");
+      if (!(await meta.count())) {
+        fail(`köraden "${(await row.innerText()).replace(/\s+/g, " ")}" saknar datum och från → till`);
+        continue;
+      }
+      const text = await meta.innerText();
+      if (!/^\d{4}-\d{2}-\d{2}.* · .+ → .+/.test(text)) fail(`köradens andra rad är "${text}"`);
+      const title = (await row.locator("p").nth(1).innerText()).trim();
+      if (seenMeta.has(title + text)) fail(`två köer med samma rubrik och samma andra rad: ${title} ${text}`);
+      seenMeta.set(title + text, true);
+      if ((await row.getAttribute("data-item-id")) === one?.id && !text.startsWith("2026-11-12")) fail(`avvikelsens kö-rad visar inte resans datum: "${text}"`);
+    }
+
+    // Avvikelsen om en resa.
+    const c1 = await showAnomaly(page, "odometer_mismatch");
+    if (c1) {
+      const text = (await c1.innerText()).replace(/\s+/g, " ");
+      for (const want of ["2026-11-12", placeOf(one.trip, "start"), placeOf(one.trip, "end"), "Ärende:", "21,4 km", "15 km", "I underlaget", "Om du inte gör något", "Avfärda"]) {
+        if (!text.includes(want)) fail(`avvikelsekortet visar inte "${want}"`);
+      }
+      if ((await c1.getByTestId("anomaly-trip").first().getAttribute("data-trip-id", { timeout: 2000 }).catch(() => null)) !== MISMATCH_TRIP.id) fail("avvikelsekortet visar inte resan i en egen ruta");
+      if (await c1.getByTestId("decide-work").count()) fail("avvikelsekortet visar Arbete/Privat");
+      const keys = await page.getByLabel("Kortkommandon").innerText().catch(() => "");
+      for (const k of ["Arbete", "Privat", "Godkänn"]) if (keys.includes(k)) fail(`tangentraden visar "${k}" på en avvikelse`);
+      if (!(await c1.getByTestId("anomaly-help").count())) fail("hjälptexten om Markera som hanterat och Avfärda saknas");
+      if (!(await c1.getByTestId("anomaly-open-trip").count())) fail("avvikelsekortet saknar huvudknappen Öppna resan");
+      await page.screenshot({ path: path.join(SHOTS, "granskning-avvikelse.png"), fullPage: true });
+      // A, P och G gör ingenting på en avvikelse.
+      const item = await c1.getAttribute("data-item-id");
+      for (const k of ["a", "p", "g"]) await page.keyboard.press(k);
+      await page.waitForTimeout(500);
+      if ((await page.getByTestId("review-current").getAttribute("data-item-id")) !== item) fail("A/P/G bytte ärende på en avvikelse");
+      if ((await api(page, "GET", `/trips/${MISMATCH_TRIP.id}`)).trip.category !== MISMATCH_TRIP.category) fail("A/P/G ändrade avvikelsens resa");
+      if (await c1.getByTestId("anomaly-open-trip").count()) await c1.getByTestId("anomaly-open-trip").click();
+      await page.waitForURL(new RegExp(`/journal/${MISMATCH_TRIP.id}/?$`), { timeout: 8000 }).catch(() => fail(`huvudknappen ledde till ${page.url()}`));
+    }
+
+    // Avvikelsen om två resor.
+    const c2 = await showAnomaly(page, "odometer_backwards");
+    if (c2) {
+      const text = (await c2.innerText()).replace(/\s+/g, " ");
+      if ((await c2.getByTestId("anomaly-trip").count()) !== 2) fail("avvikelsen om två resor visar inte båda resorna");
+      for (const want of ["Första resan", "Andra resan", "2026-11-16", placeOf(two.first_trip, "end"), placeOf(two.second_trip, "start")]) {
+        if (!text.toLowerCase().includes(want.toLowerCase())) fail(`kortet för två resor visar inte "${want}"`);
+      }
+      if (!/48\s?803/.test(text) || !/48\s?799/.test(text)) fail("kortet för två resor visar inte mätarställningarna som inte går ihop");
+      const href = (id) => c2.getByTestId(id).getAttribute("href", { timeout: 2000 }).catch(() => null);
+      const hrefs = [await href("anomaly-open-trip"), await href("anomaly-open-trip-2")];
+      BACKWARDS_TRIPS.forEach((t, i) => {
+        if (!hrefs[i]?.includes(t.id)) fail(`knapp ${i + 1} leder till ${hrefs[i]}, inte till resan ${t.id}`);
+      });
+      await page.screenshot({ path: path.join(SHOTS, "granskning-avvikelse-tva-resor.png"), fullPage: true });
+    }
+
+    // En privat resa (endast tjänsteresor redovisas): avvikelsen om den resan räknas inte längre.
+    const before = await reviewTotal();
+    await api(page, "PATCH", `/trips/${MISMATCH_TRIP.id}`, { category: "private" });
+    if ((await reviewTotal()) !== before - 1) fail("avvikelsen om en privat resa ligger kvar");
+    await api(page, "PATCH", `/trips/${MISMATCH_TRIP.id}`, { category: MISMATCH_TRIP.category });
+    if ((await reviewTotal()) !== before) fail("avvikelsen kom inte tillbaka när resan blev tjänst igen");
   });
 
   await section("ändringshistorik", async () => {
@@ -1017,7 +1160,7 @@ try {
     await page.waitForURL(`${BASE}/`);
     await settled(page, "efter återställning");
     if ((await page.getByTestId("get-started-step-home").getAttribute("data-done")) !== "false") fail("bostaden är fortfarande markerad efter återställning");
-    if ((await reviewTotal()) !== seed.reviewMeta.open_total) fail("granskningen återställdes inte");
+    if ((await reviewTotal()) !== startReviewTotal) fail(`granskningen återställdes inte (${await reviewTotal()}, väntat ${startReviewTotal})`);
   });
   await ctx.close();
 
@@ -1051,6 +1194,9 @@ try {
     await p.getByTestId("ai-review-intro").waitFor({ timeout: 8000 });
     await p.screenshot({ path: path.join(SHOTS, "mork-ai-genomgang.png"), fullPage: true });
     await p.keyboard.press("Escape");
+    for (const [type, name] of [["odometer_mismatch", "mork-granskning-avvikelse"], ["odometer_backwards", "mork-granskning-avvikelse-tva-resor"]]) {
+      if (await showAnomaly(p, type)) await p.screenshot({ path: path.join(SHOTS, `${name}.png`), fullPage: true });
+    }
     await visit(p, `/m/q/${questions[0].public_id}/`, "mork-snabbfraga");
     if ((await p.locator("html").getAttribute("data-theme")) !== "dark") fail("temat blev inte mörkt");
     await dark.close();
@@ -1090,6 +1236,14 @@ try {
       await visit(p, route, name);
       const wide = await p.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
       if (wide > 2) fail(`${route}: sidan är ${wide} px för bred i mobilen`);
+    }
+    for (const [type, name] of [["odometer_mismatch", "mobil-granskning-avvikelse"], ["odometer_backwards", "mobil-granskning-avvikelse-tva-resor"]]) {
+      const card = await showAnomaly(p, type);
+      if (!card) continue;
+      await p.screenshot({ path: path.join(SHOTS, `${name}.png`), fullPage: true });
+      await fitsWidth(p, card, `mobil ${type}`);
+      const wide = await p.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+      if (wide > 2) fail(`mobil ${type}: sidan är ${wide} px för bred`);
     }
     const gapTrip = (await api(p, "GET", "/trips?page_size=500")).items.find((t) => t.collection_gap);
     if (gapTrip) {
