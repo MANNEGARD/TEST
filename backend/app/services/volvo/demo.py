@@ -158,7 +158,12 @@ class DemoClient:
                 "chargingPower": {"isSupported": False},
             }
         elif endpoint_name == "command_accessibility":
-            data = {"data": {"availabilityStatus": {"value": "AVAILABLE", "timestamp": s["odo_ts"]}}}
+            # Demobilen: "används" medan motorn går, annars tillgänglig (påhittat förlopp, 1.5.0).
+            if s["engine"] == "RUNNING":
+                status = {"value": "UNAVAILABLE", "unavailableReason": "CAR_IN_USE", "timestamp": s["engine_ts"]}
+            else:
+                status = {"value": "AVAILABLE", "timestamp": s["engine_ts"]}
+            data = {"data": {"availabilityStatus": status}}
         else:
             # Visar hur en endpoint som bilen saknar stöd för redovisas.
             return ApiResult("unsupported", 404, message="Stöds inte av demobilen")

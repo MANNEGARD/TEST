@@ -486,7 +486,10 @@ _DIAG_OBS_FIELDS = (
     "charging_status", "engine_running", "engine_reported_at", "avg_fuel_consumption", "avg_energy_consumption",
     "avg_speed", "avg_speed_auto", "trip_meter_auto_km", "trip_meter_manual_km", "statistics_reported_at",
     "avg_fuel_consumption_auto", "avg_energy_consumption_auto",
+    # "Bilen används" (1.5.0): det bilen svarade, bilens tidsstämpel och det härledda värdet.
+    "accessibility_status", "accessibility_reason", "accessibility_reported_at", "car_in_use",
 )
+_DIAG_CODE_FIELDS = frozenset({"accessibility_status", "accessibility_reason"})
 _DIAG_TRIP_FIELDS = (
     "started_at", "ended_at", "start_time_quality", "end_time_quality", "distance_km", "odometer_start",
     "odometer_end", "fuel_liters", "fuel_quality", "energy_kwh", "energy_quality",
@@ -507,6 +510,13 @@ def _safe_key(value: Any) -> str | None:
     """Bara korta koder (endpoint- och felnycklar), aldrig fri text."""
     text = str(value or "").strip().lower()
     return text if text and len(text) <= 60 and set(text) <= _SAFE_CODE else None
+
+
+def _status_code(value: Any) -> str:
+    """En statuskod från bilen som den kom (t.ex. CAR_IN_USE), eller en markering för annat."""
+    text = str(value).strip()
+    ok = text and len(text) <= 40 and all(ch.isascii() and (ch.isalnum() or ch in "_-.") for ch in text)
+    return text if ok else "(annat värde)"
 
 
 def _diag_vehicle(db: DbDep, principal: Principal, vehicle_id: uuid.UUID | None) -> Vehicle:
@@ -552,6 +562,9 @@ def build_diagnostics(db: DbDep, vehicle: Vehicle, *, days: int, now: Any) -> di
         label = f"obs-{n}"
         obs_ids[str(obs.id)] = label
         row = {"id": label, **{f: _diag_value(getattr(obs, f)) for f in _DIAG_OBS_FIELDS}}
+        for f in _DIAG_CODE_FIELDS:  # bilens statuskoder visas, fri text aldrig
+            if row[f] is not None:
+                row[f] = _status_code(row[f])
         row["errors_keys"] = sorted(k for k in (_safe_key(k) for k in (obs.errors or {})) if k)
         obs_out.append(row)
 

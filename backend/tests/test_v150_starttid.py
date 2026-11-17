@@ -270,7 +270,7 @@ def test_engine_start_is_fixed(db, user, vehicle, actor, trips):
     assert out["start_from_engine"] == 1
     trip = reload_trip(db, trip.id)
     fixed = trip.started_at
-    assert local(fixed) == local(at(-12.3)) and trip.start_time_quality == TimeQuality.REPORTED
+    assert local(fixed) == local(at(-12)) and trip.start_time_quality == TimeQuality.REPORTED
     # Ändrad historik: egna resor med kända tider (K4 skulle nu ge en annan tid) och nya avläsningar.
     known_trips(trips, 6, km=8.0, minutes=30, first=datetime(2026, 10, 1, 6, 0, tzinfo=UTC))
     obs(db, vehicle, -11, -3, engine=False, engine_ts=-11.5)
@@ -313,7 +313,7 @@ def test_corrections_afterwards_respect_the_locks(db, user, vehicle, actor):
     assert start_time.engine_plan(db, vehicle.id) == []
     # Importerad resa: rörs inte.
     other = ARR - timedelta(days=1)
-    imported = engine_trip(db, vehicle, user, ended=other, source=TripSource.VOLVO_EXPORT, odo_start=60000)
+    imported = engine_trip(db, vehicle, user, ended=other, source=TripSource.VOLVO_IMPORT, odo_start=60000)
     assert start_time.engine_plan(db, vehicle.id) == []
     assert reload_trip(db, imported.id).started_at is None
     # Stängd månad: rörs inte, inte heller en resa som skulle flytta dit.
@@ -332,8 +332,8 @@ def test_k4_estimate_is_replaced_afterwards(db, user, vehicle, actor):
     assert reload_trip(db, trip.id).start_time_quality == TimeQuality.ESTIMATED
     assert start_time.fill_from_engine(db, vehicle.id) == 1
     trip = reload_trip(db, trip.id)
-    assert trip.start_time_quality == TimeQuality.REPORTED and local(trip.started_at) == local(at(-12.3))
-    assert start_time.display(trip, TZ) == local(at(-12.3))
+    assert trip.start_time_quality == TimeQuality.REPORTED and local(trip.started_at) == local(at(-12))
+    assert start_time.display(trip, TZ) == local(at(-12))
 
 
 def test_merge_keeps_the_fixed_start(db, user, vehicle, actor):
