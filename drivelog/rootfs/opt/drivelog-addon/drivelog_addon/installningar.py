@@ -2,8 +2,8 @@
 
 Supervisor skriver filen före varje start utifrån schemat i config.yaml. Här görs de
 kontroller som schemat inte klarar: att domänen är ett riktigt värdnamn, att STRATO-uppgifterna
-finns när DynDNS är påslaget och liknande. Felmeddelandena är skrivna för ägaren och innehåller
-aldrig lösenord.
+finns när DynDNS är påslaget, att de extra domänerna går att skriva in i Caddyfilen utan risk och
+liknande. Felmeddelandena är skrivna för ägaren och innehåller aldrig lösenord.
 """
 
 from __future__ import annotations
@@ -25,10 +25,28 @@ LOGGNIVAER = {
 _ETIKETT = re.compile(r"^(?!-)[a-z0-9-]{1,63}(?<!-)$")
 MINSTA_LOSENORD = 12
 _EPOST = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+# Värden bakom en extra domän: 127.0.0.1 eller ett container-/DNS-namn på Dockers nät (t.ex.
+# "transcribe"). Strikt eftersom namnet skrivs in i Caddyfilen: inget schema, ingen sökväg, inga
+# mellanslag, klamrar eller radbrytningar.
+_EXTRA_VARD = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,62}$")
+_EXTRA_PORT = re.compile(r"^[0-9]{1,5}$")
 
 
 class OgiltigaInstallningar(ValueError):
     """Inställningarna går inte att använda. Meddelandet visas i tilläggets logg."""
+
+
+@dataclass(frozen=True)
+class ExtraDoman:
+    """En extra domän som Caddy hämtar certifikat för och skickar vidare till en annan tjänst."""
+
+    doman: str
+    vard: str
+    port: int
+
+    @property
+    def uppstrom(self) -> str:
+        return f"{self.vard}:{self.port}"
 
 
 @dataclass(frozen=True)
@@ -40,6 +58,7 @@ class Installningar:
     strato_dyndns_user: str | None = None
     strato_dyndns_password: str | None = field(default=None, repr=False)
     log_level: str = "info"
+    extra_domains: tuple[ExtraDoman, ...] = ()
     varningar: tuple[str, ...] = ()
     # Varför administratörsuppgifterna inte kan användas (ogiltig adress, för kort lösenord).
     # Stoppar inte starten: finns redan ett konto ska DriveLog starta som vanligt.
@@ -60,8 +79,10 @@ class Installningar:
         return LOGGNIVAER[self.log_level]
 
 
-def normalisera_doman(varde: str) -> str:
-    """Gör om t.ex. ``https://DriveLog.smgd.se/`` till ``drivelog.smgd.se`` och kontrollerar den."""
+def normalisera_doman(varde: str, nyckel: str = "domain") -> str:
+    """Gör om t.ex. ``https://DriveLog.smgd.se/`` till ``drivelog.smgd.se`` och kontrollerar den.
+
+    ``nyckel`` är inställningen som nämns i felmeddelandena."""
     doman = (varde or "").strip().lower()
     for prefix in ("https://", "http://"):
         if doman.startswith(prefix):
@@ -73,7 +94,7 @@ def normalisera_doman(varde: str) -> str:
         )
     if "/" in doman or ":" in doman or "@" in doman:
         raise OgiltigaInstallningar(
-            f"'domain' ska bara vara ett värdnamn som drivelog.smgd.se – utan sökväg eller port (fick '{doman}')."
+            f"'{nyckel}' ska bara vara ett värdnamn som drivelog.smgd.se – utan sökväg eller port (fick '{doman}')."
         )
     try:
         ipaddress.ip_address(doman)
@@ -81,7 +102,7 @@ def normalisera_doman(varde: str) -> str:
         pass
     else:
         raise OgiltigaInstallningar(
-            "'domain' måste vara ett domännamn, inte en IP-adress – certifikatet utfärdas för ett namn."
+            f"'{nyckel}' måste vara ett domännamn, inte en IP-adress – certifikatet utfärdas för ett namn."
         )
     if doman == "localhost":
         return doman
@@ -90,7 +111,7 @@ def normalisera_doman(varde: str) -> str:
             f"'{doman}' är inte ett fullständigt domännamn. Ange t.ex. drivelog.smgd.se."
         )
     etiketter = doman.split(".")
-    if not all(_ETIKETT.match(e) for e in etiketter) or etiketter[-1].isdigit():
+    if not all(_ETIKETT.fullmatch(e) for e in etiketter) or etiketter[-1].isdigit():
         raise OgiltigaInstallningar(
             f"'{doman}' är inte ett giltigt domännamn (bara a–z, 0–9 och bindestreck, punkt mellan delarna)."
         )
@@ -105,6 +126,61 @@ def _text(data: dict, nyckel: str) -> str | None:
         raise OgiltigaInstallningar(f"Inställningen '{nyckel}' ska vara text.")
     varde = varde.strip()
     return varde or None
+
+
+def _extra_domaner(data: dict, huvuddoman: str) -> tuple[ExtraDoman, ...]:
+    """Kontrollerar 'extra_domains': en lista med ``"<domän>=<värd>:<port>"``."""
+    lista = data.get("extra_domains")
+    if lista is None:
+        return ()
+    if not isinstance(lista, list) or not all(isinstance(rad, str) for rad in lista):
+        raise OgiltigaInstallningar(
+            "Inställningen 'extra_domains' ska vara en lista med rader som transcribe.smgd.se=transcribe:8080."
+        )
+    resultat: list[ExtraDoman] = []
+    sedda = {huvuddoman}
+    for rad in lista:
+        rad = rad.strip()
+        if not rad:
+            continue  # en tom rad betyder "inte ifyllt", som de andra fälten
+        doman, likhet, uppstrom = rad.partition("=")
+        vard, kolon, port = uppstrom.strip().lower().rpartition(":")
+        if not likhet or not kolon or not doman.strip():
+            raise OgiltigaInstallningar(
+                f"'extra_domains': '{rad}' ska skrivas <domän>=<värd>:<port>, t.ex. transcribe.smgd.se=transcribe:8080."
+            )
+        try:
+            doman = normalisera_doman(doman, "extra_domains")
+        except OgiltigaInstallningar as exc:
+            if "'extra_domains'" in str(exc):
+                raise
+            raise OgiltigaInstallningar(f"'extra_domains': {exc}") from None
+        if doman == "localhost":
+            raise OgiltigaInstallningar(
+                "'extra_domains': 'localhost' kan inte vara en extra domän – ange ett riktigt domännamn."
+            )
+        if doman == huvuddoman:
+            raise OgiltigaInstallningar(
+                f"'extra_domains': {doman} är redan DriveLogs egen domän ('domain') – en extra domän måste vara en annan."
+            )
+        if doman in sedda:
+            raise OgiltigaInstallningar(f"'extra_domains': {doman} står med mer än en gång.")
+        sedda.add(doman)
+        if vard == "localhost":
+            raise OgiltigaInstallningar(
+                f"'extra_domains': skriv 127.0.0.1 i stället för localhost ('{rad}')."
+            )
+        if not _EXTRA_VARD.fullmatch(vard):
+            raise OgiltigaInstallningar(
+                f"'extra_domains': värden i '{rad}' ska vara 127.0.0.1 eller namnet på en container, t.ex. "
+                "transcribe (bara a–z, 0–9, punkt, bindestreck och understreck – utan http:// och utan sökväg)."
+            )
+        if not _EXTRA_PORT.fullmatch(port) or not 1 <= int(port) <= 65535:
+            raise OgiltigaInstallningar(
+                f"'extra_domains': porten i '{rad}' ska vara ett tal mellan 1 och 65535."
+            )
+        resultat.append(ExtraDoman(doman=doman, vard=vard, port=int(port)))
+    return tuple(resultat)
 
 
 def tolka(data: dict) -> Installningar:
@@ -158,6 +234,8 @@ def tolka(data: dict) -> Installningar:
                 f"{doman}. STRATO vill normalt ha domänen i paketet som användarnamn."
             )
 
+    extra = _extra_domaner(data, doman)
+
     niva = (_text(data, "log_level") or "info").lower()
     if niva not in LOGGNIVAER:
         raise OgiltigaInstallningar(f"Okänd loggnivå '{niva}' (debug, info, warning eller error).")
@@ -170,6 +248,7 @@ def tolka(data: dict) -> Installningar:
         strato_dyndns_user=anvandare,
         strato_dyndns_password=strato_losenord,
         log_level=niva,
+        extra_domains=extra,
         varningar=tuple(varningar),
         adminproblem=adminproblem,
     )

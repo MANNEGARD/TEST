@@ -29,6 +29,7 @@ Den fullständiga guiden – STRATO, routern, notiser och felsökning – finns 
 | **STRATO-användarnamn** (`strato_dyndns_user`) | Domänen i ditt STRATO-paket, t.ex. `smgd.se`. |
 | **STRATO DynDNS-lösenord** (`strato_dyndns_password`) | DynDNS-lösenordet du har satt hos STRATO. |
 | **Loggnivå** (`log_level`) | `debug`, `info`, `warning` eller `error`. |
+| **Extra domäner** (`extra_domains`) | Fler tjänster på samma server, en rad per domän: `transcribe.smgd.se=transcribe:8080`. Se [Extra domäner](#extra-domäner-fler-tjänster-på-samma-server). Lämna tomt annars. |
 
 Tomma fält räknas som ej ifyllda. Kontot skapas **bara** härifrån: så länge det inte finns
 startar appen bara API:t internt, och loggen säger vad du ska fylla i – webbappen och proxyn
@@ -160,6 +161,30 @@ tjänst tillfrågas):
   Assistant** (*DriveLog: &lt;domän&gt; leder inte längre hem*). Den försvinner av sig själv när
   domänen leder hem igen. För det behöver appen åtkomst till Home Assistants API; den används
   bara till aviseringen.
+
+## Extra domäner (fler tjänster på samma server)
+
+Äger DriveLog port 80 och 443 kan appens inbyggda proxy (Caddy) även ta hand om andra tjänster
+på samma maskin: den hämtar ett certifikat för en extra domän och skickar trafiken vidare till
+tjänstens container. Fyll i **Extra domäner** (`extra_domains`) med en rad per domän:
+
+```
+transcribe.smgd.se=transcribe:8080
+```
+
+- Formen är `<domän>=<värd>:<port>`. Värden är namnet på den andra tjänstens container på
+  Dockers nät (eller `127.0.0.1`), utan `http://` och utan sökväg. Tjänsten bakom talar vanlig
+  HTTP; WebSockets fungerar.
+  I Home Assistant ligger appen på Supervisors interna nät och når andra appar på deras
+  värdnamn.
+- **Domänen måste peka hit** precis som DriveLogs egen (A-post, och ingen AAAA-post som pekar
+  någon annanstans), annars kan certifikatet inte hämtas. Den får inte vara samma som `domain`.
+- Den extra domänen får bara de allmänna säkerhetshuvudena (HSTS, `nosniff`, `Referrer-Policy`)
+  – inte DriveLogs spärr för mikrofon och kamera eller förbudet mot inramning. Det bestämmer
+  tjänsten själv.
+- Är en rad felaktig startar appen inte, och loggen säger vad som ska rättas.
+- På en egen server sköts det här av installationsraden med `--extra-doman`, se
+  [docs/installation.md](https://github.com/SMGD-MP/TEST/blob/HEAD/docs/installation.md#extra-domäner-fler-tjänster-på-samma-server).
 
 ## Säkerhetskopior och uppdateringar
 

@@ -3,6 +3,20 @@
 > Från 1.0.2 visar Home Assistant **Uppdatera** först när den nya versionen är färdigbyggd och
 > går att hämta – det går bra att trycka direkt.
 
+## 1.4.0
+
+- **Extra domäner – fler tjänster på samma server.** Den nya inställningen *Extra domäner*
+  (`extra_domains`) tar en rad per domän, t.ex. `transcribe.smgd.se=transcribe:8080`. Appens
+  proxy hämtar då certifikat även för den domänen och skickar trafiken vidare till den andra
+  tjänstens container (WebSockets fungerar). Den extra domänen får bara de allmänna
+  säkerhetshuvudena, inte DriveLogs spärr för mikrofon och kamera. En felaktig rad stoppar
+  starten med ett tydligt fel i loggen. Lämnas fältet tomt fungerar allt som förut.
+- **Installationsraden för egen server** har fått `--extra-doman <domän>=<värd>:<port>` (kan
+  upprepas) och `--utan-extra-doman`. Valet sparas och gäller även vid automatisk uppdatering.
+  Med extra domäner ansluts DriveLog till Docker-nätet `smgd`, där den andra tjänsten också
+  ska vara med. Se *Extra domäner* i `docs/installation.md`.
+- **Domänen kontrolleras hårdare.** En domän med en radbrytning inuti godtas inte längre.
+
 ## 1.3.1
 
 Säkerhetsrättningar efter en genomgång av hela appen.

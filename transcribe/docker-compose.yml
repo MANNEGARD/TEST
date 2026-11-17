@@ -1,0 +1,41 @@
+# SMGD Transkribering bredvid DriveLog på samma server.
+#
+# DriveLogs inbyggda Caddy tar emot https://transcribe.smgd.se och skickar trafiken hit via
+# Docker-nätverket "smgd" (DriveLog 1.4.0: --extra-doman transcribe.smgd.se=transcribe:8080).
+#
+#   cp .env.example .env      # fyll i nycklarna
+#   docker network create smgd 2>/dev/null || true
+#   docker compose pull && docker compose up -d
+#
+# Utan DriveLog på servern: docker compose -f docker-compose.yml -f docker-compose.fristaende.yml up -d
+name: transcribe
+
+services:
+  transcribe:
+    # Färdig avbild från GitHub (byggs av .github/workflows/transcribe.yml). Bygga själv:
+    #   docker build -t ghcr.io/smgd-mp/transcribe:latest .
+    image: ghcr.io/smgd-mp/transcribe:latest
+    container_name: transcribe
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - transcribe-data:/data
+    networks:
+      - smgd
+    # Inga publicerade portar: tjänsten nås bara genom Caddy på nätverket "smgd".
+    # Skyddar DriveLog på en liten VPS (4 GB) om något skulle skena.
+    mem_limit: 768m
+    cpus: 1.5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  transcribe-data:
+
+networks:
+  smgd:
+    external: true
+    name: smgd

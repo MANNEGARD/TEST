@@ -20,6 +20,9 @@ configuration:
   log_level:
     name: "Log level"
     description: "How much the app's start program and the API write to the log."
+  extra_domains:
+    name: "Extra domains"
+    description: "More services on the same server: one line per domain, e.g. transcribe.example.com=transcribe:8080. The app obtains a certificate for the domain and forwards it to the host and port. The domain must point here. Otherwise leave empty."
 network:
   80/tcp: "HTTP – certificate validation and redirect to HTTPS"
   443/tcp: "HTTPS – DriveLog"

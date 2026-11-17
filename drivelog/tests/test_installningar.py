@@ -106,3 +106,63 @@ def test_las_fil(tmp_path):
         installningar.las(fil)
     fil.write_text(json.dumps(GRUND), encoding="utf-8")
     assert installningar.las(fil).domain == "drivelog.example.se"
+
+
+def test_nyrad_i_domanen_avvisas():
+    # "$" i ett reguljärt uttryck godtar en avslutande radbrytning – domänen hamnar i Caddyfilen.
+    with pytest.raises(OgiltigaInstallningar):
+        normalisera_doman("drivelog\n.example.se")
+
+
+def test_extra_domaner():
+    inst = tolka({**GRUND, "extra_domains": [
+        "Transcribe.Example.se=Transcribe:8080", " b.example.se = 127.0.0.1:9000 ", "",
+    ]})
+    assert [(e.doman, e.uppstrom) for e in inst.extra_domains] == [
+        ("transcribe.example.se", "transcribe:8080"), ("b.example.se", "127.0.0.1:9000"),
+    ]
+    assert tolka(GRUND).extra_domains == ()
+    assert tolka({**GRUND, "extra_domains": []}).extra_domains == ()
+
+
+@pytest.mark.parametrize(
+    ("rad", "text"),
+    [
+        ("transcribe.example.se", "<domän>=<värd>:<port>"),
+        ("transcribe.example.se=transcribe", "<domän>=<värd>:<port>"),
+        ("=transcribe:8080", "<domän>=<värd>:<port>"),
+        ("drivelog.example.se=transcribe:8080", "DriveLogs egen domän"),
+        ("localhost=transcribe:8080", "localhost"),
+        ("transcribe=transcribe:8080", "fullständigt domännamn"),
+        ("transcribe.example.se:443=transcribe:8080", "extra_domains"),
+        ("10.0.0.1=transcribe:8080", "IP-adress"),
+        ("transcribe.example.se=localhost:8080", "127.0.0.1"),
+        ("transcribe.example.se=http://transcribe:8080", "värden"),
+        ("transcribe.example.se=transcribe/app:8080", "värden"),
+        ("transcribe.example.se=trans cribe:8080", "värden"),
+        ("transcribe.example.se=transcribe{:8080", "värden"),
+        ("transcribe.example.se=transcribe\n}:8080", "värden"),
+        ("transcribe.example.se=-transcribe:8080", "värden"),
+        ("transcribe.example.se=" + "x" * 64 + ":8080", "värden"),
+        ("transcribe.example.se=transcribe:0", "porten"),
+        ("transcribe.example.se=transcribe:65536", "porten"),
+        ("transcribe.example.se=transcribe:80a", "porten"),
+        ("transcribe.example.se=transcribe:8080\n", None),  # yttre blanktecken tas bort
+        ("transcribe.example.se=transcribe:８０", "porten"),  # bara ASCII-siffror
+    ],
+)
+def test_ogiltiga_extra_domaner(rad, text):
+    if text is None:
+        assert tolka({**GRUND, "extra_domains": [rad]}).extra_domains[0].port == 8080
+        return
+    with pytest.raises(OgiltigaInstallningar, match="extra_domains") as fel:
+        tolka({**GRUND, "extra_domains": [rad]})
+    assert text in str(fel.value)
+
+
+def test_extra_domaner_dubbletter_och_fel_typ():
+    with pytest.raises(OgiltigaInstallningar, match="mer än en gång"):
+        tolka({**GRUND, "extra_domains": ["a.example.se=x:1", "A.example.se=y:2"]})
+    for fel in ("a.example.se=x:1", [1], {"a.example.se": "x:1"}):
+        with pytest.raises(OgiltigaInstallningar, match="extra_domains"):
+            tolka({**GRUND, "extra_domains": fel})

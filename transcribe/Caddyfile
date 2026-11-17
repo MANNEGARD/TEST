@@ -1,0 +1,11 @@
+# Används bara med docker-compose.fristaende.yml (ingen DriveLog på servern).
+{$TRANSCRIBE_DOMAIN} {
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		-Server
+	}
+	reverse_proxy transcribe:8080 {
+		header_up X-Forwarded-For {remote_host}
+	}
+}
