@@ -2,13 +2,19 @@
 import fs from "node:fs";
 import WebSocket from "ws";
 import { config } from "../config.js";
-import { getKey } from "../keys.js";
+import { getKey, MissingKeyError } from "../keys.js";
 import type { Word } from "../merge.js";
 
 /** Nyckeln läses i varje anrop så att en nyckel som sparas i gränssnittet gäller direkt. */
 export const deepgramEnabled = (): boolean => getKey("deepgram") !== "";
 
 const DENIED = "Deepgram nekade nyckeln. Kontrollera den under Administration.";
+const MISSING = "Deepgram-nyckeln saknas. Lägg in den under Administration.";
+
+/** Tar bort nyckeln ur en text från tjänsten innan den visas eller loggas. */
+function hideKey(text: string, key: string): string {
+  return key ? text.split(key).join("***") : text;
+}
 
 interface DgWord {
   word: string;
@@ -92,7 +98,8 @@ export class DeepgramLive {
           this.cb.onInterim(words);
         }
       } else if (msg.type === "Error") {
-        this.cb.onError(String((msg as { description?: string }).description ?? "Okänt fel från Deepgram"));
+        const description = String((msg as { description?: string }).description ?? "Okänt fel från Deepgram");
+        this.cb.onError(hideKey(description, getKey("deepgram")));
       }
     });
     this.ws.on("unexpected-response", (_req, res) => {
@@ -174,11 +181,13 @@ export async function deepgramFile(file: string, contentType: string, keyterms: 
     utterances: "true",
   });
   for (const k of keyterms.slice(0, 50)) params.append("keyterm", k);
+  const key = getKey("deepgram");
+  if (!key) throw new MissingKeyError(MISSING);
   const size = fs.statSync(file).size;
   const res = await fetch(`${config.deepgramUrl}/v1/listen?${params}`, {
     method: "POST",
     headers: {
-      Authorization: `Token ${getKey("deepgram")}`,
+      Authorization: `Token ${key}`,
       "Content-Type": contentType,
       "Content-Length": String(size),
     },
@@ -187,12 +196,13 @@ export async function deepgramFile(file: string, contentType: string, keyterms: 
     signal: AbortSignal.timeout(30 * 60_000),
   } as RequestInit);
   if (!res.ok) {
-    const body = (await res.text()).slice(0, 300);
+    // Svarstexten tas inte med: den kan innehålla vad som helst, i värsta fall nyckeln.
+    await res.body?.cancel().catch(() => undefined);
     if (res.status === 402) throw new QuotaError("Deepgram-krediten är slut.");
     if (res.status === 401 || res.status === 403) throw new Error(DENIED);
     // Okända söktermer (keyterm) för språket ska inte stoppa jobbet – försök igen utan.
     if (res.status === 400 && keyterms.length) return deepgramFile(file, contentType, []);
-    throw new Error(`Deepgram svarade ${res.status}: ${body}`);
+    throw new Error(`Deepgram svarade ${res.status}.`);
   }
   const json = (await res.json()) as {
     results?: { channels?: Array<{ alternatives?: Array<{ words?: DgWord[] }> }> };

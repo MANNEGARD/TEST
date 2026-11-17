@@ -83,7 +83,18 @@ class LiveSession {
         // Oväntat stängd (nätverk o.d.) mitt i inspelningen: koppla upp igen en gång per 5 s.
         if (!this.stopping && !this.closed && !this.dgFailed) {
           setTimeout(() => {
-            if (!this.stopping && !this.closed) this.connectDeepgram();
+            if (this.stopping || this.closed || this.dgFailed) return;
+            // Nyckeln kan ha tagits bort under Administration medan inspelningen pågick.
+            if (!deepgramEnabled()) {
+              this.dgFailed = true;
+              this.log.warn({ id: this.id }, "Deepgram-nyckeln saknas, live-texten kopplas inte upp igen");
+              send(this.socket, {
+                type: "notice",
+                message: "Live-texten är avstängd eftersom Deepgram-nyckeln togs bort. Ljudet spelas fortfarande in.",
+              });
+              return;
+            }
+            this.connectDeepgram();
           }, 5000);
         }
       },

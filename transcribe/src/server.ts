@@ -11,6 +11,7 @@ import { db } from "./db.js";
 import { deepgramEnabled } from "./engines/deepgram.js";
 import { whisperEnabled } from "./engines/whisper.js";
 import { initJobs } from "./jobs.js";
+import { setKeyLogger } from "./keys.js";
 import { registerLive } from "./live.js";
 
 const app = Fastify({
@@ -93,6 +94,7 @@ app.setNotFoundHandler((req, reply) => {
 });
 
 fs.mkdirSync(config.dataDir, { recursive: true });
+setKeyLogger(app.log);
 
 // Första start: ingen användare finns – skapa en inbjudan för administratören och skriv ut den.
 const users = (db.prepare("SELECT COUNT(*) AS n FROM users").get() as { n: number }).n;

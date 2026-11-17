@@ -943,10 +943,20 @@ async function renderNew(resumeId) {
         context,
         h("p", { class: "hint" }, "Kommaseparerade ord som förekommer i samtalet. Ger rätt stavning av namn och begrepp i slutversionen."),
         err,
-        h("div", { class: "row", style: "margin-top:20px" }, startBtn, h("span", { class: "hint" }, `Max ${state.me.limits.maxRecordingMinutes} min. Live-texten är ett utkast – en exakt slutversion skapas när du stoppar.`)),
+        h("div", { class: "row", style: "margin-top:20px" }, startBtn, h("span", { class: "hint" }, recordingHint())),
       ),
     ),
   );
+}
+
+// Texten under Starta-knappen lovar bara det som tjänsterna som är inlagda kan ge.
+function recordingHint() {
+  const f = state.me.features;
+  const max = `Max ${state.me.limits.maxRecordingMinutes} min.`;
+  if (f.live && f.final) return `${max} Live-texten är ett utkast – en exakt slutversion skapas när du stoppar.`;
+  if (f.final) return `${max} En exakt slutversion skapas när du stoppar.`;
+  if (f.live) return `${max} Live-texten är ett utkast – den slutliga texten skapas när du stoppar.`;
+  return max;
 }
 
 function renderRecording(rec) {

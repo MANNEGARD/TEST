@@ -37,7 +37,12 @@ test("upptagen: ledig, pågående inspelning och bearbetning", () => {
   addTranscript(db, "misslyckad-transkr", "failed", 0);
   assert.deepEqual(cli("upptagen"), { code: 0, out: "ledig\n", err: "" });
 
-  addTranscript(db, "pagaende-inspelning", "recording", 1);
+  // Gränsen är 2 minuter sedan senaste aktivitet.
+  addTranscript(db, "tre-minuter-sedan", "recording", 3);
+  assert.deepEqual(cli("upptagen"), { code: 0, out: "ledig\n", err: "" });
+  db.prepare("DELETE FROM transcripts WHERE id = 'tre-minuter-sedan'").run();
+
+  addTranscript(db, "pagaende-inspelning", "recording", 1.5);
   assert.deepEqual(cli("upptagen"), { code: 10, out: "upptagen: 1 inspelning pågår\n", err: "" });
 
   addTranscript(db, "bearbetas-nummer-1", "processing", 30);

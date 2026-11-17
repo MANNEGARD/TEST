@@ -17,6 +17,7 @@ import { config } from "./config.js";
 import { addUsage, audioDir, db, now, parseJson, reindex, type Segment, type TranscriptRow } from "./db.js";
 import { deepgramEnabled, deepgramFile } from "./engines/deepgram.js";
 import { buildPrompt, RateLimitError, whisperEnabled, whisperFile } from "./engines/whisper.js";
+import { MissingKeyError } from "./keys.js";
 import {
   assignSpeakers,
   cleanWhisper,
@@ -215,7 +216,9 @@ async function withRetry<T>(id: string, part: string, fn: () => Promise<T>): Pro
         continue;
       }
       attempt++;
-      if (attempt >= 4 || (e instanceof Error && /nekade nyckeln/.test(e.message))) throw e;
+      // En nyckel som saknas eller nekas blir inte bättre av att försöka igen.
+      if (attempt >= 4 || e instanceof MissingKeyError) throw e;
+      if (e instanceof Error && /nekade nyckeln/.test(e.message)) throw e;
       await sleep(5000 * 2 ** attempt);
     }
   }

@@ -185,6 +185,17 @@ s_atergang_till_v100_utan_etikett() {
   ingen_markering
 }
 
+s_v100_ingen_ny_utan_etikett() {
+  # Innan 1.1.0 har getts ut är latest samma avbild som 1.0.0 (utan etikett): inget nytt, inget fel.
+  ny_varld v100-samma
+  installation 1.0.0-utan
+  uppdatera --tidsstyrd
+  kod_ar 0
+  ut_har "Ingen ny version (kör 1.0.0, erbjuds 1.0.0)."
+  anrop_saknar "docker stop"
+  lage_saknar senaste_fel
+}
+
 s_container_stoppad() {
   ny_varld stoppad
   installation 1.1.0
@@ -596,6 +607,7 @@ scenario "hänger / unhealthy → återgång" s_hanger_och_sjuk_atergang
 scenario "upptagen → väntar" s_upptagen_vantar
 scenario "1.0.0 utan etikett och utan 'upptagen'" s_v100_utan_etikett_och_utan_upptagen
 scenario "återgång till 1.0.0 utan etikett" s_atergang_till_v100_utan_etikett
+scenario "1.0.0 som latest (utan etikett) är ingen ny version" s_v100_ingen_ny_utan_etikett
 scenario "containern stoppad" s_container_stoppad
 scenario "latest utan giltig etikett" s_latest_utan_etikett
 scenario "konstiga etiketter ändrar ingenting" s_konstiga_etiketter

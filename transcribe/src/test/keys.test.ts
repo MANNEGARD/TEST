@@ -269,4 +269,95 @@ test("validering av inklistrad nyckel", () => {
   }
   assert.deepEqual(keys.validateKey("a".repeat(512)), { value: "a".repeat(512) });
   assert.deepEqual(keys.validateKey("12345678"), { value: "12345678" });
+  // Gränserna: 7 tecken är för kort, 8 räcker; 512 räcker, 513 är för långt.
+  assert.ok("error" in keys.validateKey("1234567"));
+  assert.ok("error" in keys.validateKey(` ${"b".repeat(513)} `));
+  assert.deepEqual(keys.validateKey(` ${"b".repeat(512)} `), { value: "b".repeat(512) });
+});
+
+test("hint: de fyra sista tecknen visas först när nyckeln är minst 20 tecken", () => {
+  // Provet före lämnade en skadad secret.key; börja om med en ny.
+  fs.rmSync(secretFile());
+  keys.clearKeyCache();
+  keys.setKey("whisper", "prov-nitton-tecken1", userId); // 19 tecken
+  assert.equal(keys.status("whisper").hint, "");
+  keys.setKey("whisper", "prov-tjugo-tecken-AB", userId); // 20 tecken
+  assert.equal(keys.status("whisper").hint, "n-AB");
+  keys.deleteKey("whisper");
+});
+
+test("felmeddelanden från motorerna innehåller aldrig nyckeln, inte ens om tjänsten ekar den", async () => {
+  const audio = path.join(dir, "eko.flac");
+  fs.writeFileSync(audio, Buffer.alloc(64));
+  keys.setKey("deepgram", UI_DG, userId);
+  keys.setKey("whisper", UI_WH, userId);
+  dg.mode = "echo";
+  wh.mode = "echo";
+  try {
+    await assert.rejects(deepgram.deepgramFile(audio, "audio/flac"), (e: Error) => {
+      assert.equal(e.message, "Deepgram svarade 500.");
+      return true;
+    });
+    await assert.rejects(whisper.whisperFile(audio, 0, ""), (e: Error) => {
+      // Adressen pekar inte på groq.com i det här provet, därför det allmänna namnet.
+      assert.equal(e.message, "Whisper-tjänsten svarade 500.");
+      return true;
+    });
+    // Låtsastjänsten ekade verkligen nyckeln, så provet visar något.
+    assert.equal(dg.seen.at(-1)!.authorization, `Token ${UI_DG}`);
+  } finally {
+    dg.mode = "normal";
+    wh.mode = "normal";
+    keys.deleteKey("whisper");
+  }
+});
+
+test("huvudnyckelfilen: datakatalog som inte går att skriva till ger ett begripligt fel", () => {
+  const blocker = path.join(dir, "inte-en-katalog");
+  fs.writeFileSync(blocker, "x");
+  // Föräldern är en vanlig fil, så varken katalog eller fil kan skapas (fungerar även som root).
+  assert.throws(() => keys.loadMasterKey(path.join(blocker, "data", "secret.key"), true), (e: Error) => {
+    assert.ok(e instanceof keys.KeyStoreError);
+    assert.equal(e.message, "Datakatalogen går inte att skriva till. Nyckeln kunde inte sparas.");
+    return true;
+  });
+  assert.equal(keys.loadMasterKey(path.join(blocker, "data", "secret.key"), false), null);
+});
+
+test("huvudnyckelfilen skapas hel och utan kvarlämnade tillfälliga filer; en befintlig skrivs aldrig över", () => {
+  const d = path.join(dir, "huvud");
+  const file = path.join(d, "secret.key");
+  // En tillfällig fil från ett tidigare avbrott stör inte och är inte secret.key.
+  fs.mkdirSync(d);
+  fs.writeFileSync(`${file}.tmp-avbruten`, "");
+  const created = keys.loadMasterKey(file, true)!;
+  assert.equal(created.length, 32);
+  assert.ok(fs.readFileSync(file).equals(created));
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  assert.deepEqual(fs.readdirSync(d).sort(), ["secret.key", "secret.key.tmp-avbruten"]);
+  assert.ok(keys.loadMasterKey(file, true)!.equals(created), "befintlig fil läses, skapas inte om");
+  assert.ok(fs.readFileSync(file).equals(created));
+});
+
+test("huvudnyckelfilen med för vida rättigheter snävas in till 0600 med en varning", () => {
+  const d = path.join(dir, "vid");
+  fs.mkdirSync(d);
+  const file = path.join(d, "secret.key");
+  const content = crypto.randomBytes(32);
+  fs.writeFileSync(file, content);
+  fs.chmodSync(file, 0o644);
+  const warnings: string[] = [];
+  keys.setKeyLogger({ warn: (_obj, msg) => warnings.push(msg) });
+  try {
+    assert.ok(keys.loadMasterKey(file, false)!.equals(content));
+  } finally {
+    keys.setKeyLogger({ warn: () => undefined });
+  }
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  assert.ok(fs.readFileSync(file).equals(content), "innehållet är orört");
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0]!, /secret\.key kunde läsas av andra konton/);
+  // Rätt rättigheter från början: ingen varning.
+  assert.ok(keys.loadMasterKey(file, false));
+  assert.equal(warnings.length, 1);
 });

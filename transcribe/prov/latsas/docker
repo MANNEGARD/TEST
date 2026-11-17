@@ -19,7 +19,8 @@ printf '%s\n' "docker $*" >>"$T/anrop.log"
 mkdir -p "$T/bilder" "$T/container" "$T/fel"
 touch "$T/taggar" "$T/fjarr"
 
-ETIKETT='{{index .Config.Labels "org.opencontainers.image.version"}}'
+# Tål en avbild utan några etiketter alls (då är .Config.Labels tom).
+ETIKETT='{{with .Config.Labels}}{{index . "org.opencontainers.image.version"}}{{end}}'
 TILLSTAND='{{.State.Status}} {{.RestartCount}} {{if .State.Health}}{{.State.Health.Status}}{{else}}ingen{{end}}'
 MONTERING='{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}'
 

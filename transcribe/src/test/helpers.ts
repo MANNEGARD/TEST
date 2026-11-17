@@ -7,6 +7,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { WebSocketServer } from "ws";
 
 /** transcribe/ (proven körs från dist/test/). */
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -27,7 +28,12 @@ export async function freePort(): Promise<number> {
   });
 }
 
-export type MockMode = "normal" | "503" | "403" | "hang" | "drop" | "redirect";
+/**
+ * "echo" är ett påhittat värsta fall, inte något de riktiga tjänsterna är kända för: status 500
+ * med det mottagna Authorization-huvudet i svarstexten. Används för att visa att nyckeln aldrig
+ * följer med ett felmeddelande.
+ */
+export type MockMode = "normal" | "503" | "403" | "hang" | "drop" | "redirect" | "echo";
 
 export interface SeenRequest {
   method: string;
@@ -45,6 +51,11 @@ export interface MockService {
   /** Godta anrop helt utan nyckel (som en egen Whisper-server utan inloggning). */
   open: boolean;
   seen: SeenRequest[];
+  /**
+   * Live-anslutningen (WebSocket) tas emot och stängs av låtsastjänsten efter så här många
+   * millisekunder, som ett avbrott efter en stund. 0 (standard): anslutningen bryts direkt.
+   */
+  wsCloseAfterMs: number;
   close(): Promise<void>;
 }
 
@@ -74,6 +85,7 @@ export async function startMock(kind: "deepgram" | "whisper", prefix = ""): Prom
     valid: new Set(),
     open: false,
     seen: [],
+    wsCloseAfterMs: 0,
     close: async () => {
       for (const s of sockets) s.destroy();
       await new Promise<void>((r) => server.close(() => r()));
@@ -94,6 +106,7 @@ export async function startMock(kind: "deepgram" | "whisper", prefix = ""): Prom
       if (mock.mode === "drop") return void req.socket.destroy();
       if (mock.mode === "503") return json(res, 503, { error: "otillgänglig" });
       if (mock.mode === "403") return json(res, 403, { error: "förbjuden" });
+      if (mock.mode === "echo") return json(res, 500, { error: `echo: ${auth}` });
       if (mock.mode === "redirect") {
         res.writeHead(302, { Location: `${mock.url}/omdirigerad` });
         return void res.end();
@@ -119,10 +132,15 @@ export async function startMock(kind: "deepgram" | "whisper", prefix = ""): Prom
     s.on("close", () => sockets.delete(s));
   });
   // Live-anslutningen: anteckna huvudet och bryt (motsvarar ett nätavbrott).
-  server.on("upgrade", (req, socket) => {
+  const wss = new WebSocketServer({ noServer: true });
+  server.on("upgrade", (req, socket, head) => {
     const url = new URL(req.url ?? "/", "http://x");
     mock.seen.push({ method: "GET", path: url.pathname, authorization: req.headers.authorization ?? "", upgrade: true });
-    socket.destroy();
+    if (mock.wsCloseAfterMs <= 0) return void socket.destroy();
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      ws.on("message", () => undefined);
+      setTimeout(() => ws.close(1011, "avbrott"), mock.wsCloseAfterMs);
+    });
   });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
   mock.port = (server.address() as net.AddressInfo).port;

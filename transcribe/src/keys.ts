@@ -44,6 +44,17 @@ export interface Check {
 /** Fel som gör att nycklar inte kan sparas (t.ex. en skadad secret.key). */
 export class KeyStoreError extends Error {}
 
+/** En nyckel som behövs saknas (t.ex. borttagen under Administration mitt i ett jobb). */
+export class MissingKeyError extends Error {}
+
+type Warn = (obj: Record<string, unknown>, msg: string) => void;
+let warn: Warn = (obj, msg) => console.warn(msg, obj);
+
+/** Låter servern ta emot varningar från nyckellagringen i sin vanliga logg. */
+export function setKeyLogger(logger: { warn: Warn }): void {
+  warn = (obj, msg) => logger.warn(obj, msg);
+}
+
 const IV_BYTES = 12;
 const TAG_BYTES = 16;
 const MASTER_BYTES = 32;
@@ -84,43 +95,115 @@ export function clearKeyCache(): void {
 }
 
 /**
- * Läser huvudnyckeln. Med `create` skapas filen (0600, exklusivt) om den saknas; annars ges
- * null. En fil med fel längd skrivs aldrig över utan ger KeyStoreError.
+ * Läser en befintlig huvudnyckelfil. Kan andra konton läsa den snävas rättigheterna in till 0600
+ * (innehållet skrivs aldrig om) och en varning loggas. Kastar ENOENT om filen saknas.
  */
-function masterKey(create: boolean): Buffer | null {
-  if (master) return master;
-  const file = secretKeyFile();
+function readMasterFile(file: string): Buffer {
+  const fd = fs.openSync(file, "r");
+  try {
+    const mode = fs.fstatSync(fd).mode & 0o777;
+    if (mode & 0o077) {
+      let fixed = true;
+      try {
+        fs.fchmodSync(fd, 0o600);
+      } catch {
+        fixed = false;
+      }
+      warn(
+        { file, mode: mode.toString(8) },
+        fixed
+          ? "Filen secret.key kunde läsas av andra konton på servern. Rättigheterna har ändrats till 0600."
+          : "Filen secret.key kan läsas av andra konton på servern. Ändra rättigheterna till 0600.",
+      );
+    }
+    return fs.readFileSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+const NOT_WRITABLE = "Datakatalogen går inte att skriva till. Nyckeln kunde inte sparas.";
+
+/**
+ * Skapar huvudnyckelfilen så att den antingen finns hel eller inte alls: de 32 bytena skrivs
+ * först till en tillfällig fil (0600) som sedan länkas in under det riktiga namnet. Länkningen
+ * misslyckas om filen redan finns (då används den), så en befintlig fil skrivs aldrig över.
+ */
+function createMasterFile(file: string): Buffer {
+  const fresh = crypto.randomBytes(MASTER_BYTES);
+  const tmp = `${file}.tmp-${crypto.randomBytes(6).toString("hex")}`;
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const fd = fs.openSync(tmp, "wx", 0o600);
+    try {
+      fs.fchmodSync(fd, 0o600);
+      if (fs.writeSync(fd, fresh) !== MASTER_BYTES) throw new Error("Ofullständig skrivning");
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+    try {
+      fs.linkSync(tmp, file);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "EEXIST") return readMasterFile(file); // en annan process hann före
+      if (code !== "EPERM" && code !== "ENOTSUP" && code !== "EOPNOTSUPP") throw err;
+      // Filsystemet saknar hårda länkar: skapa filen exklusivt och skriv direkt i den.
+      let direct: number;
+      try {
+        direct = fs.openSync(file, "wx", 0o600);
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code === "EEXIST") return readMasterFile(file);
+        throw e;
+      }
+      try {
+        fs.writeSync(direct, fresh);
+        fs.fsyncSync(direct);
+      } finally {
+        fs.closeSync(direct);
+      }
+    }
+    return fresh;
+  } catch (err) {
+    if (err instanceof KeyStoreError) throw err;
+    throw new KeyStoreError(NOT_WRITABLE);
+  } finally {
+    try {
+      fs.rmSync(tmp, { force: true });
+    } catch {
+      /* den tillfälliga filen är redan borta eller går inte att ta bort */
+    }
+  }
+}
+
+/**
+ * Läser eller (med `create`) skapar huvudnyckeln i `file`. Utan `create` ges null om filen
+ * saknas. En fil med fel längd skrivs aldrig över utan ger KeyStoreError.
+ */
+export function loadMasterKey(file: string, create: boolean): Buffer | null {
   let buf: Buffer;
   try {
-    buf = fs.readFileSync(file);
+    buf = readMasterFile(file);
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
+    const code = (e as NodeJS.ErrnoException).code;
+    // ENOTDIR: en del av sökvägen är ingen katalog, så filen finns inte.
+    if (code !== "ENOENT" && code !== "ENOTDIR") {
       throw new KeyStoreError("Filen secret.key i datakatalogen går inte att läsa. Nycklar kan inte sparas.");
     }
     if (!create) return null;
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    const fresh = crypto.randomBytes(MASTER_BYTES);
-    let fd: number | null = null;
-    try {
-      fd = fs.openSync(file, "wx", 0o600);
-      fs.fchmodSync(fd, 0o600);
-      fs.writeSync(fd, fresh);
-      fs.fsyncSync(fd);
-      buf = fresh;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
-      // En annan process hann skapa filen: använd den.
-      buf = fs.readFileSync(file);
-    } finally {
-      if (fd !== null) fs.closeSync(fd);
-    }
+    buf = createMasterFile(file);
   }
   if (buf.length !== MASTER_BYTES) {
     throw new KeyStoreError(
       "Filen secret.key i datakatalogen är skadad (fel längd). Nycklar kan inte sparas förrän den är åtgärdad.",
     );
   }
-  master = buf;
+  return buf;
+}
+
+function masterKey(create: boolean): Buffer | null {
+  if (master) return master;
+  master = loadMasterKey(secretKeyFile(), create);
   return master;
 }
 

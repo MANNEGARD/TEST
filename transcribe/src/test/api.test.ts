@@ -240,6 +240,44 @@ test("live-anslutningen använder nyckeln som sparades senast", async () => {
   assert.equal(await liveAuthorization(), `Token ${DG_OK}`);
 });
 
+test("nyckeln tas bort under en inspelning: ingen ny uppkoppling utan nyckel, och ett tydligt besked", { timeout: 30_000 }, async () => {
+  const other = await invitedAccount(server.url, admin, "admin");
+  const created = await api("/api/transcripts", { method: "POST", cookie: admin, body: { title: "Borttagen nyckel" } });
+  assert.equal(created.status, 200, created.text);
+  // Låtsastjänsten tar emot live-anslutningen och bryter den efter en stund (som ett nätavbrott).
+  dg.wsCloseAfterMs = 1500;
+  const before = dg.seen.filter((r) => r.upgrade).length;
+  const notices: string[] = [];
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}/api/live/${created.json.id}`, {
+    headers: { Cookie: admin, Origin: server.url },
+  });
+  ws.on("message", (data) => {
+    const msg = JSON.parse(String(data)) as { type: string; message?: string };
+    if (msg.type === "notice") notices.push(msg.message!);
+  });
+  try {
+    const until = async (cond: () => boolean, what: string) => {
+      const deadline = Date.now() + 15_000;
+      while (!cond()) {
+        if (Date.now() > deadline) throw new Error(`Väntade förgäves på: ${what}`);
+        await new Promise((r) => setTimeout(r, 50));
+      }
+    };
+    await until(() => dg.seen.filter((r) => r.upgrade).length > before, "uppkoppling mot Deepgram");
+    assert.equal(dg.seen.filter((r) => r.upgrade).at(-1)!.authorization, `Token ${DG_OK}`);
+    const removed = await api("/api/admin/keys/deepgram", { method: "DELETE", cookie: other });
+    assert.equal(removed.json.key.source, "none");
+    await until(() => notices.length > 0, "besked om live-texten");
+    assert.deepEqual(notices, ["Live-texten är avstängd eftersom Deepgram-nyckeln togs bort. Ljudet spelas fortfarande in."]);
+    assert.equal(dg.seen.filter((r) => r.upgrade).length, before + 1, "ingen ny uppkoppling utan nyckel");
+  } finally {
+    dg.wsCloseAfterMs = 0;
+    ws.close();
+    const restored = await api("/api/admin/keys/deepgram", { method: "PUT", cookie: other, body: { key: DG_OK } });
+    assert.equal(restored.status, 200, restored.text);
+  }
+});
+
 test("spärr: högst 10 kontroller och sparningar per minut och administratör", async () => {
   const limited = await invitedAccount(server.url, admin, "admin");
   for (let i = 0; i < 6; i++) {

@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { config } from "../config.js";
-import { getKey } from "../keys.js";
+import { getKey, MissingKeyError, serviceLabel } from "../keys.js";
 import type { WhisperSegment, Word } from "../merge.js";
 
 /** En egen Whisper-server (inte Groq) kan fungera utan nyckel. Nyckeln läses i varje anrop. */
@@ -49,8 +49,12 @@ export async function whisperFile(file: string, offset: number, prompt: string):
   form.append("timestamp_granularities[]", "word");
   if (prompt.trim()) form.append("prompt", prompt.trim());
 
+  const label = serviceLabel("whisper");
   const headers: Record<string, string> = {};
   const key = getKey("whisper");
+  if (!key && config.whisperUrl.includes("groq.com")) {
+    throw new MissingKeyError(`${label}-nyckeln saknas. Lägg in den under Administration.`);
+  }
   if (key) headers.Authorization = `Bearer ${key}`;
   const res = await fetch(`${config.whisperUrl}/audio/transcriptions`, {
     method: "POST",
@@ -59,14 +63,16 @@ export async function whisperFile(file: string, offset: number, prompt: string):
     signal: AbortSignal.timeout(15 * 60_000),
   });
   if (res.status === 429) {
-    throw new RateLimitError("Whisper-tjänstens gratiskvot är tillfälligt slut.", parseRetryAfter(res));
+    throw new RateLimitError(`${label}: gratiskvoten är tillfälligt slut.`, parseRetryAfter(res));
   }
   if (!res.ok) {
-    const body = (await res.text()).slice(0, 300);
+    // Svarstexten tas inte med: den kan innehålla vad som helst, i värsta fall nyckeln.
+    await res.body?.cancel().catch(() => undefined);
     if (res.status === 401 || res.status === 403) {
-      throw new Error("Whisper-tjänsten nekade nyckeln. Kontrollera den under Administration.");
+      // Orden "nekade nyckeln" gör att jobbet inte försöker igen (se jobs.ts).
+      throw new Error(`${label} nekade nyckeln. Kontrollera den under Administration.`);
     }
-    throw new Error(`Whisper-tjänsten svarade ${res.status}: ${body}`);
+    throw new Error(`${label} svarade ${res.status}.`);
   }
   const json = (await res.json()) as {
     segments?: WhisperSegment[];
