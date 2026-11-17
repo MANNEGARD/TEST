@@ -1,7 +1,7 @@
 """Gemensam efterbearbetning när resor tillkommit eller ändrats.
 
 Ordningen med kategoriregler för sammanslagning (``merge.by_category``, standard från
-1.3.0) är: starttid ur sträckan (K4) → dataluckor → platsstatistik → mönster → kalender →
+1.3.0) är: starttid ur motorstarten (1.5.0) → starttid ur sträckan (K4) → dataluckor → platsstatistik → mönster → kalender →
 klassificering av oavgjorda resor → resekedjor → autopiloten (självgående läge) →
 sammanslagningsregler → granskningsärenden → ev. notiser. Sammanslagningen kommer efter
 klassningen eftersom bara avgjorda resor av samma kategori slås ihop. Med det tidigare
@@ -213,6 +213,9 @@ def after_trips_changed(
     out: dict[str, Any] = {"origin": origin}
     no_merge: dict[str, Any] = {"auto_merged": 0, "questions": []}
 
+    # Starttiden ur bilens egen rapport om motorstarten fastställs först (1.5.0), så att K4
+    # bara uppskattar de resor där motorstarten inte räcker (start_time.fill_from_engine).
+    out["start_from_engine"] = step("start_engine", start_time.fill_from_engine, db, vehicle.id, default=0)
     # Resor från bilen med okänd starttid får en uppskattning ur sträckan före allt annat,
     # så att flaggor, klassning och frågor ser den (start_time.fill_from_distance).
     out["start_estimated"] = step("start_time", start_time.fill_from_distance, db, vehicle.id, default=0)

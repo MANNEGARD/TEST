@@ -51,7 +51,10 @@ _PHONE_SOURCES = ("ha", "demo")
 MAX_REPLY_TEXT = 200  # E.4: textsvar 1–200 tecken efter tvätt
 
 # Svar som gäller resans kategori och ärende i självgående läge (C.4).
-_WORK_KEYS = (f"{A.WORK_PICK}0", f"{A.WORK_ALWAYS}0", A.WORK_TEXT)
+# WORKP1 (1.5.0): andra ärendeförslaget i "Tjänsteresa – vilket ärende?".
+_WORK_KEYS = (f"{A.WORK_PICK}0", f"{A.WORK_PICK}1", f"{A.WORK_ALWAYS}0", A.WORK_TEXT)
+# Knapparna som godkänner det föreslagna ärendet som det stod i notisen.
+_APPROVE_KEYS = (f"{A.WORK_PICK}0", f"{A.WORK_ALWAYS}0")
 _TRIP_KINDS = (NotificationKind.CLASSIFY, NotificationKind.PURPOSE, NotificationKind.COMPANY, NotificationKind.ASSUMED)
 
 
@@ -143,6 +146,21 @@ def _remember(
     return None
 
 
+def _check_proposal(db: Session, req: NotificationRequest, key: str, purpose: str) -> None:
+    """"Godkänn" i "Tjänsteresa – stämmer det?" gäller förslaget som stod i notisen. Har resan
+    bedömts om eller ärendet ändrats sedan dess godkänns ingenting i tysthet (TripError)."""
+    ctx = req.context if isinstance(req.context, dict) else {}
+    if key not in _APPROVE_KEYS or ctx.get("assessment") != "work_purpose":
+        return
+    trip = _load_active_trip(db, req)
+    current = text_safety.sanitize_text(trip.purpose) if isinstance(trip.purpose, str) else ""
+    if trip.category != Category.WORK or current != purpose:
+        raise TripError(
+            "Förslaget har ändrats sedan notisen skickades. Öppna körjournalen och se över resan där.",
+            "proposal_changed",
+        )
+
+
 def _decide_trip(
     db: Session, req: NotificationRequest, *, user_id: uuid.UUID, actor: Actor, channel: str, category: str,
     purpose: str | None, always: bool,
@@ -179,6 +197,7 @@ def _apply_self_driving(
     kind = req.kind
     if kind == NotificationKind.CLASSIFY and key in _WORK_KEYS:
         purpose = clean_reply(reply_text) if key == A.WORK_TEXT else _action_purpose(action)
+        _check_proposal(db, req, key, purpose)
         return _decide_trip(db, req, user_id=user_id, actor=actor, channel=channel, category=Category.WORK,
                             purpose=purpose, always=always or key.startswith(A.WORK_ALWAYS))
     if kind == NotificationKind.CLASSIFY and key == A.PRIVATE_ALWAYS:

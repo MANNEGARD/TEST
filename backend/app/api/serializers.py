@@ -74,7 +74,8 @@ def trips_out(db: Session, trips: Sequence[LogicalTrip]) -> list[TripOut]:
     # Möjligt startintervall från första delresan när starttiden är okänd/begränsad, och
     # grunden för en uträknad starttid.
     uncertain = {t.id for t in trips if t.started_at is None or t.start_time_quality in _UNCERTAIN}
-    estimated = {t.id for t in trips if t.start_time_quality == TimeQuality.ESTIMATED}
+    # Även bilens egen tid har en grund när den kommer ur motorstarten (1.5.0, start_time.fill_from_engine).
+    estimated = {t.id for t in trips if t.start_time_quality in (TimeQuality.ESTIMATED, TimeQuality.REPORTED)}
     bounds: dict[uuid.UUID, tuple] = {}
     bases: dict[uuid.UUID, dict | None] = {}
     if uncertain or estimated:

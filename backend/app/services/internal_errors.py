@@ -76,6 +76,7 @@ _APP_DIR = Path(__file__).resolve().parents[1]  # backend/app
 STEP_LABELS: dict[str, str] = {
     "detection": "resedetekteringen",
     "pipeline.start_time": "uppskattad starttid",
+    "pipeline.start_engine": "starttid ur motorstarten",
     "pipeline.consumption": "uppskattad förbrukning",
     "pipeline.merge": "sammanslagning",
     "pipeline.gaps": "luckor i mätarställningen",

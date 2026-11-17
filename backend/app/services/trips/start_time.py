@@ -24,6 +24,18 @@ precis som K2/K3, och grunden (fart, varifrån farten kommer, körtid) sparas. F
 växer med spridningen i ägarens egna resor. Resor i månader vars underlag redan har skapats
 av månadsskiftet lämnas orörda, så att ett inlämnat underlag inte ändras i efterhand.
 
+Bilens egen rapport om motorstarten (1.5.0, ``fill_from_engine``, körs före K4): bilen
+rapporterar "motorn igång" direkt med egen tidsstämpel, även när mätarställning och position
+bara rapporteras när tändningen slås av. Den SISTA övergången "stod still" → "motorn igång"
+före ankomsten letas upp bland de sparade avläsningarna. Starttiden blir bilens tidsstämpel
+för motorstarten (avrundad till hel minut) när den ligger mellan de två hämtningarna (± två
+minuters klockskillnad), annars minuten mitt emellan hämtningarna när de ligger högst
+``ENGINE_SHORT_WINDOW_MINUTES`` isär. Den får kvalitet ``reported`` – bilens tid, utan "≈"
+och "ca" – och grunden sparas (metod ``engine_start`` eller ``poll_midpoint``). Ger tiden en
+orimligt hög snittfart (``plausible_speed_kmh``), eller är fönstret längre, blir den bara
+senaste möjliga start och K4 uppskattar som förut. En fastställd starttid ändras aldrig av sig
+själv; bara ägaren kan ange en annan.
+
 Tider som räknar med starttiden som känd (kalenderns avfärd, pendlingskedjan, AI-underlaget)
 använder ``known_start``: en uppskattning ur sträckan räknas där som okänd, precis som
 stilleståndet mellan resor (``merge.stop_gap``) redan bedöms med gränserna.
@@ -69,6 +81,15 @@ K4_HISTORY_LIMIT = 500  # de senaste resorna med kända tider räcker
 K4_MIN_SPEED, K4_MAX_SPEED = 15.0, 130.0
 K4_MIN_MINUTES = 1.0
 K4_MARGIN = {"route": (2.0, 0.25), "similar": (2.0, 0.25), "table": (3.0, 0.35)}  # (minst min, andel av körtiden)
+# 1.5.0: starttid ur bilens egen rapport om motorstarten (fill_from_engine).
+ENGINE_METHODS = ("engine_start", "poll_midpoint")  # fastställda: rörs aldrig igen av sig själv
+ENGINE_CLOCK_SKEW = timedelta(minutes=2)  # som detection.CLOCK_SKEW
+# "Kort" fönster mellan två hämtningar: täcker hämtning var 2:a–5:e minut med marginal för
+# en fördröjd hämtning. Mitten ligger då högst 3 minuter från den verkliga starten.
+ENGINE_SHORT_WINDOW_MINUTES = 6.0
+ENGINE_SPEED_FACTOR = 2.0  # se plausible_speed_kmh
+ENGINE_LOOKBACK = timedelta(days=14)  # resor så långt bakåt (från senaste avläsningen) prövas
+ENGINE_NO_EARLIEST = timedelta(hours=24)  # avläsningar så långt före ankomsten när E saknas
 _LIVE = (TripSource.VOLVO_API, TripSource.DEMO)
 _KNOWN = (TimeQuality.EXACT, TimeQuality.REPORTED)
 _ARRIVAL_KNOWN = (TimeQuality.EXACT, TimeQuality.REPORTED, TimeQuality.ESTIMATED)
@@ -436,6 +457,10 @@ def _distance_plan(db: Session, vehicle_id: uuid.UUID) -> list[tuple[RawTrip, St
 
 
 def has_distance_candidates(db: Session, vehicle_id: uuid.UUID) -> bool:
+    """Finns det resor som efterbearbetningen kan ge en starttid (ur motorstarten eller ur
+    sträckan)? Insamlingen kör då efterbearbetningen även när ingen ny resa har hittats."""
+    if engine_plan(db, vehicle_id):
+        return True
     if db.execute(_distance_candidates_query(vehicle_id).limit(1)).first() is None:
         return False
     return bool(_distance_plan(db, vehicle_id))
@@ -469,6 +494,242 @@ def fill_from_distance(db: Session, vehicle_id: uuid.UUID) -> int:
                 seg.refresh_logical(db, trip)
         db.flush()
     return len(filled)
+
+
+# ----------------------------------------------------------------------------- 1.5.0: ur motorstarten
+
+
+@dataclass(frozen=True)
+class EngineChange:
+    """Vad steget ur motorstarten gör med en delresa.
+
+    ``kind`` är ``set`` (starttiden fastställs, ``at`` och ``basis`` satta) eller ``narrow``
+    (bara senaste möjliga start snävas in till ``latest``; K4 uppskattar sedan som förut).
+    """
+
+    raw: RawTrip
+    kind: Literal["set", "narrow"]
+    at: datetime | None
+    latest: datetime | None
+    basis: dict[str, Any]
+
+
+def plausible_speed_kmh(distance_km: float) -> float:
+    """Högsta snittfart (km/h) som en starttid ur motorstarten får ge för sträckan.
+
+    Dubbla K4-tabellens vanliga snittfart, aldrig över detekteringens ``MAX_AVG_SPEED_KMH``:
+    under 3 km 50, under 10 km 70, under 30 km 100 och därefter 130 km/h. En laddhybrid som
+    startar på el kan rapportera "motorn igång" först en bit in i resan; då blir snittfarten
+    från motorstarten orimligt hög, och tiden används bara som senaste möjliga start.
+    """
+    from app.services.volvo.detection import MAX_AVG_SPEED_KMH
+
+    return min(MAX_AVG_SPEED_KMH, ENGINE_SPEED_FACTOR * table_speed(distance_km))
+
+
+def find_engine_start(
+    rows: Sequence[Any], *, earliest: datetime | None, ended_at: datetime,
+) -> tuple[Any, Any] | None:
+    """(föregående avläsning, första avläsningen med motorn igång) för den SISTA övergången
+    "stod still" → "motorn igång" före ankomsten, eller ``None`` (ren funktion).
+
+    ``rows`` är bilens avläsningar sorterade på ``fetched_at``. Avläsningar hämtade efter
+    ankomsten räknas inte, och inte heller en avslutande rad med motorn av som rapporterades
+    vid ankomsten. Motorn ska ha gått i alla avläsningar från övergången fram till ankomsten
+    (sågs bilen med motorn av emellan var det en annan körning), och övergången ska ligga
+    efter resans tidigaste gräns.
+    """
+    seen = [r for r in rows if r.fetched_at <= ended_at]
+    while seen and seen[-1].engine_running is False and (
+        seen[-1].engine_reported_at is not None and seen[-1].engine_reported_at >= ended_at - ENGINE_CLOCK_SKEW
+    ):
+        seen.pop()  # ankomstraden
+    i = len(seen)
+    while i > 0 and seen[i - 1].engine_running is True:
+        i -= 1
+    if i == len(seen) or i == 0:
+        return None  # motorn gick inte vid ankomsten, eller övergången syns inte
+    prev, first_on = seen[i - 1], seen[i]
+    if earliest is not None and first_on.fetched_at < earliest:
+        return None
+    return prev, first_on
+
+
+def engine_estimate(
+    rows: Sequence[Any], *, earliest: datetime | None, latest: datetime | None, ended_at: datetime,
+    distance_km: float | None,
+) -> tuple[Literal["set", "narrow", "none"], datetime | None, datetime | None, dict[str, Any]]:
+    """Starttiden ur övergången till "motorn igång" (ren funktion).
+
+    Ger ``("set", tid, None, grund)``, ``("narrow", None, ny senaste start, grund)`` eller
+    ``("none", None, None, {})``. Se modulens docstring för reglerna.
+    """
+    found = find_engine_start(rows, earliest=earliest, ended_at=ended_at)
+    if found is None:
+        return "none", None, None, {}
+    prev, first_on = found
+    lo = prev.last_seen_at - ENGINE_CLOCK_SKEW
+    hi = first_on.fetched_at + ENGINE_CLOCK_SKEW
+    gap = _minutes(first_on.fetched_at - prev.last_seen_at)
+    reported = first_on.engine_reported_at
+    basis: dict[str, Any] = {
+        "polled_before": _iso(prev.last_seen_at),
+        "polled_running": _iso(first_on.fetched_at),
+        "engine_reported_at": _iso(reported),
+        "window_minutes": round(gap, 1),
+        "earliest": _iso(earliest),
+        "trip_km": round(distance_km, 1) if distance_km else None,
+    }
+    if reported is not None and lo <= reported <= hi:
+        method, raw_at = "engine_start", reported
+    elif gap <= ENGINE_SHORT_WINDOW_MINUTES:
+        method, raw_at = "poll_midpoint", prev.last_seen_at + (first_on.fetched_at - prev.last_seen_at) / 2
+    else:
+        # Långt fönster: ingen starttid, men starten låg senast vid första avläsningen med motorn igång.
+        new_latest = min(latest, first_on.fetched_at) if latest is not None else first_on.fetched_at
+        basis.update(method="engine_window", latest=_iso(new_latest))
+        return "narrow", None, new_latest, basis
+    if raw_at >= ended_at or (earliest is not None and raw_at < earliest - ENGINE_CLOCK_SKEW):
+        return "none", None, None, {}  # motsägelsefulla tider: hellre okänd än fel
+    at = _clamp_round(raw_at, earliest, ended_at)
+    speed = distance_km / (_minutes(ended_at - at) / 60) if distance_km and ended_at > at else None
+    basis.update(method=method, avg_speed_kmh=round(speed, 1) if speed is not None else None)
+    too_fast = speed is not None and speed > plausible_speed_kmh(distance_km or 0.0)
+    too_late = latest is not None and at > latest + timedelta(seconds=30)
+    if too_fast or too_late:
+        # Troligen en sen motorstart (laddhybrid på el): bara senaste möjliga start.
+        new_latest = min(latest, raw_at) if latest is not None else raw_at
+        basis.update(method="engine_late", latest=_iso(new_latest),
+                     max_speed_kmh=plausible_speed_kmh(distance_km or 0.0))
+        return "narrow", None, new_latest, basis
+    return "set", at, None, basis
+
+
+def _engine_candidates_query(vehicle_id: uuid.UUID, since: datetime):
+    """Delresor från bilen med okänd eller uppskattad starttid (aldrig en fastställd)."""
+    overridden = (
+        select(TripSegment.raw_trip_id)
+        .join(LogicalTrip, LogicalTrip.id == TripSegment.logical_trip_id)
+        .where(LogicalTrip.start_time_override.is_not(None))
+    )
+    return select(RawTrip).where(
+        RawTrip.vehicle_id == vehicle_id,
+        RawTrip.source.in_(_LIVE),
+        RawTrip.voided_at.is_(None),
+        RawTrip.start_time_quality.in_((TimeQuality.BOUNDED, TimeQuality.UNKNOWN, TimeQuality.ESTIMATED)),
+        RawTrip.ended_at.is_not(None),
+        RawTrip.ended_at >= since,
+        RawTrip.end_time_quality.in_(_ARRIVAL_KNOWN),
+        RawTrip.id.not_in(overridden),
+    )
+
+
+def engine_plan(db: Session, vehicle_id: uuid.UUID) -> list[EngineChange]:
+    """Delresorna som ska få en starttid ur motorstarten (eller en snävare senaste start).
+
+    Bara ändringar som verkligen ändrar något kommer med, så att planen blir tom när steget
+    redan har körts (insamlingen kör efterbearbetningen bara när planen inte är tom).
+    Resor i månader vars underlag redan är skapat (eller som skulle flytta dit) lämnas.
+    """
+    from app.models import VehicleObservation
+
+    newest = db.execute(
+        select(VehicleObservation.fetched_at).where(VehicleObservation.vehicle_id == vehicle_id)
+        .order_by(VehicleObservation.fetched_at.desc()).limit(1)
+    ).scalar_one_or_none()
+    if newest is None:
+        return []
+    raws = list(db.execute(
+        _engine_candidates_query(vehicle_id, newest - ENGINE_LOOKBACK).order_by(RawTrip.ended_at)
+    ).scalars())
+    if not raws:
+        return []
+    closed, tz = _closed_months(db, vehicle_id)
+    plan: list[EngineChange] = []
+    for raw in raws:
+        if isinstance(raw.start_estimate_basis, dict) and raw.start_estimate_basis.get("method") in ENGINE_METHODS:
+            continue
+        ended = raw.ended_at
+        lower = (raw.start_earliest or ended - ENGINE_NO_EARLIEST) - ENGINE_CLOCK_SKEW
+        rows = list(db.execute(
+            select(VehicleObservation).where(
+                VehicleObservation.vehicle_id == vehicle_id,
+                VehicleObservation.last_seen_at >= lower,
+                VehicleObservation.fetched_at <= ended,
+            ).order_by(VehicleObservation.fetched_at)
+        ).scalars())
+        latest = raw.start_latest
+        if latest is None and raw.start_time_quality == TimeQuality.ESTIMATED:
+            latest = raw.started_at
+        kind, at, new_latest, basis = engine_estimate(
+            rows, earliest=raw.start_earliest, latest=latest, ended_at=ended, distance_km=raw.distance_km,
+        )
+        if kind == "none":
+            continue
+        if kind == "narrow":
+            current = raw.start_latest
+            if new_latest is None or (current is not None and new_latest >= current - timedelta(seconds=1)):
+                continue
+            if raw.start_earliest is not None and new_latest < raw.start_earliest:
+                continue
+        if tz is not None and any(
+            when is not None and when.astimezone(tz).strftime("%Y-%m") in closed for when in (raw.sort_time, at)
+        ):
+            continue
+        plan.append(EngineChange(raw=raw, kind=kind, at=at, latest=new_latest, basis=basis))
+    return plan
+
+
+def fill_from_engine(db: Session, vehicle_id: uuid.UUID) -> int:
+    """Fastställer starttiden ur bilens egen rapport om motorstarten (1.5.0). Idempotent.
+
+    Körs före K4. En fastställd starttid (kvalitet ``reported``, metod ``engine_start`` eller
+    ``poll_midpoint``) rörs sedan aldrig av steget, K4, omräkningar eller sammanslagningar;
+    bara ägarens angivna starttid gäller före. Varje ändring antecknas i resans historik.
+    Returnerar antalet delresor som fick en starttid.
+    """
+    plan = engine_plan(db, vehicle_id)
+    if not plan:
+        return 0
+    from app.services.trips import segments as seg
+
+    changed: dict[uuid.UUID, EngineChange] = {}
+    filled = 0
+    for change in plan:
+        raw = change.raw
+        if change.kind == "set":
+            raw.started_at, raw.start_time_quality = change.at, TimeQuality.REPORTED
+            raw.start_estimate_basis = change.basis
+            filled += 1
+        else:
+            raw.start_latest = change.latest
+            if raw.start_time_quality == TimeQuality.ESTIMATED and raw.started_at is not None and (
+                change.latest is not None and raw.started_at > change.latest
+            ):
+                # Uppskattningen ligger efter den nya gränsen: K4 räknar om den i samma körning.
+                raw.started_at, raw.start_time_quality, raw.start_estimate_basis = None, TimeQuality.BOUNDED, None
+        seg.set_raw_sort_time(raw)
+        changed[raw.id] = change
+    db.flush()
+    links = db.execute(
+        select(TripSegment.logical_trip_id, TripSegment.raw_trip_id).where(TripSegment.raw_trip_id.in_(list(changed)))
+    ).all()
+    for trip_id in {t for t, _ in links}:
+        trip = seg.load_trip(db, trip_id)
+        if trip is None:
+            continue
+        before = {"started_at": _iso(trip.started_at), "start_time_quality": trip.start_time_quality}
+        seg.refresh_logical(db, trip)
+        for raw_id in [r for t, r in links if t == trip_id]:
+            change = changed[raw_id]
+            audit.record(
+                db, audit.SYSTEM, "trip.start_time_engine" if change.kind == "set" else "trip.start_latest_engine",
+                "logical_trip", trip_id, before=before,
+                after={"started_at": _iso(trip.started_at), "start_time_quality": trip.start_time_quality,
+                       "raw_trip_id": str(raw_id), "basis": change.basis},
+            )
+    db.flush()
+    return filled
 
 
 def set_override(db: Session, trip: LogicalTrip, value: datetime | None, *, actor: audit.Actor) -> LogicalTrip:

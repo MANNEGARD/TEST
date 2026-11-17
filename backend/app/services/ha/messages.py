@@ -394,6 +394,82 @@ def purpose_v2(
     }
 
 
+# ----------------------------------------------------------------------------- frågan utgår från bedömningen (1.5.0)
+
+ASSESSED_WORK_PURPOSE = "work_purpose"  # bedömd som tjänst med ett föreslaget ärende
+ASSESSED_WORK = "work"  # bedömd som tjänst utan ärende
+ASSESSED_PRIVATE = "private"  # bedömd som privat
+MAX_PURPOSE_IN_MESSAGE = 80
+
+
+def _short(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def assessed(
+    db: Session, trip: LogicalTrip, *, tz: tzinfo, hide_locations: bool, assessment: str,
+    purpose: str | None = None, candidates: list[str] | None = None, remember: bool = False,
+    self_driving: bool = False,
+) -> dict[str, Any]:
+    """Frågan när DriveLog redan har bedömt resan: den säger vad DriveLog kom fram till och
+    ber om ett godkännande. Samma texter i självgående och manuellt läge; platserna som i
+    respektive läges övriga frågor (``place_labels`` resp. ``safe_label``).
+
+    Med ``hide_locations`` står varken platser eller ärendets text (kan vara ett kundnamn)
+    i meddelandet eller på knapparna; de ligger kvar i ``detail_message``/``detail_title``.
+    Godkänn (WORKP0) bär ärendet i ``purpose``; ``proposed_purpose`` i context används för
+    att se om förslaget har ändrats innan svaret kom (responses._check_proposal).
+    """
+    origin, dest = place_labels(db, trip) if self_driving else trip_labels(db, trip)
+    route = f"{origin} → {dest}"
+    day, distance = fmt_day(trip.ended_at or trip.sort_time, tz), fmt_mil(trip.distance_km)
+    when = f"{day} {fmt_trip_times(trip, tz)}"
+    gap_text = collection_gap_short(trip, tz)
+    tail = f" {gap_text}" if gap_text else ""
+    acts: list[dict[str, Any]] = []
+    if assessment == ASSESSED_WORK_PURPOSE and purpose:
+        title = "Tjänsteresa – stämmer det?"
+        detail = f"{when} · {route} · {distance}. Ärende: {_short(purpose, MAX_PURPOSE_IN_MESSAGE)}.{tail}"
+        message = f"{when} · {distance}. Ärendet visas i appen.{tail}" if hide_locations else detail
+        approve = {"key": f"{A.WORK_PICK}0", "title": "Godkänn", "purpose": purpose}
+        if hide_locations:
+            approve = {**approve, "title": "Godkänn förslaget", "detail_title": "Godkänn"}
+        acts.append(approve)
+        acts.append({"key": A.WORK_TEXT, "title": "Ändra ärende", "text_input": True, "placeholder": "Ärende"})
+        acts.append({"key": A.PRIVATE, "title": "Privat"})
+        acts.append({"key": A.LATER, "title": "Senare"})
+        if remember:
+            acts.append(_pick(f"{A.WORK_ALWAYS}0", "Alltid: ", purpose, hide_locations, "föreslaget ärende"))
+    elif assessment in (ASSESSED_WORK, ASSESSED_WORK_PURPOSE):
+        title = "Tjänsteresa – vilket ärende?"
+        detail = f"{when} · {route} · {distance}.{tail}"
+        message = f"{when} · {distance}.{tail}" if hide_locations else detail
+        cands = list(candidates or [])[:2]
+        for i, text in enumerate(cands):
+            acts.append(_pick(f"{A.WORK_PICK}{i}", "", text, hide_locations, f"Föreslaget ärende {i + 1}"))
+        acts.append({"key": A.WORK_TEXT, "title": "Skriv ärende", "text_input": True, "placeholder": "Ärende"})
+        acts.append({"key": A.PRIVATE, "title": "Privat"})
+        acts.append({"key": A.LATER, "title": "Senare"})
+        if cands and remember:
+            acts.append(_pick(f"{A.WORK_ALWAYS}0", "Alltid: ", cands[0], hide_locations, "föreslaget ärende 1"))
+        assessment, purpose = ASSESSED_WORK, None
+    else:
+        title = "Privat resa – stämmer det?"
+        detail = f"{when} · {route} · {distance}.{tail}"
+        message = f"{when} · {distance}.{tail}" if hide_locations else detail
+        acts.append({"key": A.PRIVATE, "title": "Ja, privat"})
+        acts.append({"key": A.WORK_TEXT, "title": "Tjänst – skriv ärende", "text_input": True, "placeholder": "Ärende"})
+        acts.append({"key": A.LATER, "title": "Senare"})
+        assessment, purpose = ASSESSED_PRIVATE, None
+    context: dict[str, Any] = {"detail_message": detail, "route_label": route, "distance_km": trip.distance_km,
+                               "assessment": assessment}
+    if purpose:
+        context["proposed_purpose"] = purpose
+    if self_driving:
+        context.update({"self_driving": True, "multi": False})
+    return {"title": title, "message": message, "actions": acts[: A.MAX_ACTIONS], "context": context}
+
+
 def company(db: Session, trip: LogicalTrip, *, tz: tzinfo, hide_locations: bool) -> dict[str, Any]:
     """"Vilket företag var det?" när kartan inte har något namn för en arbetsplats."""
     _, dest = place_labels(db, trip)

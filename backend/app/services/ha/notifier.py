@@ -312,6 +312,52 @@ def _can_remember(db: Session, trip: LogicalTrip, text: str | None, origin: str 
         return False
 
 
+def _assessment(trip: LogicalTrip) -> tuple[str | None, str | None]:
+    """DriveLogs bedömning av resan för frågan: (typ, föreslaget ärende) eller (None, None)
+    när resan inte är bedömd. En resa som kan vara flera körningar får frågan som förut."""
+    from app.services.classify.purpose import NEEDS_CONFIRMATION_SUFFIX
+    from app.services.text_safety import sanitize_text
+
+    if messages.is_multi(trip):
+        return None, None
+    if trip.category == Category.WORK:
+        text = sanitize_text(trip.purpose) if isinstance(trip.purpose, str) else ""
+        if text and NEEDS_CONFIRMATION_SUFFIX not in text.lower():
+            return messages.ASSESSED_WORK_PURPOSE, text
+        return messages.ASSESSED_WORK, None
+    if trip.category == Category.PRIVATE:
+        return messages.ASSESSED_PRIVATE, None
+    return None, None
+
+
+def _proposal_origin(db: Session, trip: LogicalTrip, text: str) -> str:
+    """Varifrån resans föreslagna ärende kommer; vid fel räknas det som AI (ingen "Alltid")."""
+    from app.services.classify import autopilot
+
+    try:
+        return autopilot.candidate_origin(db, trip, text)
+    except Exception:
+        logger.exception("Kunde inte ta reda på ärendets ursprung")
+        return "ai"
+
+
+def _assessed_question(
+    db: Session, user_id: uuid.UUID, trip: LogicalTrip, assessment: str, proposed: str | None, *,
+    hide: bool, self_driving: bool,
+) -> dict[str, Any]:
+    tz = settings_svc.user_timezone(db, user_id)
+    if assessment == messages.ASSESSED_WORK_PURPOSE and proposed:
+        remember = _can_remember(db, trip, proposed, _proposal_origin(db, trip, proposed))
+        return messages.assessed(db, trip, tz=tz, hide_locations=hide, assessment=assessment, purpose=proposed,
+                                 remember=remember, self_driving=self_driving)
+    if assessment == messages.ASSESSED_WORK:
+        items = _suggestion_items(db, user_id, trip, limit=2)
+        remember = bool(items) and _can_remember(db, trip, items[0][0], items[0][1])
+        return messages.assessed(db, trip, tz=tz, hide_locations=hide, assessment=assessment,
+                                 candidates=[t for t, _o in items], remember=remember, self_driving=self_driving)
+    return messages.assessed(db, trip, tz=tz, hide_locations=hide, assessment=assessment, self_driving=self_driving)
+
+
 def create_classify_question(
     db: Session, *, user_id: uuid.UUID, trip: LogicalTrip, cfg: dict[str, Any], now: datetime,
     send_after: datetime | None = None, extra_context: dict[str, Any] | None = None,
@@ -322,7 +368,11 @@ def create_classify_question(
         return None
     pid = new_public_id()
     hide = bool(cfg["hide_locations_on_lock_screen"])
-    if self_driving:
+    assessment, proposed = _assessment(trip)
+    if assessment is not None:
+        # 1.5.0: DriveLog har redan bedömt resan – frågan ber om ett godkännande (båda lägena).
+        built = _assessed_question(db, user_id, trip, assessment, proposed, hide=hide, self_driving=self_driving)
+    elif self_driving:
         items = _suggestion_items(db, user_id, trip, limit=1)
         suggestion, origin = items[0] if items else (None, None)
         built = messages.classify_v2(

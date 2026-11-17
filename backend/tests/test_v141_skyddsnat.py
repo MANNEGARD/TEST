@@ -105,6 +105,7 @@ def drive_until_processed(db, vehicle, car) -> dict:
 
 # (steg, modul, funktion) – varje delsteg efter att resan skapats.
 STEPS = [
+    ("start_engine", start_time, "fill_from_engine"),
     ("start_time", start_time, "fill_from_distance"),
     ("consumption", consumption, "fill_vehicle"),
     ("merge", merge, "evaluate_vehicle"),
@@ -663,6 +664,7 @@ def _crash(*args, **kwargs):
 # Steg före autopiloten vars utfall den bygger på. merge = det tidigare regelverket (by_category
 # av), som ägarens installation har sedan migreringen 0004: då körs sammanslagningen före.
 AUTOPILOT_INPUTS = [
+    ("start_engine", start_time, "fill_from_engine"),
     ("start_time", start_time, "fill_from_distance"),
     ("merge", merge, "evaluate_vehicle"),
     ("gaps", gaps, "recompute"),
