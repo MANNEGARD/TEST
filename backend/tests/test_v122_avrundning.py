@@ -89,7 +89,10 @@ def test_verkligt_overlapp_och_verklig_lucka_finns_kvar(db, user, vehicle, trips
     trips.trip(C, A, km=12.0, odometer_start=197800)  # 49 km lucka
     gaps.recompute(db, vehicle.id, _tolerance(db, user, tolerance))
     (item,) = _overlap_items(db, vehicle)
-    assert "197736 km respektive 197726 km" in item.detail
+    # 1.3.2: samma typ, tal och klartext som avvikelsesökningen (samma nyckel).
+    assert item.data["type"] == "odometer_backwards"
+    assert (item.data["first_odometer_end"], item.data["second_odometer_start"]) == (197736, 197726)
+    assert "10 km överlapp" in item.detail
     (gap,) = _current_gaps(db, vehicle)
     assert gap.km == pytest.approx(49.0)
 

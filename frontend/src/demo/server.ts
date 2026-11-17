@@ -61,6 +61,7 @@ function boot(): Promise<void> {
     if (!state.v130ai) applyV130Ai(state);
     if (!state.v130drift) applyV130Drift(state);
     if (!state.v132) applyV132(state);
+    if (!state.v132b) applyV132b(state);
     // Körtiden saknas på de rekonstruerade resorna i inspelningen; räkna den ur start- och sluttid.
     // Med en uträknad starttid lämnas den tom som i den riktiga servern, så resans sida visar "≈".
     for (const d of Object.values(state.trips)) {
@@ -1012,6 +1013,43 @@ function applyV132(s: DemoState): void {
   s.v132 = true;
 }
 
+/**
+ * Efter granskningen av 1.3.2: avvikelsernas resor har starttid från bilen, som i den riktiga
+ * kön (en avvikelse byggs aldrig på DriveLogs uppskattade tider), och ärendena har resornas
+ * datum i data (started_at, first_started_at) som den riktiga servern.
+ */
+function applyV132b(s: DemoState): void {
+  const find = (prefix: string) => Object.values(s.trips).find((d) => d.trip.id.startsWith(prefix));
+  const fromCar = (d: Json | undefined) => {
+    if (!d?.trip.started_at) return;
+    const t = d.trip;
+    t.start_time_quality = "reported";
+    t.start_time_source = "car";
+    t.start_time_text = localTime(t.started_at);
+    t.start_earliest = null;
+    t.start_latest = null;
+    t.start_estimate_basis = null;
+    t.quality_flags = (t.quality_flags ?? []).filter((f: string) => f !== "start_time_uncertain");
+    for (const r of d.raw_trips ?? []) {
+      r.start_time_quality = "reported";
+      r.start_earliest = null;
+      r.start_latest = null;
+    }
+  };
+  const mm = find(MISMATCH_TRIP);
+  const [a, b] = BACKWARDS_TRIPS.map(find);
+  [mm, a, b].forEach(fromCar);
+  for (const r of s.review) {
+    if (r.kind !== "anomaly" || !r.data) continue;
+    if (mm && r.data.type === "odometer_mismatch" && r.trip_ids?.[0] === mm.trip.id) r.data.started_at = mm.trip.started_at;
+    if (a && b && r.data.type === "odometer_backwards" && r.trip_ids?.[0] === a.trip.id) {
+      r.data.first_started_at = a.trip.started_at;
+      r.data.second_started_at = b.trip.started_at;
+    }
+  }
+  s.v132b = true;
+}
+
 /** Ärendet kom ur kalendern och står kvar som det sattes (ägaren har inte rättat det). */
 function fromCalendar(d: Json | undefined): boolean {
   return !!d && !!d.trip.purpose_confirmed && !!(d.purpose_history ?? []).find((p: Json) => p.is_current)?.from_calendar;
@@ -1233,6 +1271,11 @@ function bulkDelete(ids: string[]): Json {
 function reviewOpen(r: Json): boolean {
   if (r.status !== "open") return false;
   if (r.kind !== "anomaly" || !r.trip_ids) return !!S().trips[r.trip_id];
+  // Avvikelser som gäller fordonet och inte en resa (trip_ids = []) ligger kvar tills de hanteras.
+  if (!r.trip_ids.length) return true;
+  // Kortet när resan inte finns i svaret (i den riktiga servern stängs ärendet vid nästa omräkning);
+  // används av e2e/demo.mjs.
+  if (r.demo_trip_gone === true) return true;
   const trips = (r.trip_ids as string[]).map((id) => S().trips[id]?.trip);
   return trips.every(Boolean) && trips.some((t) => t.category !== "private");
 }

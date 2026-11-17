@@ -37,7 +37,7 @@ import type { CategoryCode, ReviewItem, Trip } from "@/lib/types";
 import { cn, isTypingTarget } from "@/lib/utils";
 import { useIsMutating, useQueryClient } from "@tanstack/react-query";
 import { AiReviewDialog } from "@/components/trips/ai-review-dialog";
-import { AnomalyBody, anomalyTrips } from "./anomaly-card";
+import { AnomalyBody, anomalyDate, anomalyTrips } from "./anomaly-card";
 import { TripSummary, tripPlace } from "./trip-summary";
 
 /** Ärendetyper där man klassar resan direkt i snabbflödet. Avvikelser hör inte hit: där
@@ -63,13 +63,16 @@ function shortPlace(t: Trip, end: "start" | "end"): string {
 /** Kön: det som skiljer ärenden med samma rubrik åt – datum, klockslag och från → till. */
 function queueMeta(item: ReviewItem): string | null {
   const trips = itemTrips(item);
-  if (!trips.length) return null;
+  // Avvikelse vars resa inte finns i svaret: datum och klockslag ur ärendets data.
+  if (!trips.length) return item.kind === "anomaly" ? anomalyDate(item) : null;
   const [a, b] = trips;
   const when = a.started_at ?? a.sort_time;
   const time = (t: Trip) => (t.started_at ? formatTime(t.started_at) : null);
   const times = [time(a), b && formatDate(b.started_at ?? b.sort_time) === formatDate(when) ? time(b) : null].filter(Boolean).join(" och ");
-  const route = b ? `${shortPlace(a, "start")} → ${shortPlace(b, "end")}` : `${shortPlace(a, "start")} → ${shortPlace(a, "end")}`;
-  return `${formatDate(when)}${times ? ` ${times}` : ""} · ${route}`;
+  // Två resor: båda sträckorna (start och mål på var sin resa säger ingenting, t.ex. Hemmet → Hemmet).
+  const route = (t: Trip) => `${shortPlace(t, "start")} → ${shortPlace(t, "end")}`;
+  const routes = b ? `${route(a)} · ${route(b)}` : route(a);
+  return `${formatDate(when)}${times ? ` ${times}` : ""} · ${routes}`;
 }
 
 // ----------------------------------------------------------------------------- ärendekort

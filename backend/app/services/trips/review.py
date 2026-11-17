@@ -228,6 +228,10 @@ def close_orphaned(db: Session, vehicle_id: uuid.UUID, *, by: str = "system") ->
     closed = 0
     for item in items:
         stale = False
+        if item.kind == ReviewKind.ANOMALY:
+            # Avvikelser avgörs av stats.anomalies.close_noise via råresorna, som körs direkt
+            # efter: en ångrad uppdelning makulerar delresan men råresan finns kvar i en aktiv resa.
+            continue
         if item.kind == ReviewKind.MERGE:
             data = item.data or {}
             for key in ("first_raw_trip_id", "second_raw_trip_id"):

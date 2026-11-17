@@ -369,3 +369,196 @@ def test_antalet_fragor_vaxer_inte_med_antalet_arenden(client, engine, db, user,
     assert len(review_list(client)) == 20
     assert many == few
     assert all(i["trip"] or (i["first_trip"] and i["second_trip"]) for i in review_list(client))
+
+
+# ----------------------------------------------------------------------------- efter granskningen (1.3.2)
+
+
+def _overlap_pair(trips, *, odometer_overlap: float = 10.0):
+    """Två tjänsteresor som överlappar i mätarställning men inte i tid."""
+    t1 = trips.trip(A, B, category=Category.WORK, purpose="Möte", km=30.0, odometer_start=10000)
+    trips.skip(hours=3)
+    t2 = trips.trip(B, C, category=Category.WORK, purpose="Möte", km=20.0, odometer_start=10030 - odometer_overlap)
+    return t1, t2
+
+
+def _open_by_prefix(db, vehicle, prefix: str) -> list[M.ReviewItem]:
+    return [i for i in anomaly_items(db, vehicle) if i.dedupe_key.startswith(prefix)]
+
+
+def test_motstridiga_matarstallningar_behaller_klartexten_vid_omrakningen(db, user, vehicle, trips):
+    """Omräkningen och sökningen skriver samma nyckel: typen, talen och texten skiftar inte."""
+    _overlap_pair(trips)
+    pipeline.after_trips_changed(db, user_id=user.id, vehicle=vehicle, actor=audit.SYSTEM, notify=False)
+    (item,) = _open_by_prefix(db, vehicle, "odo-overlap:")
+    seen = []
+    for step in ("omräkning", "sökning", "omräkning"):
+        if step == "sökning":
+            scan(db, user, vehicle)
+        else:
+            pipeline.after_trips_changed(db, user_id=user.id, vehicle=vehicle, actor=audit.SYSTEM, notify=False)
+        assert item.status == ReviewState.OPEN
+        assert item.data["type"] == "odometer_backwards"
+        assert (item.data["first_odometer_end"], item.data["second_odometer_start"]) == (10030, 10020)
+        assert item.data["overlap_km"] == 10.0
+        assert "Det kan vara en dubblett eller ett avläsningsfel" not in item.detail
+        seen.append(item.detail)
+    assert len(set(seen)) == 1
+    # Sammanslagningen lägger inget eget överlappsärende om samma par (det fanns två i kön).
+    assert _open_by_prefix(db, vehicle, "overlap:") == []
+
+
+def test_gammalt_matarstallningsarende_skrivs_om(db, user, vehicle, trips):
+    t1, t2 = _overlap_pair(trips)
+    r1, r2 = raw_of(t1), raw_of(t2)
+    old = old_item(db, vehicle, f"odo-overlap:{r1.id}:{r2.id}",
+                   {"type": "odometer_overlap", "first_raw_trip_id": str(r1.id), "second_raw_trip_id": str(r2.id)})
+    pipeline.after_trips_changed(db, user_id=user.id, vehicle=vehicle, actor=audit.SYSTEM, notify=False)
+    assert old.status == ReviewState.OPEN and old.data["type"] == "odometer_backwards"
+    assert old.data["overlap_km"] == 10.0
+
+
+def test_sammanslagningens_gamla_overlapp_i_matarstallning_stangs(db, user, vehicle, trips):
+    t1, t2 = _overlap_pair(trips)
+    r1, r2 = raw_of(t1), raw_of(t2)
+    old, _ = review.upsert(
+        db, vehicle_id=vehicle.id, kind=ReviewKind.ANOMALY, dedupe_key=f"overlap:{r1.id}:{r2.id}",
+        title="Överlappande resor", detail="Två resor överlappar varandra i tid eller mätarställning. "
+        "Kontrollera uppgifterna.", logical_trip_id=t2.id,
+        data={"first_trip_id": str(t1.id), "second_trip_id": str(t2.id), "type": "overlap"},
+    )
+    pipeline.after_trips_changed(db, user_id=user.id, vehicle=vehicle, actor=audit.SYSTEM, notify=False)
+    assert old.status == ReviewState.RESOLVED
+    assert "Motstridiga mätarställningar" in old.resolution["note"]
+    assert len(_open_by_prefix(db, vehicle, "odo-overlap:")) == 1  # överlappet visas där i stället
+
+
+def test_overlapp_i_tid_har_samma_innehall_fran_sammanslagningen_och_sokningen(db, user, vehicle, trips):
+    t1 = trips.trip(A, B, category=Category.WORK, purpose="Möte", km=20.0, minutes=60)
+    t2 = trips.trip(B, C, category=Category.WORK, purpose="Möte", km=20.0, minutes=30,
+                    start_at=raw_of(t1).ended_at - timedelta(minutes=30))
+    pipeline.after_trips_changed(db, user_id=user.id, vehicle=vehicle, actor=audit.SYSTEM, notify=False)
+    (item,) = _open_by_prefix(db, vehicle, "overlap:")
+    first = (item.title, item.detail, dict(item.data))
+    assert item.data["first_raw_trip_id"] == str(raw_of(t1).id) and item.data["first_trip_id"] == str(t1.id)
+    assert item.data["overlap_minutes"] == 30 and "Kontrollera uppgifterna" not in item.detail
+    scan(db, user, vehicle)
+    assert item.status == ReviewState.OPEN and (item.title, item.detail, dict(item.data)) == first
+    pipeline.after_trips_changed(db, user_id=user.id, vehicle=vehicle, actor=audit.SYSTEM, notify=False)
+    assert item.status == ReviewState.OPEN and (item.title, item.detail, dict(item.data)) == first
+    assert item.logical_trip_id == t2.id
+
+
+def test_radet_om_tiden_foljer_resans_kalla(db, user, vehicle, trips):
+    imported = trips.trip(km=15.0, minutes=20)
+    raw_of(imported).duration_seconds = 90 * 60
+    manual = trips.trip(km=15.0, minutes=20, gap_minutes=600, source="manual")
+    raw_of(manual).duration_seconds = 90 * 60
+    db.flush()
+    scan(db, user, vehicle)
+    by_trip = {i.logical_trip_id: i for i in anomaly_items(db, vehicle)}
+    text = by_trip[imported.id].detail
+    # Starttiden från källan går inte att ändra i DriveLog: rådet lovar inte det.
+    assert "ur Volvos körjournal" in text and "starttid på resan" not in text and "Avfärda" in text
+    assert "angett tiderna själv" in by_trip[manual.id].detail
+
+
+def test_radet_om_strackan_foljer_resans_kalla(db, user, vehicle, trips):
+    imported = trips.trip(km=10.0)
+    mismatch(imported)
+    car = trips.trip(km=10.0, gap_minutes=600, source="volvo_api")
+    mismatch(car)
+    db.flush()
+    scan(db, user, vehicle)
+    by_trip = {i.logical_trip_id: i for i in anomaly_items(db, vehicle)}
+    assert "en ny import ger samma värden" in by_trip[imported.id].detail
+    assert "importera Volvos körjournal för dagen" not in by_trip[imported.id].detail
+    assert "importera Volvos körjournal för dagen" in by_trip[car.id].detail
+
+
+def test_delstracka_av_en_sammanslagen_resa(db, user, vehicle, trips, actor):
+    from app.services.trips import merge
+
+    t1 = trips.trip(A, B, category=Category.WORK, purpose="Möte", km=21.4)
+    t2 = trips.trip(B, C, category=Category.WORK, purpose="Möte", km=18.6, gap_minutes=5)
+    r1 = mismatch(t1, extra_km=30)
+    raw_of(t2).odometer_start, raw_of(t2).odometer_end = r1.odometer_end, r1.odometer_end + 19
+    db.flush()
+    merged = merge.merge_trips(db, [t1, t2], trigger="manual", actor=actor)
+    db.flush()
+    scan(db, user, vehicle)
+    (item,) = [i for i in anomaly_items(db, vehicle) if i.data["type"] == "odometer_mismatch"]
+    assert item.logical_trip_id == merged.id
+    assert item.data["part_of_trip"] is True
+    assert item.data["reported_km"] == 40.0 and item.data["part_distance_km"] == 21.4
+    assert item.data["distance_km"] == 21.4  # råresans värde finns kvar som förut
+    assert "delsträcka av resan" in item.detail and "Gör du inget redovisas 40,0 km" in item.detail
+
+
+def test_ensam_resa_ar_ingen_delstracka(db, user, vehicle, trips):
+    t = trips.trip(km=12.0)
+    mismatch(t)
+    db.flush()
+    scan(db, user, vehicle)
+    (item,) = anomaly_items(db, vehicle)
+    assert "part_of_trip" not in item.data and item.data["reported_km"] == 12.0
+    assert item.data["started_at"] == raw_of(t).started_at.isoformat()  # datum även om resan saknas
+
+
+def test_mojlig_dubblett_i_tidsordning(db, user, vehicle, trips):
+    import uuid
+
+    early = trips.trip(A, B, category=Category.WORK, purpose="Möte", km=10.0, minutes=30,
+                       id=uuid.UUID("ffffffff-ffff-4fff-8fff-ffffffffffff"))
+    re = raw_of(early)
+    late = trips.trip(A, B, category=Category.WORK, purpose="Möte", km=10.2,
+                      start_at=re.started_at + timedelta(seconds=40), odometer_start=re.odometer_end + 1,
+                      id=uuid.UUID("00000000-0000-4000-8000-000000000001"))
+    db.flush()
+    scan(db, user, vehicle)
+    (dup,) = [i for i in anomaly_items(db, vehicle) if i.data["type"] == "possible_duplicate"]
+    assert dup.data["first_raw_trip_id"] == str(re.id) and dup.data["second_raw_trip_id"] == str(raw_of(late).id)
+    assert dup.dedupe_key == f"anomaly:duplicate:{raw_of(late).id}:{re.id}"  # nyckeln följer id som förut
+
+
+def test_angiven_starttid_stanger_kortidsarendet(db, user, vehicle, trips):
+    t = trips.trip(km=15.0, minutes=20)
+    raw_of(t).duration_seconds = 90 * 60
+    db.flush()
+    scan(db, user, vehicle)
+    (item,) = anomaly_items(db, vehicle)
+    t.start_time_override = raw_of(t).started_at - timedelta(minutes=70)
+    db.flush()
+    scan(db, user, vehicle)
+    assert item.status == ReviewState.RESOLVED and item.resolution["reason"] == review.NO_LONGER_REASON
+
+
+def test_arendet_oppnas_igen_direkt_nar_resan_blir_tjanst(db, user, vehicle, trips):
+    t = trips.trip(A, B, category=Category.WORK, purpose="Möte", km=10.0)
+    mismatch(t)
+    db.flush()
+    scan(db, user, vehicle)
+    (item,) = anomaly_items(db, vehicle)
+    t.category, t.review_status = Category.PRIVATE, ReviewStatus.APPROVED
+    db.flush()
+    pipeline.after_trips_changed(db, user_id=user.id, vehicle=vehicle, actor=audit.SYSTEM, notify=False)
+    assert item.status == ReviewState.RESOLVED and item.resolution["reason"] == review.SCOPE_REASON
+    t.category = Category.WORK
+    db.flush()
+    pipeline.after_trips_changed(db, user_id=user.id, vehicle=vehicle, actor=audit.SYSTEM, notify=False)
+    assert item.status == ReviewState.OPEN  # utan att vänta på nattens sökning
+
+
+def test_makulerad_delresa_stanger_inte_avvikelsen(db, user, vehicle, trips):
+    """Som efter en ångrad uppdelning: ärendets resa är makulerad, men råresan ingår i en aktiv resa."""
+    t = trips.trip(A, B, category=Category.WORK, purpose="Möte", km=10.0)
+    mismatch(t)
+    gone = trips.trip(B, C, category=Category.WORK, purpose="Möte", km=5.0, gap_minutes=600, odometer_start=20000)
+    db.flush()
+    scan(db, user, vehicle)
+    (item,) = anomaly_items(db, vehicle)
+    gone.state = LogicalState.VOIDED
+    item.logical_trip_id = gone.id
+    db.flush()
+    pipeline.after_trips_changed(db, user_id=user.id, vehicle=vehicle, actor=audit.SYSTEM, notify=False)
+    assert item.status == ReviewState.OPEN and item.logical_trip_id == t.id

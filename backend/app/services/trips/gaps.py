@@ -8,12 +8,13 @@ from __future__ import annotations
 
 import uuid
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import utcnow
-from app.models import DataGap, LogicalTrip, RawTrip, ReviewItem, TripSegment, Vehicle
+from app.models import DataGap, LogicalTrip, RawTrip, TripSegment, Vehicle
 from app.models.enums import (
     Category,
     DecisionSource,
@@ -76,6 +77,12 @@ def recompute(
     rounding_only: set[str] = set()
     flagged: set[str] = set()
     overlaps = 0
+    # Ärendet "Motstridiga mätarställningar" skrivs med samma innehåll som avvikelsesökningen
+    # (samma nyckel): typ odometer_backwards, talen och klartexten med vad ägaren gör.
+    from app.services.stats import anomalies
+
+    vehicle = db.get(Vehicle, vehicle_id)
+    tz = settings_svc.user_timezone(db, vehicle.owner_user_id) if vehicle is not None else None
     # Varje resa jämförs med föregående resa – eller med den resa som hittills når längst i
     # mätarställning, om den slutar närmare där resan börjar. En resa som ligger inuti en annan
     # ger då ett överlapp men ingen falsk lucka mot nästa resa, medan en enda felskriven
@@ -113,40 +120,22 @@ def recompute(
             overlaps += 1
             key = f"odo-overlap:{a.id}:{b.id}"
             flagged.add(key)
+            title, detail, data = anomalies.odometer_overlap_content(a, b, tz or ZoneInfo("UTC"))
             review.upsert(
-                db,
-                vehicle_id=vehicle_id,
-                kind=ReviewKind.ANOMALY,
-                dedupe_key=key,
-                title="Motstridiga mätarställningar",
-                detail=(
-                    f"Två resor överlappar i mätarställning ({a.odometer_end:.0f} km respektive "
-                    f"{b.odometer_start:.0f} km). Det kan vara en dubblett eller ett avläsningsfel."
-                ),
-                data={"type": "odometer_overlap", "first_raw_trip_id": str(a.id), "second_raw_trip_id": str(b.id)},
+                db, vehicle_id=vehicle_id, kind=ReviewKind.ANOMALY, dedupe_key=key, title=title, detail=detail,
+                data=data,
             )
     # Öppna ärenden vars överlapp inte längre finns (t.ex. bara avrundning) stängs av sig själva.
+    # Äldre ärenden (typ odometer_overlap, före 1.3.2) som fortfarande gäller har skrivits om ovan.
     review.close_stale(
         db, vehicle_id, prefixes=("odo-overlap:",), keep=flagged, data_type="odometer_overlap",
         note=review.OVERLAP_GONE_NOTE,
     )
-
-    def backwards_gone(item: ReviewItem) -> bool:
-        """Nattsökningens ärende (stats.anomalies, samma nyckel): resorna motsäger inte längre
-        varandra mer än avrundningen, eller någon av dem är makulerad."""
-        try:
-            first, second = (db.get(RawTrip, uuid.UUID(item.data[k])) for k in ("first_raw_trip_id", "second_raw_trip_id"))
-        except (KeyError, TypeError, ValueError):
-            return False
-        if first is None or second is None or first.voided_at is not None or second.voided_at is not None:
-            return True
-        if first.odometer_end is None or second.odometer_start is None:
-            return True
-        return not second.odometer_start < first.odometer_end - slack
-
+    # Ett par som bara sökningen hittar (i tidsordning) stängs bara när överlappet är borta.
     review.close_stale(
         db, vehicle_id, prefixes=("odo-overlap:", "anomaly:odo_order:"), keep=flagged,
-        data_type="odometer_backwards", note=review.OVERLAP_GONE_NOTE, when=backwards_gone,
+        data_type="odometer_backwards", note=review.OVERLAP_GONE_NOTE,
+        when=lambda item: anomalies.odometer_overlap_gone(db, item, slack),
     )
     for key, gap in existing.items():
         if key in rounding_only and gap.status != GapStatus.OPEN and gap.is_current:

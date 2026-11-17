@@ -74,6 +74,8 @@ export interface DemoState {
   v130drift?: boolean;
   /** 1.3.2: avvikelser som visar sin resa (en om en resa och en om två resor). */
   v132?: boolean;
+  /** Avvikelsernas resor har starttid från bilen och ärendena resornas datum (efter granskningen av 1.3.2). */
+  v132b?: boolean;
 }
 
 type Runtime = "seedNow" | "homeMarked" | "imports" | "linksRevokedAt" | "nextTrip" | "nextQuestion";

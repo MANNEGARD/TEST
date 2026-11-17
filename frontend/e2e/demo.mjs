@@ -215,13 +215,14 @@ let startReviewTotal = null;
 /** Platsen som granskningen visar för resan: bekräftad plats med namn, annars adressen. */
 const placeOf = (t, end) => (t[`${end}_location`]?.confirmed ? t[`${end}_location`].name : t[`${end}_address`]);
 
-/** Visar avvikelsen av typen `type` i Granskning (hoppar över ärenden med →). Returnerar kortet eller null. */
-async function showAnomaly(page, type) {
+/** Visar avvikelsen av typen `type` (eller ärendet `id`) i Granskning (hoppar över ärenden med →).
+ *  Returnerar kortet eller null. */
+async function showAnomaly(page, type, id) {
   await visit(page, "/review/");
   const card = page.getByTestId("review-current");
   await card.waitFor({ timeout: 8000 });
   const list = await api(page, "GET", `/review?status=open&limit=200&vehicle_id=${seed.vehicleId}`);
-  const want = list.items.find((i) => i.kind === "anomaly" && i.data?.type === type)?.id;
+  const want = id ?? list.items.find((i) => i.kind === "anomaly" && i.data?.type === type)?.id;
   for (let n = 0; want && n < 20; n++) {
     if ((await card.getAttribute("data-item-id")) === want) return card;
     const prev = await card.getAttribute("data-item-id");
@@ -230,7 +231,7 @@ async function showAnomaly(page, type) {
       .waitForFunction((id) => document.querySelector('[data-testid="review-current"]')?.getAttribute("data-item-id") !== id, prev, { timeout: 1500 })
       .catch(() => {});
   }
-  fail(`avvikelsen ${type} visas inte i Granskning`);
+  fail(`avvikelsen ${id ?? type} visas inte i Granskning`);
   return null;
 }
 
@@ -515,6 +516,8 @@ try {
       if (seenMeta.has(title + text)) fail(`två köer med samma rubrik och samma andra rad: ${title} ${text}`);
       seenMeta.set(title + text, true);
       if ((await row.getAttribute("data-item-id")) === one?.id && !text.startsWith("2026-11-12")) fail(`avvikelsens kö-rad visar inte resans datum: "${text}"`);
+      // Två resor: båda sträckorna, inte start på den ena och mål på den andra ("Hemmet → Hemmet").
+      if ((await row.getAttribute("data-item-id")) === two?.id && (text.match(/→/g) ?? []).length !== 2) fail(`kö-raden för två resor visar inte båda sträckorna: "${text}"`);
     }
 
     // Avvikelsen om en resa.
@@ -530,6 +533,7 @@ try {
       for (const k of ["Arbete", "Privat", "Godkänn"]) if (keys.includes(k)) fail(`tangentraden visar "${k}" på en avvikelse`);
       if (!(await c1.getByTestId("anomaly-help").count())) fail("hjälptexten om Markera som hanterat och Avfärda saknas");
       if (!(await c1.getByTestId("anomaly-open-trip").count())) fail("avvikelsekortet saknar huvudknappen Öppna resan");
+      if (text.includes("≈")) fail("avvikelsens resa visar en uppskattad starttid (≈), som den riktiga kön inte har");
       await page.screenshot({ path: path.join(SHOTS, "granskning-avvikelse.png"), fullPage: true });
       // A, P och G gör ingenting på en avvikelse.
       const item = await c1.getAttribute("data-item-id");
@@ -550,6 +554,7 @@ try {
         if (!text.toLowerCase().includes(want.toLowerCase())) fail(`kortet för två resor visar inte "${want}"`);
       }
       if (!/48\s?803/.test(text) || !/48\s?799/.test(text)) fail("kortet för två resor visar inte mätarställningarna som inte går ihop");
+      if (text.includes("≈")) fail("avvikelsens resor visar uppskattade starttider (≈)");
       const href = (id) => c2.getByTestId(id).getAttribute("href", { timeout: 2000 }).catch(() => null);
       const hrefs = [await href("anomaly-open-trip"), await href("anomaly-open-trip-2")];
       BACKWARDS_TRIPS.forEach((t, i) => {
@@ -564,6 +569,92 @@ try {
     if ((await reviewTotal()) !== before - 1) fail("avvikelsen om en privat resa ligger kvar");
     await api(page, "PATCH", `/trips/${MISMATCH_TRIP.id}`, { category: MISMATCH_TRIP.category });
     if ((await reviewTotal()) !== before) fail("avvikelsen kom inte tillbaka när resan blev tjänst igen");
+  });
+
+  await section("avvikelser: råd efter källan, saknad resa och äldre typer", async () => {
+    step("Granskning: råden följer resans källa, kortet utan resa och äldre ärendetyper får förklaring");
+    // Ärenden som demot inte har läggs in i demots tillstånd (webbläsarens lagring) och tas bort efteråt.
+    const KEY = "drivelog.demo.state.v1";
+    const saved = await page.evaluate((k) => window.localStorage.getItem(k), KEY);
+    if (!saved) return fail("demots tillstånd finns inte i webbläsarens lagring");
+    const state = JSON.parse(saved);
+    const [a, b] = BACKWARDS_TRIPS;
+    const imported = trips.find((t) => t.category === "work" && t.started_at && t.ended_at && t.id !== MISMATCH_TRIP.id && !BACKWARDS_TRIPS.includes(t));
+    if (!imported || !state.trips[imported.id]) return fail("ingen tjänsteresa att göra till importerad");
+    state.trips[imported.id].trip.source = "volvo_import";
+    const elapsed = Math.round((Date.parse(imported.ended_at) - Date.parse(imported.started_at)) / 60000);
+    const base = { vehicle_id: seed.vehicleId, kind: "anomaly", status: "open", snoozed_until: null, created_at: seed.now, resolved_at: null, resolution: {}, kind_label: "Avvikelse" };
+    const add = (id, title, data, tripIds, extra = {}) => state.review.unshift({ ...base, id, title, detail: "Text från servern", data, logical_trip_id: tripIds.length === 1 ? tripIds[0] : null, trip_ids: tripIds, ...extra });
+    const ids = {
+      time: "e2e00000-0000-4000-8000-000000000001",
+      dist: "e2e00000-0000-4000-8000-000000000002",
+      legacy: "e2e00000-0000-4000-8000-000000000003",
+      stale: "e2e00000-0000-4000-8000-000000000004",
+      gone: "e2e00000-0000-4000-8000-000000000005",
+      mergeOverlap: "e2e00000-0000-4000-8000-000000000006",
+    };
+    add(ids.time, "Körtiden är längre än resans längd i tid", { type: "time_conflict", started_at: imported.started_at, ended_at: imported.ended_at, driving_minutes: elapsed + 45, elapsed_minutes: elapsed }, [imported.id]);
+    add(ids.dist, "Körsträckan stämmer inte med mätarställningen", { type: "odometer_mismatch", distance_km: imported.distance_km, reported_km: imported.distance_km, odometer_km: imported.distance_km + 20 }, [imported.id]);
+    add(ids.legacy, "Motstridiga mätarställningar", { type: "odometer_overlap" }, [a.id, b.id]);
+    add(ids.stale, "Fordonet har inte rapporterat nya uppgifter", { type: "stale_data" }, []);
+    add(ids.gone, "Körsträckan stämmer inte med mätarställningen", { type: "odometer_mismatch", distance_km: 21.4, started_at: "2026-11-10T07:15:00Z" }, ["00000000-0000-4000-8000-0000deadbeef"], { demo_trip_gone: true });
+    add(ids.mergeOverlap, "Överlappande resor", { type: "overlap", first_trip_id: a.id, second_trip_id: b.id }, [a.id, b.id]);
+    await page.evaluate(([k, v]) => window.localStorage.setItem(k, v), [KEY, JSON.stringify(state)]);
+    const restore = async () => {
+      await page.evaluate(([k, v]) => window.localStorage.setItem(k, v), [KEY, saved]);
+      await visit(page, "/review/");
+    };
+    try {
+      const textOf = async (card) => (await card.innerText()).replace(/\s+/g, " ");
+      // Tiderna kommer ur importen och går inte att ändra: inget råd om att ändra starttiden.
+      const time = await showAnomaly(page, null, ids.time);
+      if (time) {
+        const t = await textOf(time);
+        if (/ändra starttiden|ange rätt starttid/i.test(t)) fail(`kortet för en importerad resa råder att ändra starttiden: "${t.slice(0, 200)}"`);
+        if (!t.includes("ur Volvos körjournal")) fail("kortet säger inte att klockslagen kommer ur Volvos körjournal");
+      }
+      // En importerad resa: en ny import ger samma värden.
+      const dist = await showAnomaly(page, null, ids.dist);
+      if (dist) {
+        const t = await textOf(dist);
+        if (t.includes("importera Volvos körjournal för dagen")) fail("kortet råder att importera Volvos körjournal för en resa som redan är importerad");
+        if (!t.includes("en ny import ger samma värden")) fail("kortet säger inte att en ny import ger samma värden");
+      }
+      // Omräkningens äldre typ odometer_overlap förklaras som mätarställningar som går bakåt.
+      const legacy = await showAnomaly(page, null, ids.legacy);
+      if (legacy) {
+        if (!(await legacy.getByTestId("anomaly-explanation").count())) fail("odometer_overlap visas utan förklaring (Vad du gör, Om du inte gör något)");
+        if (!(await textOf(legacy)).includes("Mätarställningen går bakåt") && !/48\s?799/.test(await textOf(legacy))) fail("odometer_overlap förklaras inte med mätarställningarna");
+      }
+      // Sammanslagningens äldre överlapp där tiderna inte överlappar: förklaras med mätarställningen.
+      const merged = await showAnomaly(page, null, ids.mergeOverlap);
+      if (merged) {
+        const t = await textOf(merged);
+        if (t.includes("överlappar i tid")) fail(`överlappet förklaras som ett överlapp i tid fast tiderna inte överlappar: "${t.slice(0, 200)}"`);
+        if (!/48\s?803/.test(t)) fail("överlappet förklaras inte med mätarställningarna");
+      }
+      // Insamlingens stale_data har samma väg till Integrationer som stale_vehicle_data.
+      const stale = await showAnomaly(page, null, ids.stale);
+      if (stale) {
+        const href = await stale.getByTestId("anomaly-open-place").getAttribute("href", { timeout: 2000 }).catch(() => null);
+        if (!href?.includes("/integrations")) fail(`stale_data saknar knappen till Integrationer (${href})`);
+      }
+      // Resan saknas i svaret: bara meddelandet (med datum) och Avfärda, inga råd om resan.
+      const gone = await showAnomaly(page, null, ids.gone);
+      if (gone) {
+        const t = await textOf(gone);
+        if (!(await gone.getByTestId("anomaly-trip-missing").count())) fail("kortet säger inte att resan inte kunde visas");
+        if (await gone.getByTestId("anomaly-explanation").count()) fail("kortet utan resa visar ändå Vad du gör och Om du inte gör något");
+        if (await gone.getByTestId("anomaly-resolve").count()) fail("kortet utan resa har knappen Markera som hanterat");
+        if (!t.includes("2026-11-10")) fail("kortet utan resa visar inte datumet ur ärendet");
+        await page.screenshot({ path: path.join(SHOTS, "granskning-avvikelse-saknad-resa.png"), fullPage: true });
+        const row = page.locator(`aside[aria-label="Kö"] li[data-item-id="${ids.gone}"]`);
+        const meta = (await row.getByTestId("review-queue-meta").innerText({ timeout: 2000 }).catch(() => "")).trim();
+        if (!meta.startsWith("2026-11-10")) fail(`kö-raden för ärendet utan resa visar inte datumet ("${meta}")`);
+      }
+    } finally {
+      await restore();
+    }
   });
 
   await section("ändringshistorik", async () => {
@@ -681,7 +772,8 @@ try {
 
   await section("starttid", async () => {
     step("Resans sida: ≈ med grund, Ange starttid och ta bort den igen");
-    const est = trips.find((t) => t.start_time_source === "estimated" && t.started_at);
+    // Avvikelsernas resor har starttid från bilen i demot (applyV132b), så de räknas inte här.
+    const est = trips.find((t) => t.start_time_source === "estimated" && t.started_at && t.id !== MISMATCH_TRIP?.id && !BACKWARDS_TRIPS.includes(t));
     const unk = trips.find((t) => t.start_time_source === "unknown" && t.ended_at && t.review_status === "approved");
     await visit(page, `/journal/${est.id}`, "resa-uppskattad");
     const value = page.getByTestId("start-time-estimated");

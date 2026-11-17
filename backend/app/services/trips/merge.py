@@ -816,17 +816,7 @@ def evaluate_vehicle(
         verdict = decide(gap, auto_max=auto_max, ask_max=ask_max, odometer_tolerance=tol)
 
         if verdict == "overlap":
-            _, created = review.upsert(
-                db,
-                vehicle_id=vehicle_id,
-                kind=ReviewKind.ANOMALY,
-                dedupe_key=f"overlap:{prev_raw.id}:{next_raw.id}",
-                title="Överlappande resor",
-                detail="Två resor överlappar varandra i tid eller mätarställning. Kontrollera uppgifterna.",
-                logical_trip_id=b.id,
-                data={"first_trip_id": str(a.id), "second_trip_id": str(b.id), "type": "overlap"},
-            )
-            result["overlaps"] += 1 if created else 0
+            result["overlaps"] += 1 if _flag_overlap(db, vehicle_id, a, b, prev_raw, next_raw) else 0
             i += 1
             continue
 
@@ -963,17 +953,7 @@ def _evaluate_by_category(
         prev_raw, next_raw = _edge_raws(a)[1], _edge_raws(b)[0]
         gap = stop_gap(prev_raw, next_raw)
         if decide(gap, auto_max=0, ask_max=0, odometer_tolerance=tol) == "overlap":
-            _, created = review.upsert(
-                db,
-                vehicle_id=vehicle_id,
-                kind=ReviewKind.ANOMALY,
-                dedupe_key=f"overlap:{prev_raw.id}:{next_raw.id}",
-                title="Överlappande resor",
-                detail="Två resor överlappar varandra i tid eller mätarställning. Kontrollera uppgifterna.",
-                logical_trip_id=b.id,
-                data={"first_trip_id": str(a.id), "second_trip_id": str(b.id), "type": "overlap"},
-            )
-            result["overlaps"] += 1 if created else 0
+            result["overlaps"] += 1 if _flag_overlap(db, vehicle_id, a, b, prev_raw, next_raw) else 0
             i += 1
             continue
 
@@ -1045,30 +1025,102 @@ def evaluate_after_decisions(db: Session, vehicle: Vehicle, actor: Actor) -> lis
     )
 
 
+# Sammanslagningens äldre ärenden om resor som bara överlappar i mätarställning (före 1.3.2).
+ODOMETER_ONLY_NOTE = (
+    "Stängt automatiskt: resorna överlappar inte i tid, bara i mätarställning. Det visas som ärendet "
+    "\"Motstridiga mätarställningar\"."
+)
+
+
+def _flag_overlap(
+    db: Session, vehicle_id: uuid.UUID, a: LogicalTrip, b: LogicalTrip, prev_raw: RawTrip, next_raw: RawTrip
+) -> bool:
+    """Ärendet "Överlappande resor" när två resor inte kan slås ihop för att de överlappar.
+
+    Bara när resorna överlappar i tid enligt källans egna tider: ett överlapp i mätarställning
+    visas som "Motstridiga mätarställningar" (gaps.recompute och avvikelsesökningen), och en
+    avvikelse byggs aldrig på DriveLogs uppskattningar. Innehållet är detsamma som sökningens
+    ärende med samma nyckel. Returnerar om ärendet skapades nu. Påverkar inte sammanslagningen.
+    """
+    from app.services import settings as settings_svc
+    from app.services.stats import anomalies
+
+    if not anomalies.is_time_overlap(prev_raw, next_raw) or b.start_time_override is not None:
+        return False
+    vehicle = db.get(Vehicle, vehicle_id)
+    assert vehicle is not None
+    title, detail, data = anomalies.time_overlap_content(
+        prev_raw, next_raw, settings_svc.user_timezone(db, vehicle.owner_user_id)
+    )
+    _, created = review.upsert(
+        db,
+        vehicle_id=vehicle_id,
+        kind=ReviewKind.ANOMALY,
+        dedupe_key=f"overlap:{prev_raw.id}:{next_raw.id}",
+        title=title,
+        detail=detail,
+        logical_trip_id=b.id,
+        data={**data, "first_trip_id": str(a.id), "second_trip_id": str(b.id)},
+        reopen_reason=review.SCOPE_REASON,
+    )
+    return created
+
+
 def close_stale_overlaps(db: Session, vehicle_id: uuid.UUID, *, odometer_tolerance: float) -> int:
-    """Stänger öppna ärenden "Överlappande resor" där resorna inte längre överlappar.
+    """Stänger öppna ärenden "Överlappande resor" där resorna inte längre överlappar i tid.
 
     T.ex. ett överlapp i mätarställningen som bara var avrundning till hela kilometer, eller
-    en resa som rättats eller makulerats. Avvikelsesökningens ärenden med samma nyckel
-    (utan ``first_trip_id``) och ärenden som ägaren har hanterat rörs inte.
+    en resa som rättats eller makulerats. Ärenden om resor som bara överlappar i mätarställning
+    stängs med en egen förklaring (de visas som "Motstridiga mätarställningar"). Ärenden som
+    ägaren har hanterat rörs inte.
     """
+    from app.services.stats import anomalies
 
-    def gone(item: ReviewItem) -> bool:
+    def pair(item: ReviewItem) -> tuple[RawTrip | None, RawTrip | None] | None:
         if "first_trip_id" not in (item.data or {}):
-            return False
+            return None
         try:
             first, second = (uuid.UUID(part) for part in item.dedupe_key.split(":")[1:3])
         except ValueError:
+            return None
+        return db.get(RawTrip, first), db.get(RawTrip, second)
+
+    def gone(item: ReviewItem) -> bool:
+        raws = pair(item)
+        if raws is None:
             return False
-        prev, nxt = db.get(RawTrip, first), db.get(RawTrip, second)
+        prev, nxt = raws
         if prev is None or nxt is None or prev.voided_at is not None or nxt.voided_at is not None:
             return True
         verdict = decide(stop_gap(prev, nxt), auto_max=0, ask_max=0, odometer_tolerance=odometer_tolerance)
         return verdict != "overlap"
 
-    return review.close_stale(
+    def not_in_time(item: ReviewItem, *, odometer: bool) -> bool:
+        """Överlappar inte i tid enligt källan; ``odometer`` = men väl i mätarställning."""
+        raws = pair(item)
+        if raws is None or raws[0] is None or raws[1] is None:
+            return False
+        prev, nxt = raws
+        if anomalies.is_time_overlap(prev, nxt):
+            return False
+        in_odometer = (
+            prev.odometer_end is not None and nxt.odometer_start is not None
+            and nxt.odometer_start < prev.odometer_end - seg.odometer_slack(odometer_tolerance)
+        )
+        return in_odometer == odometer
+
+    closed = review.close_stale(
         db, vehicle_id, prefixes=("overlap:",), keep=set(), data_type="overlap", note=review.OVERLAP_GONE_NOTE,
         when=gone,
+    )
+    closed += review.close_stale(
+        db, vehicle_id, prefixes=("overlap:",), keep=set(), data_type="overlap", note=ODOMETER_ONLY_NOTE,
+        when=lambda item: not_in_time(item, odometer=True),
+    )
+    # Överlapp i tid som bara bygger på DriveLogs uppskattade tider.
+    return closed + review.close_stale(
+        db, vehicle_id, prefixes=("overlap:",), keep=set(), data_type="overlap", note=anomalies.NO_LONGER_NOTE,
+        when=lambda item: not_in_time(item, odometer=False),
     )
 
 
