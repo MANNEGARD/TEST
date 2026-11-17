@@ -165,6 +165,15 @@ def _has_arrival(anchor_eff: Eff, steps: list[Step]) -> bool:
     return False
 
 
+def _position_reported_after(anchor_eff: Eff, steps: list[Step]) -> bool:
+    """Har bilen rapporterat positionen (en nyare positionsrapport) vid eller efter rörelsens
+    senaste mätarvärde, utan att positionen har flyttats? Då väntar ingen position längre."""
+    final = steps[-1].eff
+    if final.pos_ts is None or anchor_eff.pos_ts is None or final.pos_ts <= anchor_eff.pos_ts:
+        return False
+    return final.odo_ts is None or final.pos_ts >= final.odo_ts - CLOCK_SKEW
+
+
 def _arrival_complete(anchor_eff: Eff, steps: list[Step], settings: dict[str, Any]) -> bool:
     """Är rörelsen avslutad med en ankomst vars uppgifter är kompletta (1.5.0)?
 
@@ -914,10 +923,11 @@ def process_vehicle(
         prev_eff = eff
         # En ankomst med kompletta uppgifter stängs direkt (1.5.0); annars gäller väntan.
         # Stänger väntan från före 1.5.0 rörelsen stängs den här också – men bara när den här
-        # rörelsen själv har en ankomst. Utan ankomst stängde 1.4.2 ibland på en tidigare
+        # rörelsen själv har en ankomst, eller när bilen har rapporterat sin position efter
+        # körningen (samma plats: en rundresa). Annars stängde 1.4.2 ibland på en tidigare
         # ankomst i samma rörelse innan positionen kom, och positionen blev sedan en egen resa
         # med uppskattad sträcka (samma kilometer två gånger); då väntar den nya motorn i stället.
-        forced = old_closed and _has_arrival(anchor_eff, steps)
+        forced = old_closed and (_has_arrival(anchor_eff, steps) or _position_reported_after(anchor_eff, steps))
         if not (forced or _arrival_complete(anchor_eff, steps, settings) or _settled(steps, settings)):
             continue
         legs = _build_legs(anchor, anchor_eff, steps, settings, poll)

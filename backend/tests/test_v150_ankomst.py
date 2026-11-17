@@ -708,9 +708,12 @@ def compare(db, user, old_module: ModuleType, seed: int) -> dict[str, Any]:
                 # uppskattad ur fågelvägen – samma kilometer två gånger. Den nya motorn väntar på
                 # positionen (som före 1.4.2 för en rörelse utan ankomst) och gör en resa av det.
                 before = [(a, x) for (a, x) in expected if x == d.odo_to and a < x]
-                if before and before[0] in new_spans and (d.odo_to, d.odo_to) not in new_spans:
-                    assert "round_trip_unobserved" in old_by_span[before[0]].quality_flags, info
-                    assert old_by_span[(d.odo_to, d.odo_to)].distance_quality == DistanceQuality.ESTIMATED, info
+                if (
+                    before and before[0] in new_spans and (d.odo_to, d.odo_to) not in new_spans
+                    and "round_trip_unobserved" in old_by_span[before[0]].quality_flags
+                    and old_by_span[(d.odo_to, d.odo_to)].distance_quality == DistanceQuality.ESTIMATED
+                    and old_created[old_by_span[(d.odo_to, d.odo_to)].id] >= old_created[old_by_span[before[0]].id]
+                ):
                     expected.remove((d.odo_to, d.odo_to))
                     removed.add((d.odo_to, d.odo_to))
                     changed.add(before[0])
@@ -746,7 +749,9 @@ def compare(db, user, old_module: ModuleType, seed: int) -> dict[str, Any]:
                 changed.add(right)
                 out["merged_late_odometer"] += 1
                 continue
-            nxt = [y for (b, y) in expected if b == x and y > d.odo_to and (d.odo_to, y) in new_spans]
+            # (nästa resa kan i sin tur ha fått ett släpande värde: dess slut prövas när turen
+            # kommer till den, och hela listan jämförs till sist)
+            nxt = [y for (b, y) in expected if b == x and y > d.odo_to]
             if nxt:
                 # (b) bilen körde vidare inom väntan: resten hamnade i nästa resa
                 expected[expected.index((a, x))] = right
