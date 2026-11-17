@@ -3,18 +3,22 @@
 # DriveLogs inbyggda Caddy tar emot https://transcribe.smgd.se och skickar trafiken hit via
 # Docker-nätverket "smgd" (DriveLog 1.4.0: --extra-doman transcribe.smgd.se=transcribe:8080).
 #
-#   cp .env.example .env      # fyll i nycklarna
-#   docker network create smgd 2>/dev/null || true
-#   docker compose pull && docker compose up -d
+# Installationsraden (installera.sh) lägger den här filen i /opt/transcribe och sköter resten. Vilken
+# version som körs står i .env i samma katalog (compose läser den av sig själv):
+#   TRANSCRIBE_VERSION=1.1.0     sätts av installationsraden och av den automatiska uppdateringen
+#                                (uppdatera.sh); saknas den används "latest"
+#   TRANSCRIBE_IMAGE=…           en annan avbild (behövs normalt inte)
+#
+# För hand, efter en ändring i .env:  cd /opt/transcribe && sudo docker compose up -d
 #
 # Utan DriveLog på servern: docker compose -f docker-compose.yml -f docker-compose.fristaende.yml up -d
 name: transcribe
 
 services:
   transcribe:
-    # Färdig avbild från GitHub (byggs av .github/workflows/transcribe.yml). Bygga själv:
-    #   docker build -t ghcr.io/smgd-mp/transcribe:latest .
-    image: ghcr.io/smgd-mp/transcribe:latest
+    # Färdig avbild från GitHub (byggs och provstartas av .github/workflows/transcribe.yml).
+    # Bygga själv:  docker build --build-arg VERSION=1.1.0 -t ghcr.io/smgd-mp/transcribe:1.1.0 .
+    image: ${TRANSCRIBE_IMAGE:-ghcr.io/smgd-mp/transcribe}:${TRANSCRIBE_VERSION:-latest}
     container_name: transcribe
     restart: unless-stopped
     env_file: .env

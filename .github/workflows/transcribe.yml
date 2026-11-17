@@ -2,9 +2,11 @@
 # automatiska uppdateringen mot riktig Docker och systemd – och på standardgrenen publicering till
 # ghcr.io/<ägare>/transcribe.
 #
-# Publicering: en version (ur transcribe/package.json) publiceras EN gång, som <version> och latest.
-# Finns <version> redan publiceras inget – höj versionen för att ge ut en ny. Servrarna installerar
-# det som ligger som latest, så det är alltid en avbild som har provstartats här.
+# Publicering: en version (ur transcribe/package.json) publiceras EN gång under sitt versionsnummer.
+# Finns <version> redan byggs och skickas inget – höj versionen för att ge ut en ny. latest flyttas
+# sedan (utan att något byggs om) till den utgivna versionen, men bara om den är högre än den latest
+# redan pekar på. Servrarna installerar det som ligger som latest, så det är alltid en avbild som har
+# provstartats här och som också finns under sitt versionsnummer.
 #
 # Actions är fästa vid commit-SHA (versionen står som kommentar), samma som övriga arbetsflöden.
 name: Transkribering
@@ -64,7 +66,7 @@ jobs:
     name: Bygg, provstarta och prova uppdateringen
     needs: test
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     permissions:
       contents: read
       packages: write
@@ -102,7 +104,7 @@ jobs:
           docker network create smgd
           docker run -d --name transcribe --network smgd -p 127.0.0.1:8080:8080 \
             -e TRANSCRIBE_PUBLIC_URL=http://localhost:8080 transcribe:ci
-          for i in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:8080/api/health; then break; fi
             sleep 1
           done
@@ -118,7 +120,7 @@ jobs:
           # Kommandot som den automatiska uppdateringen frågar: ledig, kod 0.
           test "$(docker exec transcribe node dist/cli.js upptagen)" = ledig
           # Hälsokontrollen i avbilden blir "healthy".
-          for i in $(seq 1 40); do
+          for _ in $(seq 1 40); do
             [ "$(docker inspect -f '{{.State.Health.Status}}' transcribe)" = healthy ] && break
             sleep 2
           done
@@ -127,13 +129,99 @@ jobs:
         if: failure()
         run: docker logs transcribe || true
 
+      - name: Egen server – dagens server (1.0.0 utan etikett, gammal compose-fil) uppgraderas av raden
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Som ägarens server ser ut idag: 1.0.0 byggd ur incheckningen den gavs ut i (avbilden har
+          # ingen versionsetikett och saknar kommandot "upptagen"), startad med den gamla
+          # docker-compose.yml och en .env utan TRANSCRIBE_VERSION. Avbilderna heter transcribe-idag
+          # lokalt (bara namnet i compose-filen är utbytt), och inget hämtas eller publiceras.
+          docker rm -f -v transcribe >/dev/null 2>&1 || true # provstarten ovan
+          V100=f4e854efa05cb0a5241c9e361a4ce1f67ce03423
+          KAT="$RUNNER_TEMP/transcribe-idag"
+          KALLA="$RUNNER_TEMP/transcribe-idag-kalla"
+          GAMMAL="$RUNNER_TEMP/transcribe-1.0.0"
+          B=transcribe-idag
+          PW="$(openssl rand -base64 18)"
+          echo "::add-mask::$PW"
+          ETIKETT='{{with .Config.Labels}}{{index . "org.opencontainers.image.version"}}{{end}}'
+          installera() {
+            cat transcribe/installera.sh | sudo env TRANSCRIBE_KATALOG="$KAT" TRANSCRIBE_REPO_RAW="file://$KALLA" \
+              TRANSCRIBE_PULL=0 TRANSCRIBE_VANTA=120 bash -s -- drivelog.example.com transcribe.example.com --utan-automatisk-uppdatering
+          }
+          halsa() { docker inspect -f '{{.State.Health.Status}}' transcribe; }
+          logga_in() {
+            docker exec -e PW="$PW" transcribe node -e 'fetch("http://127.0.0.1:8080/api/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "idag@example.com", password: process.env.PW }) }).then((r) => console.log(r.status), () => console.log(0))'
+          }
+
+          # 1.0.0 byggs ur sin incheckning. Etiketten saknas (inte ens basavbilden har en).
+          git fetch --no-tags --depth=1 origin "$V100"
+          mkdir -p "$GAMMAL"
+          git archive "$V100" transcribe | tar -x -C "$GAMMAL"
+          docker build -q -t "$B:1.0.0" "$GAMMAL/transcribe" >/dev/null
+          test -z "$(docker image inspect -f "$ETIKETT" "$B:1.0.0" | sed 's/<no value>//')"
+          docker tag "$B:1.0.0" "$B:latest"
+
+          mkdir -p "$KALLA/deploy" "$KALLA/transcribe"
+          printf '#!/usr/bin/env bash\necho "   (DriveLogs skript i provet: $*)"\n' > "$KALLA/deploy/server.sh"
+          cp transcribe/docker-compose.yml transcribe/uppdatera.sh transcribe/.env.example "$KALLA/transcribe/"
+          sudo mkdir -p "$KAT"
+          git show "$V100:transcribe/docker-compose.yml" | sed "s|image: ghcr.io/smgd-mp/transcribe:latest|image: $B:latest|" \
+            | sudo tee "$KAT/docker-compose.yml" >/dev/null
+          sudo grep -qx "    image: $B:latest" "$KAT/docker-compose.yml"
+          printf 'TRANSCRIBE_PUBLIC_URL=https://transcribe.example.com\nTRANSCRIBE_DOMAIN=transcribe.example.com\nTRANSCRIBE_IMAGE=%s\n' "$B" \
+            | sudo tee "$KAT/.env" >/dev/null
+          sudo chmod 600 "$KAT/.env"
+          (cd "$KAT" && sudo docker compose up -d)
+          for _ in $(seq 1 60); do [ "$(halsa)" = healthy ] && break; sleep 2; done
+          test "$(halsa)" = healthy
+          test "$(docker exec transcribe node -p "require('/app/package.json').version")" = 1.0.0
+          # 1.0.0 saknar "upptagen" (hjälptext, kod 1) …
+          if docker exec transcribe node dist/cli.js upptagen; then echo "1.0.0 borde sakna kommandot upptagen" >&2; exit 1; fi
+          # … så uppdatera.sh frågar databasen direkt. Frågan fungerar mot 1.0.0:s riktiga databas.
+          fraga="$(sed -n "s/^FRAGA_100='\(.*\)'$/\1/p" transcribe/uppdatera.sh)"
+          test -n "$fraga"
+          test "$(docker exec transcribe node -e "$fraga")" = 0
+          token="$(docker exec transcribe node dist/cli.js inbjudan admin | grep -oE '/#/inbjudan/[A-Za-z0-9_-]+' | sed 's|.*/||')"
+          docker exec -e PW="$PW" -e TOKEN="$token" transcribe node -e 'fetch("http://127.0.0.1:8080/api/invites/" + process.env.TOKEN, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "idag@example.com", password: process.env.PW }) }).then(async (r) => { if (!r.ok) { console.error(r.status, await r.text()); process.exit(1); } })'
+          test "$(logga_in)" = 200
+
+          # Första körningen av raden, innan något nyare finns: ingen omstart, versionen låses i .env
+          # (lästes ur package.json) och den nya compose-filen läggs på plats.
+          fore="$(docker inspect -f '{{.State.StartedAt}}' transcribe)"
+          installera
+          test "$(docker inspect -f '{{.State.StartedAt}}' transcribe)" = "$fore"
+          sudo grep -qx "TRANSCRIBE_VERSION=1.0.0" "$KAT/.env"
+          sudo cmp transcribe/docker-compose.yml "$KAT/docker-compose.yml"
+          sudo grep -F "TRANSCRIBE_VERSION i .env är nu 1.0.0 (versionen som kör)." "$KAT/uppdatering.log"
+          (cd "$KAT" && sudo docker compose config --images) | grep -qx "$B:1.0.0"
+
+          # Den nya versionen erbjuds: raden uppgraderar med säkerhetskopia, och kontot finns kvar.
+          docker tag transcribe:ci "$B:latest"
+          installera
+          test "$(docker inspect -f "$ETIKETT" transcribe)" = "$VERSION"
+          test "$(halsa)" = healthy
+          test "$(logga_in)" = 200
+          sudo sh -c "test -f $KAT/kopior/*-1.0.0/transcribe.db"
+          sudo grep -qx "TRANSCRIBE_VERSION=$VERSION" "$KAT/.env"
+          sudo grep -F "Klart: SMGD Transkribering $VERSION är igång och frisk." "$KAT/uppdatering.log"
+          sudo test ! -e "$KAT/pagaende-uppgradering"
+          # Båda versionerna finns lokalt (återgången skulle inte behöva nätet).
+          docker image inspect "$B:1.0.0" "$B:$VERSION" >/dev/null
+
+          # Städa (nästa steg installerar på nytt i en egen katalog).
+          (cd "$KAT" && sudo docker compose down -v)
+          sudo rm -rf "$KAT" "$KALLA" "$GAMMAL"
+
       - name: Egen server – installationsraden och den automatiska uppdateringen (riktig Docker och systemd)
         run: |
           set -euo pipefail
           # Tjänsten installeras i en tillfällig katalog med installationsraden, som ägaren gör det,
           # men med lokala avbilder: TRANSCRIBE_IMAGE i .env pekar på versioner som skapas här ur den
           # nyss byggda avbilden, och TRANSCRIBE_PULL=0 – inget hämtas eller publiceras.
-          docker rm -f -v transcribe >/dev/null # provstarten ovan
+          docker rm -f -v transcribe >/dev/null 2>&1 || true # provstarten ovan
           KAT="$RUNNER_TEMP/transcribe-server"
           KALLA="$RUNNER_TEMP/transcribe-kalla"
           ENHET=transcribe-uppdatering
@@ -164,6 +252,7 @@ jobs:
           tjanstens_lage() { systemctl show -p ActiveState --value "$ENHET.service"; }
           version() { docker inspect -f '{{ index .Config.Labels "org.opencontainers.image.version" }}' transcribe; }
           halsa() { docker inspect -f '{{.State.Health.Status}}' transcribe; }
+          kor() { docker inspect -f '{{.State.Running}}' transcribe; }
           startad() { docker inspect -f '{{.State.StartedAt}}' transcribe; }
           logg() { sudo cat "$KAT/uppdatering.log"; }
           frisk_pa() { # version
@@ -239,8 +328,10 @@ jobs:
           #    skriptet). Markeringen ligger kvar, och nästa körning gör klart: den nya blir frisk.
           erbjud 900.2.0
           sudo systemctl start --no-block "$ENHET.service"
-          for _ in $(seq 1 120); do [ "$(version)" = 900.2.0 ] && break; sleep 1; done
+          # Avbrottet görs när den nya containern verkligen kör (inte bara är skapad).
+          for _ in $(seq 1 120); do [ "$(version)" = 900.2.0 ] && [ "$(kor)" = true ] && break; sleep 1; done
           test "$(version)" = 900.2.0
+          test "$(kor)" = true
           test "$(halsa)" != healthy
           test "$(tjanstens_lage)" = activating
           sudo systemctl kill --signal=KILL "$ENHET.service"
@@ -270,8 +361,9 @@ jobs:
           #    går sedan tillbaka och lägger tillbaka databasen.
           erbjud 900.4.0
           sudo systemctl start --no-block "$ENHET.service"
-          for _ in $(seq 1 120); do [ "$(version)" = 900.4.0 ] && break; sleep 1; done
+          for _ in $(seq 1 120); do [ "$(version)" = 900.4.0 ] && [ "$(kor)" = true ] && break; sleep 1; done
           test "$(version)" = 900.4.0
+          test "$(kor)" = true
           sudo systemctl kill --signal=KILL "$ENHET.service"
           for _ in $(seq 1 30); do [ "$(tjanstens_lage)" != activating ] && break; sleep 1; done
           sudo grep -qx "fas=provar" "$KAT/pagaende-uppgradering"
@@ -290,7 +382,7 @@ jobs:
           grep -F "Säkerhetskopior:" "$RUNNER_TEMP/transcribe-lage.txt"
 
           # 8) Lås: medan en annan körning håller låset gör tjänsten ingenting.
-          sudo flock /run/lock/transcribe-uppdatering.lock systemctl start "$ENHET.service"
+          sudo flock /run/transcribe-uppdatering.lock systemctl start "$ENHET.service"
           logg | grep -F "pågår redan – den här kontrollen hoppas över"
 
           # 9) Raden en gång till: ingen ny version, ingen omstart, timern kvar.
@@ -318,6 +410,7 @@ jobs:
       - name: Egen server – loggar vid fel
         if: failure()
         run: |
+          sudo cat "$RUNNER_TEMP/transcribe-idag/uppdatering.log" 2>/dev/null || true
           sudo cat "$RUNNER_TEMP/transcribe-server/uppdatering.log" 2>/dev/null || true
           sudo cat "$RUNNER_TEMP/transcribe-server/lage.txt" 2>/dev/null || true
           sudo journalctl -u transcribe-uppdatering.service --no-pager -n 200 2>/dev/null || true
@@ -334,7 +427,8 @@ jobs:
           sudo systemctl daemon-reload || true
           docker rm -f transcribe >/dev/null 2>&1 || true
           docker volume rm transcribe_transcribe-data >/dev/null 2>&1 || true
-          sudo rm -rf "$RUNNER_TEMP/transcribe-server" "$RUNNER_TEMP/transcribe-kalla" "$RUNNER_TEMP/transcribe-lage.txt"
+          sudo rm -rf "$RUNNER_TEMP/transcribe-server" "$RUNNER_TEMP/transcribe-kalla" "$RUNNER_TEMP/transcribe-lage.txt" \
+            "$RUNNER_TEMP/transcribe-idag" "$RUNNER_TEMP/transcribe-idag-kalla" "$RUNNER_TEMP/transcribe-1.0.0"
 
       - name: Logga in på GHCR
         # Standardgrenen (repot har ingen gren som heter main; samma villkor som i addon.yml).
@@ -354,7 +448,7 @@ jobs:
           # En utgiven version ändras aldrig i efterhand. Bara ett uttryckligt "taggen finns inte"
           # ger publicering; varje annat fel (nätverk, behörighet, GHCR nere) avbryter jobbet.
           if utskrift="$(docker buildx imagetools inspect "$IMAGE:$VERSION" 2>&1)"; then
-            echo "::notice::$IMAGE:$VERSION finns redan – höj versionen i package.json för att ge ut en ny."
+            echo "::notice::$IMAGE:$VERSION finns redan – höj versionen i package.json för att ge ut en ny. (latest kontrolleras ändå nedan.)"
             echo "finns=true" >> "$GITHUB_OUTPUT"
           elif printf '%s\n' "$utskrift" | grep -qiE 'manifest unknown|: not found'; then
             echo "$IMAGE:$VERSION finns inte än – publiceras."
@@ -364,15 +458,45 @@ jobs:
             echo "::error::Kunde inte avgöra om $IMAGE:$VERSION redan finns. Inget publiceras."
             exit 1
           fi
-      - name: Publicera
-        # Standardgrenen, och bara en version som inte redan finns. Versionstaggen först, sedan
-        # latest: latest pekar aldrig på något som inte också finns under sitt versionsnummer.
+      - name: Publicera versionen
+        # Standardgrenen, och bara en version som inte redan finns.
         if: (github.ref == 'refs/heads/main' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) && steps.finns.outputs.finns == 'false'
         env:
           IMAGE: ${{ steps.meta.outputs.image }}
           VERSION: ${{ steps.meta.outputs.version }}
         run: |
-          for tag in "$VERSION" latest; do
-            docker tag transcribe:ci "$IMAGE:$tag"
-            docker push "$IMAGE:$tag"
-          done
+          docker tag transcribe:ci "$IMAGE:$VERSION"
+          docker push "$IMAGE:$VERSION"
+      - name: Flytta latest till versionen (om den är högre)
+        # Körs också när versionen redan fanns: misslyckades flytten förra gången (GHCR nere, avbrutet
+        # jobb) görs den nu. latest flyttas aldrig till en lägre version, och inget byggs om – latest
+        # blir exakt den avbild som redan är utgiven under sitt versionsnummer.
+        if: github.ref == 'refs/heads/main' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        env:
+          IMAGE: ${{ steps.meta.outputs.image }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          version_digest="$(docker buildx imagetools inspect --format '{{.Manifest.Digest}}' "$IMAGE:$VERSION")"
+          fel="$RUNNER_TEMP/latest-fel.txt"
+          if latest_digest="$(docker buildx imagetools inspect --format '{{.Manifest.Digest}}' "$IMAGE:latest" 2>"$fel")"; then
+            if [ "$latest_digest" = "$version_digest" ]; then
+              echo "latest är redan $VERSION."
+              exit 0
+            fi
+            docker pull -q "$IMAGE:latest" >/dev/null
+            latest_version="$(docker image inspect -f '{{with .Config.Labels}}{{index . "org.opencontainers.image.version"}}{{end}}' "$IMAGE:latest" | sed 's/<no value>//')"
+            # En latest utan giltig etikett (1.0.0) räknas som lägre än varje utgiven version.
+            hogst="$(printf '%s\n%s\n' "$latest_version" "$VERSION" | sort -V | tail -n 1)"
+            if [[ "$latest_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] && { [ "$hogst" != "$VERSION" ] || [ "$latest_version" = "$VERSION" ]; }; then
+              echo "::notice::latest är $latest_version – inte lägre än $VERSION, så den flyttas inte."
+              exit 0
+            fi
+            echo "latest flyttas från ${latest_version:-en version utan etikett} till $VERSION."
+          elif grep -qiE 'manifest unknown|: not found' "$fel"; then
+            echo "latest finns inte än – sätts till $VERSION."
+          else
+            cat "$fel" >&2
+            echo "::error::Kunde inte läsa $IMAGE:latest. latest lämnas som den är."
+            exit 1
+          fi
+          docker buildx imagetools create -t "$IMAGE:latest" "$IMAGE:$VERSION"

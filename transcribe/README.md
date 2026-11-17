@@ -39,13 +39,27 @@ Servern behöver ungefär 100 MB RAM. ffmpeg körs bara kort efter varje inspeln
 
 ## Installation på VPS:en (bredvid DriveLog)
 
-**Allt i en rad:** när nycklarna (steg 1) och DNS-posten (steg 2) finns gör den här raden steg
-3–5 åt dig. Den frågar efter de två nycklarna med dold inmatning, startar tjänsten och visar
-inbjudningslänken. Raden går att köra igen; en `.env` som redan finns skrivs inte över.
+**Allt i en rad:** när DNS-posten (steg 2) finns gör den här raden resten åt dig:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/SMGD-MP/TEST/HEAD/transcribe/installera.sh | sudo bash -s -- drivelog.smgd.se transcribe.smgd.se
 ```
+
+Raden
+
+1. ser till att DriveLog skickar trafiken för `transcribe.smgd.se` vidare (steg 3). Svarar
+   domänen redan med giltigt certifikat hoppas steget över, och DriveLog startas inte om;
+2. hämtar tjänstens filer till `/opt/transcribe` och startar tjänsten;
+3. slår på automatisk uppdatering (se [Uppdatera](#uppdatera));
+4. visar inbjudningslänken till ditt administratörskonto.
+
+Raden frågar inte efter några nycklar. De läggs in i webbgränssnittet efteråt (steg 6). Raden går
+att köra igen hur många gånger som helst; en `.env` som redan finns skrivs aldrig över.
+
+Vill du inte ha automatisk uppdatering, lägg till `--utan-automatisk-uppdatering` sist på raden.
+
+**Har du redan version 1.0.0?** Kör raden en gång till. Då får du version 1.1.0 och den automatiska
+uppdateringen.
 
 ### 1. Skaffa nycklar (gratis)
 
@@ -53,10 +67,16 @@ curl -fsSL https://raw.githubusercontent.com/SMGD-MP/TEST/HEAD/transcribe/instal
    *Create a New API Key*.
 2. **Groq:** skapa ett konto på <https://console.groq.com> och skapa en nyckel under *API Keys*.
 
+Nycklarna läggs in i webbgränssnittet när tjänsten är igång (steg 6).
+
 ### 2. DNS
 
 Skapa en A-post för `transcribe.smgd.se` som pekar på VPS:ens IP-adress, samma adress som
 `drivelog.smgd.se`.
+
+### Steg för steg för hand
+
+Installationsraden gör steg 3–5 åt dig. Här är samma sak för hand.
 
 ### 3. DriveLog skickar trafiken vidare
 
@@ -84,19 +104,32 @@ sudo curl -fsSLO https://raw.githubusercontent.com/SMGD-MP/TEST/HEAD/transcribe/
 sudo curl -fsSL -o .env https://raw.githubusercontent.com/SMGD-MP/TEST/HEAD/transcribe/.env.example
 ```
 
-Öppna `.env` och klistra in nycklarna vid `DEEPGRAM_API_KEY=` och `WHISPER_API_KEY=`:
+Vilken version som körs styrs av `TRANSCRIBE_VERSION` i `.env`. Saknas raden används `latest`.
+Vill du låsa en version, lägg till den (installationsraden och den automatiska uppdateringen gör
+det själva):
 
 ```bash
-sudo nano .env
+echo 'TRANSCRIBE_VERSION=1.1.0' | sudo tee -a .env
 ```
+
+`TRANSCRIBE_IMAGE` i `.env` väljer en annan avbild. Det behövs normalt inte.
+
+Nycklarna behöver inte stå i `.env`; de läggs in i gränssnittet (steg 6). Vill du ändå ha dem i
+filen, fyll i `DEEPGRAM_API_KEY=` och `WHISPER_API_KEY=` med `sudo nano .env`.
 
 ```bash
 sudo docker network create smgd 2>/dev/null; sudo docker compose pull && sudo docker compose up -d
 ```
 
+Efter en ändring i `.env`:
+
+```bash
+cd /opt/transcribe && sudo docker compose up -d
+```
+
 ### 5. Skapa ditt administratörskonto
 
-Vid första starten skriver tjänsten ut en inbjudningslänk:
+Vid första starten skriver tjänsten ut en inbjudningslänk (installationsraden visar den):
 
 ```bash
 sudo docker compose logs transcribe | grep inbjudan
@@ -104,11 +137,53 @@ sudo docker compose logs transcribe | grep inbjudan
 
 Öppna länken och skapa kontot. Bjud sedan in andra under **Administration**.
 
+### 6. Lägg in nycklarna
+
+Gå till **Administration → API-nycklar** och klistra in nyckeln till Deepgram och nyckeln till
+Groq.
+
+- Varje nyckel kontrolleras mot tjänsten innan den sparas. En felaktig nyckel sparas inte.
+- En sparad nyckel gäller direkt. Ingen omstart behövs.
+- Nycklarna sparas krypterade i databasen. Huvudnyckeln ligger i datakatalogen, i filen
+  `secret.key`. Den ska följa med i säkerhetskopian (se [Drift](#drift)). Försvinner den måste
+  nycklarna läggas in igen.
+- Nycklar i `.env` fungerar som förut, som reserv. En nyckel som lagts in i gränssnittet går före.
+
+**Obs:** går tjänsten tillbaka till version 1.0.0 läser den versionen inte nycklar som lagts in i
+gränssnittet. Då gäller bara nycklarna i `.env`. Nycklarna i gränssnittet finns kvar och gäller igen
+när 1.1.0 körs.
+
 ### Uppdatera
 
+**Automatiskt:** installationsraden slår på en systemd-timer som kör `/opt/transcribe/uppdatera.sh`
+ungefär var 15:e minut. När en ny version finns:
+
+1. hämtas den nya versionen;
+2. väntar uppdateringen om en inspelning eller bearbetning pågår, och försöker igen vid nästa
+   kontroll;
+3. stoppas tjänsten och databasen (med `secret.key`) säkerhetskopieras till
+   `/opt/transcribe/kopior`. Ljudet kopieras inte;
+4. startas den nya versionen och kontrolleras;
+5. blir den inte frisk läggs databasen tillbaka och den förra versionen startas igen. Den version
+   som misslyckades prövas inte igen förrän en ännu nyare finns, eller tills du kör
+   installationsraden.
+
+Se läget (ändrar ingenting):
+
 ```bash
-cd /opt/transcribe && sudo docker compose pull && sudo docker compose up -d
+sudo /opt/transcribe/uppdatera.sh --lage
 ```
+
+Loggen ligger i `/opt/transcribe/uppdatering.log`.
+
+**För hand:** kör installationsraden igen, eller kontrollera direkt:
+
+```bash
+sudo /opt/transcribe/uppdatera.sh
+```
+
+Stäng av den automatiska uppdateringen genom att köra installationsraden med
+`--utan-automatisk-uppdatering` sist.
 
 ### Utan DriveLog på servern
 
@@ -122,12 +197,17 @@ sudo docker compose -f docker-compose.yml -f docker-compose.fristaende.yml up -d
 ## Drift
 
 - **Data:** allt ligger i Docker-volymen `transcribe_transcribe-data`. Det är databasen
-  (`transcribe.db`) och ljudet (`audio/<id>/audio.m4a`, cirka 30 MB per timme).
-- **Säkerhetskopia:**
+  (`transcribe.db`), huvudnyckeln för de sparade API-nycklarna (`secret.key`) och ljudet
+  (`audio/<id>/audio.m4a`, cirka 30 MB per timme).
+- **Säkerhetskopia:** kommandot nedan tar med allt i volymen, även `secret.key`. Utan
+  `secret.key` måste API-nycklarna läggas in igen efter en återställning.
 
   ```bash
   sudo docker run --rm -v transcribe_transcribe-data:/data -v "$PWD":/backup alpine tar czf /backup/transcribe-backup.tgz -C /data .
   ```
+
+  Den automatiska uppdateringen sparar dessutom en kopia av databasen och `secret.key` (utan ljud)
+  i `/opt/transcribe/kopior` före varje uppdatering. De tre senaste behålls.
 
 - **Glömt lösenord:**
 
@@ -139,6 +219,13 @@ sudo docker compose -f docker-compose.yml -f docker-compose.fristaende.yml up -d
 
   ```bash
   sudo docker compose exec transcribe node dist/cli.js inbjudan admin
+  ```
+
+- **Pågår något just nu?** Visar `ledig`, eller `upptagen: …` om en inspelning eller bearbetning
+  pågår. Den automatiska uppdateringen använder samma kontroll.
+
+  ```bash
+  sudo docker compose exec transcribe node dist/cli.js upptagen
   ```
 
 ## Tips för bästa resultat
@@ -169,4 +256,6 @@ fungerar allt utom själva transkriberingen.
 | Live-inspelning (WebSocket → WAV + Deepgram) | `src/live.ts` |
 | Slutversion (kö, ffmpeg, Whisper, talare) | `src/jobs.ts` |
 | Sammanslagning, filtrering av Whisper-påhitt, export | `src/merge.ts` |
+| API-nycklar (kontroll, kryptering, reserv i `.env`) | `src/keys.ts` |
+| Prov av installationsraden och uppdateringen (`sudo bash prov/kor.sh`) | `prov/` |
 | Webbapp (inga byggsteg) | `web/` |
