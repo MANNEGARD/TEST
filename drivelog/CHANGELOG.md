@@ -3,6 +3,17 @@
 > Från 1.0.2 visar Home Assistant **Uppdatera** först när den nya versionen är färdigbyggd och
 > går att hämta – det går bra att trycka direkt.
 
+## 1.4.1
+
+- **Rättat: hämtningen från Volvo stannade med "Ett oväntat fel" efter en körning.** Lunchregeln
+  kraschade när den prövade en resa från bilen som saknar starttid (bilen rapporterar ingen
+  starttid, och uppskattningen lyckas inte alltid). Då sparades varken avläsningen eller resan,
+  och felet upprepades vid varje hämtning tills bilen kördes igen. Felet har funnits sedan 1.3.0
+  och visade sig vid första körningen efter uppdateringen.
+- **Resan kommer av sig själv.** Vid första hämtningen efter uppdateringen skapas resan som
+  fastnade. Har bilen körts flera sträckor medan felet pågick kan de ha blivit en enda resa,
+  märkt *kan vara flera körningar*: dela upp den, eller importera Volvos körjournal för dagen.
+
 ## 1.4.0
 
 - **Avvikelser i Granskning visar vilken resa det gäller.** Varje avvikelse visar nu resan –

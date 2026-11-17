@@ -232,13 +232,25 @@ def _home(place: KnownLocation | None) -> bool:
     return place is not None and place.confirmed and place.type == LocationType.HOME
 
 
+def _start(u: LogicalTrip) -> datetime | None:
+    """Resans starttid. Bilen rapporterar ingen starttid, så en resa från bilen kan sakna den:
+    då används den senast möjliga starten ur råresan (fältet finns bara där), annars sluttiden."""
+    if u.started_at is not None:
+        return u.started_at
+    for segment in u.segments:
+        raw = segment.raw_trip
+        if raw is not None and raw.start_latest is not None:
+            return raw.start_latest
+    return u.ended_at
+
+
 def _outbound(db: Session, u: LogicalTrip, *, user_id: uuid.UUID, cfg: dict[str, Any]) -> KnownLocation | None:
     """Är ``u`` en utresa U (kontor → ställe X)? Returnerar X (bostaden räknas, se ``at_home``)."""
     if not _single(u) or not _free(u) or u.start_location_id is None or u.end_location_id is None:
         return None
     if u.start_location_id == u.end_location_id:
         return None
-    start = u.started_at or u.start_latest or u.ended_at
+    start = _start(u)
     local_end = _local(u.ended_at, cfg)
     if local_end is None or start is None:
         return None
