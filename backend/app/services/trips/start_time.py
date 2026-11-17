@@ -43,7 +43,8 @@ själv; bara ägaren kan ange en annan.
 Statusen "bilen används" (Volvos command-accessibility, ``VehicleObservation.car_in_use``:
 UNAVAILABLE med orsaken CAR_IN_USE) läses och sparas vid varje hämtning. Den får bara FÖRFINA
 starttiden, i ett enda fall: när den slår om i samma hämtning som motorstarten (avläsningen vid
-övergången visar både motorn igång och statusen). Då blir den tidigaste av bilens två
+övergången visar både motorn igång och statusen) och statusens tid ligger högst två minuter före
+motorstartens. Då blir den tidigaste av bilens två
 tidsstämplar (motorstartens och statusens) inom fönstret starttiden, och grunden anger vilket
 besked som gav tiden: ``start_signal`` (``engine``, ``car_in_use`` eller
 ``engine_and_car_in_use``) och ``in_use_reported_at``. Metoden är ``engine_start`` även när
@@ -73,6 +74,9 @@ regel gäller ensam, med samma resultat och grund som utan statusen; grunden få
   tidsstämpel för avstängningen (t.ex. när "motorn igång" låg kvar en hämtning efter stoppet), så att
   en tidigare motorstart – eller ingen – blev övergången. Statusen förfinar bara tiden för SAMMA
   övergång som motorstarten ger utan den.
+* ``too_early`` – statusen slog om i samma hämtning som motorstarten, men dess tid ligger mer än
+  ``ENGINE_STATUS_LEAD`` (2 min) före motorstartens, eller motorstarten saknar tid. Att bilen
+  rullade när statusen slog om går inte att belägga (dörren kan ha öppnats, bilen förvärmts).
 
 Statusen ligger kvar på avläsningarna och syns i felsökningsfilen, så att regeln kan prövas mot
 hur ägarens bil faktiskt rapporterar innan statusen får göra mer.
@@ -130,12 +134,20 @@ K4_MARGIN = {"route": (2.0, 0.25), "similar": (2.0, 0.25), "table": (3.0, 0.35)}
 # 1.5.0: starttid ur bilens egen rapport om motorstarten (fill_from_engine).
 ENGINE_METHODS = ("engine_start", "poll_midpoint")  # fastställda: rörs aldrig igen av sig själv
 ENGINE_CLOCK_SKEW = timedelta(minutes=2)  # som detection.CLOCK_SKEW
+# Statusens tid förfinar bara starttiden när den ligger högst så här långt före motorstartens
+# ("slår om samtidigt som motorstarten"); annars kan statusen ha slagit om långt före körningen.
+ENGINE_STATUS_LEAD = timedelta(minutes=2)
 # "Kort" fönster mellan två hämtningar: täcker hämtning var 2:a–5:e minut med marginal för
 # en fördröjd hämtning. Mitten ligger då högst 3 minuter från den verkliga starten.
 ENGINE_SHORT_WINDOW_MINUTES = 6.0
 ENGINE_SPEED_FACTOR = 2.0  # se plausible_speed_kmh
 ENGINE_LOOKBACK = timedelta(days=14)  # resor så långt bakåt (från senaste avläsningen) prövas
 ENGINE_NO_EARLIEST = timedelta(hours=24)  # avläsningar så långt före ankomsten när E saknas
+# Avläsningar så långt före tidigaste start läses också: den sista med bilen stillastående kan ligga
+# före gränsen (en bil som rapporterar under färd får gränsen ur motorrapporten minus 2 min, och
+# med 4 minuter eller mer mellan hämtningarna hamnar raden före den). Äldre rader ändrar inget:
+# övergången måste ändå ligga efter tidigaste start (``_find_start``).
+ENGINE_PREV_LOOKBACK = timedelta(hours=1)
 _LIVE = (TripSource.VOLVO_API, TripSource.DEMO)
 _KNOWN = (TimeQuality.EXACT, TimeQuality.REPORTED)
 _ARRIVAL_KNOWN = (TimeQuality.EXACT, TimeQuality.REPORTED, TimeQuality.ESTIMATED)
@@ -726,6 +738,12 @@ def engine_estimate(
     engine_on = first_on.engine_running is True
     reported = first_on.engine_reported_at if engine_on or not in_use else None
     in_use_at = getattr(first_on, "accessibility_reported_at", None) if in_use else None
+    if in_use_at is not None and (reported is None or in_use_at < reported - ENGINE_STATUS_LEAD):
+        # Statusen slog om långt före motorstarten (t.ex. ett långt fönster när hämtningen legat
+        # nere) eller utan motorstartens tid: att bilen rullade då går inte att belägga. Statusen
+        # lämnas och motorstartens regel gäller ensam, som utan statusen.
+        status_ignored, in_use, in_use_at = "too_early", False, None
+        reported = first_on.engine_reported_at
     basis: dict[str, Any] = {
         "polled_before": _iso(prev.last_seen_at),
         "polled_running": _iso(first_on.fetched_at),
@@ -822,7 +840,7 @@ def engine_plan(db: Session, vehicle_id: uuid.UUID) -> list[EngineChange]:
         if isinstance(raw.start_estimate_basis, dict) and raw.start_estimate_basis.get("method") in ENGINE_METHODS:
             continue
         ended = raw.ended_at
-        lower = (raw.start_earliest or ended - ENGINE_NO_EARLIEST) - ENGINE_CLOCK_SKEW
+        lower = (raw.start_earliest or ended - ENGINE_NO_EARLIEST) - ENGINE_CLOCK_SKEW - ENGINE_PREV_LOOKBACK
         rows = list(db.execute(
             select(VehicleObservation).where(
                 VehicleObservation.vehicle_id == vehicle_id,
@@ -947,7 +965,7 @@ def unknown_start_reasons(db: Session, raw: RawTrip, locks: Any, history: Any = 
     elif ended < newest - ENGINE_LOOKBACK:
         reasons.append("too_old")
     else:
-        lower = (raw.start_earliest or ended - ENGINE_NO_EARLIEST) - ENGINE_CLOCK_SKEW
+        lower = (raw.start_earliest or ended - ENGINE_NO_EARLIEST) - ENGINE_CLOCK_SKEW - ENGINE_PREV_LOOKBACK
         rows = list(db.execute(
             select(VehicleObservation).where(
                 VehicleObservation.vehicle_id == raw.vehicle_id,

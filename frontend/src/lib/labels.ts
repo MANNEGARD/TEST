@@ -377,6 +377,8 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   "feedback.undo": "Ändring ångrad",
   "trip.auto_approved": "Godkänd automatiskt",
   "trip.start_time_override": "Starttiden ändrades",
+  "trip.start_time_engine": "Starttiden togs ur bilens motorstart",
+  "trip.start_latest_engine": "Senaste möjliga start ur bilens motorstart",
   "export.link_download": "Hämtad via länk",
   "export.links_revoked": "Nedladdningslänkarna stängdes",
   "month_close.run": "Månaden kontrollerades",

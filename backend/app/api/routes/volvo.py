@@ -506,6 +506,16 @@ def _diag_value(value: Any) -> Any:
     return value
 
 
+def _diag_iso(value: Any) -> str | None:
+    """En tidpunkt sparad som ISO-text i en grund, eller None (aldrig annan text)."""
+    if not isinstance(value, str):
+        return None
+    try:
+        return _diag_value(datetime.fromisoformat(value))
+    except ValueError:
+        return None
+
+
 def _safe_key(value: Any) -> str | None:
     """Bara korta koder (endpoint- och felnycklar), aldrig fri text."""
     text = str(value or "").strip().lower()
@@ -615,6 +625,11 @@ def build_diagnostics(db: DbDep, vehicle: Vehicle, *, days: int, now: Any) -> di
             "created_at": _diag_value(raw.created_at),
             "protected_by_month": locks.in_file(raw),
             "start_method": _safe_key(basis.get("method")),
+            # Vilket av bilens besked som gav starttiden (engine, car_in_use, engine_and_car_in_use)
+            # och om statusen "bilen används" lämnades, och i så fall varför (t.ex. too_early).
+            "start_signal": _safe_key(basis.get("start_signal")),
+            "in_use_reported_at": _diag_iso(basis.get("in_use_reported_at")),
+            "status_ignored": _safe_key(basis.get("status_ignored")),
             "start_unknown_reason": start_reasons[-1] if start_reasons else None,
             "start_unknown_steps": start_reasons,
             "fuel_unknown_reason": _safe_key(fuel_reason),

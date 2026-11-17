@@ -144,6 +144,18 @@ def test_work_with_purpose_asks_for_approval(db, user, vehicle, trips, fake_ha, 
     assert req.context["assessment"] == "work_purpose" and req.context["proposed_purpose"] == PURPOSE
 
 
+def test_purpose_that_ends_with_a_full_stop_gets_one_full_stop(db, user, vehicle, trips, fake_ha, monkeypatch):
+    """Ärenden som regeln skriver slutar ofta med punkt: notisen ska inte få två."""
+    suggest(monkeypatch, [], remember=False)
+    mode = settings_svc.MODE_SELF_DRIVING
+    _setup(db, user, mode, hide=False)
+    home(trips)
+    trip = _trip(db, trips, "work_purpose", purpose="Hemresa från kunden.")
+    req = _ask(db, user, vehicle, trip, mode)
+    assert req.message.endswith("4,2 mil. Ärende: Hemresa från kunden.") and ".." not in req.message
+    assert req.actions[0]["purpose"] == "Hemresa från kunden."  # ärendet som sparas är oförändrat
+
+
 @pytest.mark.parametrize("mode", MODES)
 def test_work_with_purpose_hidden_on_lock_screen(db, user, vehicle, trips, fake_ha, monkeypatch, mode):
     suggest(monkeypatch, [], remember=True)

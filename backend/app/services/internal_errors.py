@@ -93,6 +93,7 @@ STEP_LABELS: dict[str, str] = {
     "pipeline.anomalies": "stängning av avvikelser",
     "pipeline.notify": "notiser",
     "volvo.poll": "hämtningen",
+    "vehicle.capacity_refill": "omräkning av elen efter ändrad batterikapacitet",
 }
 
 

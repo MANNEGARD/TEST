@@ -540,3 +540,18 @@ def test_migration_0005_up_and_down(tmp_path):
     command.upgrade(cfg, "head")
     assert "usable_battery_kwh" in cols("vehicles")
     engine.dispose()
+
+
+def test_every_named_step_has_a_label_in_the_list_of_internal_errors():
+    """Omräkningen efter ändrad batterikapacitet körs som ett eget delsteg; ett fel där ska visas
+    med ett namn, inte med den råa koden."""
+    import re
+    from pathlib import Path
+
+    from app.services import internal_errors
+
+    app_dir = Path(__file__).resolve().parents[1] / "app"
+    names = {n for f in app_dir.rglob("*.py")
+             for n in re.findall(r'run_step\(\s*db,\s*"([a-z_.]+)"', f.read_text(encoding="utf-8"))}
+    assert "vehicle.capacity_refill" in names
+    assert names <= set(internal_errors.STEP_LABELS), names - set(internal_errors.STEP_LABELS)

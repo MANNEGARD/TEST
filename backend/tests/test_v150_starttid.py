@@ -796,3 +796,82 @@ def test_start_signal_only_names_a_timestamp_that_gave_the_time():
     rows[1].engine_reported_at, rows[1].accessibility_reported_at = at(-200), at(-13.2)
     kind, when, _, basis = estimate(rows, km=8.0)
     assert kind == "set" and when == at(-13) and basis["start_signal"] == "car_in_use"
+
+
+def test_status_long_before_the_engine_start_in_a_long_window_is_not_the_start():
+    """Helhetsprovet: hämtningen låg nere (fönster 58 min), statusen slog om 20 min före motorstarten i
+    samma fönster. Statusens tid får inte bli en fast starttid: motorstartens tid gäller, som utan
+    statusen. Statusen högst två minuter före motorstarten förfinar fortfarande tiden."""
+    rows = [
+        srow(-200, -133, engine=False, engine_ts=-1000, status=FREE, status_ts=-1000),
+        srow(-75, -0.5, engine=True, engine_ts=-95.3, status=IN_USE, status_ts=-115.3),
+        srow(1.5, engine=False, engine_ts=0.4, status=FREE, status_ts=0.5),
+    ]
+    kind, when, _, basis = assert_same_as_without_status(rows, "too_early", km=100.0)
+    assert kind == "set" and when == at(-95) and basis["method"] == "engine_start"
+    assert basis["window_minutes"] == 58.0
+    # Kort försprång (1,5 min): statusens tid förfinar som förut.
+    rows[1].accessibility_reported_at = at(-96.8)
+    kind, when, _, basis = estimate(rows, km=100.0)
+    assert kind == "set" and when == at(-97) and basis["start_signal"] == "car_in_use"
+    assert "status_ignored" not in basis
+
+
+def test_debug_file_shows_which_signal_gave_the_start(db, user, vehicle):
+    """Felsökningsfilen säger varför: vilket av bilens besked som gav starttiden, statusens tid och om
+    statusen lämnades (här: för tidig i ett långt fönster)."""
+    from app.api.routes import volvo as volvo_routes
+
+    long_arr = ARR - timedelta(days=1)
+    sobs(db, vehicle, -200, -133, engine=False, engine_ts=-1000, status=FREE, status_ts=-1000, base=long_arr)
+    sobs(db, vehicle, -75, -0.5, engine=True, engine_ts=-95.3, status=IN_USE, status_ts=-115.3, base=long_arr)
+    sobs(db, vehicle, 1.5, engine=False, engine_ts=0.4, status=FREE, status_ts=0.5, base=long_arr)
+    live_trip(db, vehicle, user, km=100.0, ended=long_arr, earliest=long_arr - timedelta(hours=4))
+    sobs(db, vehicle, -40, -14.1, engine=False, engine_ts=-300, status=FREE, status_ts=-300)
+    sobs(db, vehicle, -12.1, -0.4, engine=True, engine_ts=-12.3, status=IN_USE, status_ts=-12.8)
+    sobs(db, vehicle, 1.7, engine=False, engine_ts=0.5, status=FREE, status_ts=0.5)
+    live_trip(db, vehicle, user, km=8.0, ended=ARR, earliest=ARR - timedelta(hours=3))
+    assert start_time.fill_from_engine(db, vehicle.id) == 2
+    out = volvo_routes.build_diagnostics(db, vehicle, days=14, now=ARR + timedelta(minutes=5))
+    long_trip, short_trip = out["trips"]
+    assert long_trip["started_at"] == (long_arr - timedelta(minutes=95)).isoformat()
+    assert (long_trip["start_method"], long_trip["start_signal"], long_trip["status_ignored"],
+            long_trip["in_use_reported_at"]) == ("engine_start", None, "too_early", None)
+    assert short_trip["started_at"] == at(-13).isoformat()
+    assert (short_trip["start_method"], short_trip["start_signal"], short_trip["status_ignored"],
+            short_trip["in_use_reported_at"]) == ("engine_start", "car_in_use", None,
+                                                  at(-12.8).isoformat(timespec="seconds"))
+
+
+def test_history_events_from_the_engine_start_have_a_text_in_the_web():
+    """Historiken visar ``AUDIT_ACTION_LABELS[action] ?? action``: händelserna som fill_from_engine
+    skriver ska ha en text, inte visas som rå kod."""
+    import inspect
+    import re
+    from pathlib import Path
+
+    labels = Path(__file__).resolve().parents[2] / "frontend" / "src" / "lib" / "labels.ts"
+    if not labels.exists():
+        pytest.skip("webben finns inte bredvid backend")
+    block = labels.read_text(encoding="utf-8").split("AUDIT_ACTION_LABELS", 1)[1].split("};", 1)[0]
+    actions = set(re.findall(r'"(trip\.start_[a-z_]*engine)"', inspect.getsource(start_time)))
+    assert actions == {"trip.start_time_engine", "trip.start_latest_engine"}
+    for action in actions:
+        assert f'"{action}":' in block, action
+
+
+def test_car_that_reports_while_driving_with_five_minutes_between_the_polls(db, user, vehicle):
+    """En bil som rapporterar under färd: detekteringen sätter tidigaste start ur motorrapporten
+    minus 2 min. Med 4–5 minuter mellan hämtningarna ligger den sista avläsningen med bilen
+    stillastående före den gränsen; den ska ändå läsas, så att motorstarten blir starttiden."""
+    from app.services.export import month_close
+
+    obs(db, vehicle, -60, -22.8, engine=False, engine_ts=-300)
+    obs(db, vehicle, -18, -13.5, engine=True, engine_ts=-18.4)
+    obs(db, vehicle, -8.5, -1, engine=True, engine_ts=-18.4)
+    obs(db, vehicle, 1.5, engine=False, engine_ts=0.4)
+    trip = live_trip(db, vehicle, user, km=11.0, ended=ARR, earliest=at(-20.4), latest=at(-13.5))
+    raw = seg.ordered_raws(trip)[0]
+    assert start_time.unknown_start_reasons(db, raw, month_close.protection(db, vehicle.id)) == ["pending"]
+    (change,) = start_time.engine_plan(db, vehicle.id)
+    assert change.kind == "set" and change.at == at(-18) and change.basis["method"] == "engine_start"

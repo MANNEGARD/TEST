@@ -429,7 +429,7 @@ def assessed(
     acts: list[dict[str, Any]] = []
     if assessment == ASSESSED_WORK_PURPOSE and purpose:
         title = "Tjänsteresa – stämmer det?"
-        detail = f"{when} · {route} · {distance}. Ärende: {_short(purpose, MAX_PURPOSE_IN_MESSAGE)}.{tail}"
+        detail = f"{when} · {route} · {distance}. Ärende: {_short(purpose, MAX_PURPOSE_IN_MESSAGE).rstrip('.')}.{tail}"
         message = f"{when} · {distance}. Ärendet visas i appen.{tail}" if hide_locations else detail
         approve = {"key": f"{A.WORK_PICK}0", "title": "Godkänn", "purpose": purpose}
         if hide_locations:
