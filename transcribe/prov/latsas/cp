@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Låtsas-cp för proven: finns $PROV_TILL/kort_cp blir kopian av transcribe.db till en säkerhetskopia
+# kort (som när disken blir full mitt i). Annars den riktiga cp.
+set -uo pipefail
+T="${PROV_TILL:?PROV_TILL saknas}"
+riktig=""
+for c in /usr/bin/cp /bin/cp; do [[ -x "$c" ]] && { riktig="$c"; break; }; done
+[[ -n "$riktig" ]] || exit 127
+mal="${*: -1}"
+if [[ -f "$T/kort_cp" && "$mal" == */kopior/*.tmp/transcribe.db ]]; then
+  "$riktig" "$@" || exit
+  truncate -s 1 -- "$mal"
+  exit 0
+fi
+exec "$riktig" "$@"

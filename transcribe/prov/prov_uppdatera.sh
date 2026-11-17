@@ -438,15 +438,37 @@ s_symlank_i_datakatalogen() {
   rm -f "$VOL/transcribe.db-wal"
   ln -s "$VARLD/utanfor" "$VOL/transcribe.db-wal"
   erbjud 1.2.0
+  # Upptäcks innan tjänsten stoppas: inget stopp och ingen omstart, varken nu eller vid nästa kontroll.
   uppdatera --tidsstyrd
   kod_ar 1
   ut_har "transcribe.db-wal i datakatalogen är inte en vanlig fil"
+  ut_har "Inget har ändrats; tjänsten har inte stoppats."
+  uppdatera --tidsstyrd
+  kod_ar 1
+  anrop_saknar "docker stop"
+  [[ "$(starter)" == 1 ]]
+  version_ar 1.1.0
+  kor_igang
+  ingen_markering
+  grep -q "^senaste_fel=.*transcribe.db-wal i datakatalogen är inte en vanlig fil" "$KAT/lage.txt"
+  inte grep -rq hemligt-innehall "$KAT/kopior" 2>/dev/null
+  [[ "$(cat "$VARLD/utanfor")" == hemligt-innehall && -L "$VOL/transcribe.db-wal" ]]
+  # Läggs länken dit först medan tjänsten stoppas, fångas den av kontrollen efter stoppet.
+  ny_varld symlank-sent
+  installation 1.1.0
+  echo hemligt-innehall >"$VARLD/utanfor"
+  erbjud 1.2.0
+  starta_i_bakgrunden 1 "stop -t 30" --tidsstyrd
+  rm -f "$VOL/transcribe.db-shm"
+  ln -s "$VARLD/utanfor" "$VOL/transcribe.db-shm"
+  slapp
+  kod_ar 1
+  ut_har "transcribe.db-shm i datakatalogen är inte en vanlig fil"
   ut_har "Inget har ändrats; 1.1.0 startades igen."
   version_ar 1.1.0
   kor_igang
   ingen_markering
   inte grep -rq hemligt-innehall "$KAT/kopior" 2>/dev/null
-  [[ "$(cat "$VARLD/utanfor")" == hemligt-innehall && -L "$VOL/transcribe.db-wal" ]]
 }
 
 s_planterad_lank_foljs_inte_vid_atergang() {
@@ -599,6 +621,306 @@ s_fel_argument() {
   kod_ar 2
 }
 
+s_compose_fungerar_inte() {
+  # docker compose saknas: upptäcks innan något stoppas, och tjänsten kör vidare.
+  ny_varld compose-saknas
+  installation 1.1.0
+  erbjud 1.2.0
+  touch "$T/fel/compose"
+  uppdatera --tidsstyrd
+  kod_ar 1
+  ut_har "Ingen uppgradering till 1.2.0: kommandot \"docker compose\" fungerar inte"
+  anrop_saknar "docker stop"
+  anrop_saknar "docker rm"
+  version_ar 1.1.0
+  kor_igang
+  ingen_markering
+  lage_saknar misslyckad_version
+  # Nätet smgd saknas: samma sak.
+  rm -f "$T/fel/compose" "$T/natverk-smgd"
+  uppdatera --tidsstyrd
+  kod_ar 1
+  ut_har "Docker-nätet smgd finns inte"
+  anrop_saknar "docker stop"
+  # När det är lagat görs uppgraderingen.
+  touch "$T/natverk-smgd"
+  uppdatera --tidsstyrd
+  kod_ar 0
+  version_ar 1.2.0
+}
+
+s_atergang_vantar_pa_compose() {
+  # Avbrott under återgången, och sedan fungerar inte docker compose: inget tas bort förrän den
+  # förra versionen går att starta. Markeringen ligger kvar tills det går.
+  ny_varld atergang-compose
+  installation 1.1.0
+  erbjud 1.2.0 trasig
+  starta_i_bakgrunden 2 "compose up" --tidsstyrd
+  avbryt KILL
+  grep -qx "fas=aterstaller" "$KAT/pagaende-uppgradering"
+  touch "$T/fel/compose"
+  : >"$T/anrop.log"
+  uppdatera --tidsstyrd
+  kod_ar 1
+  ut_har "återgången kan inte göras än: kommandot \"docker compose\" fungerar inte"
+  anrop_saknar "docker rm"
+  anrop_saknar "sync -- $VOL"
+  grep -qx "fas=aterstaller" "$KAT/pagaende-uppgradering"
+  rm -f "$T/fel/compose"
+  uppdatera --tidsstyrd
+  kod_ar 0
+  version_ar 1.1.0
+  kor_igang
+  ingen_markering
+}
+
+s_tillfalligt_fel_svartlistar_inte() {
+  # "docker compose up" misslyckas en gång innan den nya versionen alls har startats: det är inte
+  # versionens fel. Återgång nu, ett nytt försök vid nästa kontroll – och då går det.
+  ny_varld tillfalligt-fel
+  installation 1.1.0
+  erbjud 1.2.0
+  touch "$T/fel/compose_en_gang"
+  uppdatera --tidsstyrd
+  kod_ar 1
+  ut_har "Uppgraderingen till 1.2.0 gick inte (docker compose kunde inte starta 1.2.0"
+  ut_har "Ett nytt försök görs vid nästa kontroll."
+  version_ar 1.1.0
+  kor_igang
+  lage_saknar misslyckad_version
+  lage_har "avbruten_version=1.2.0"
+  uppdatera --tidsstyrd
+  kod_ar 0
+  version_ar 1.2.0
+  lage_saknar avbruten_version
+  # Händer det två gånger i rad räknas versionen som misslyckad.
+  ny_varld tillfalligt-fel-tva
+  installation 1.1.0
+  erbjud 1.2.0
+  touch "$T/fel/compose_en_gang"
+  uppdatera --tidsstyrd
+  touch "$T/fel/compose_en_gang"
+  uppdatera --tidsstyrd
+  kod_ar 1
+  lage_har "misslyckad_version=1.2.0"
+  ut_har "1.2.0 prövas inte igen"
+  version_ar 1.1.0
+}
+
+s_kraschar_strax_efter_frisk() {
+  # Frisk vid första hälsokontrollen men kraschar strax efter: räknas inte som lyckad.
+  ny_varld kraschar-sen
+  installation 1.1.0
+  erbjud 1.2.0 kraschar_sen
+  uppdatera --tidsstyrd
+  kod_ar 1
+  ut_har "den slutade fungera strax efter starten"
+  ut_saknar "Klart: SMGD Transkribering 1.2.0"
+  version_ar 1.1.0
+  kor_igang
+  lage_har "misslyckad_version=1.2.0"
+  [[ "$(cat "$VOL/transcribe.db")" == $'databas från 1.1.0\nstart 1.1.0' ]]
+}
+
+s_skapad_men_inte_startad_efter_avbrott() {
+  # Avbrott när compose hunnit skapa den nya containern men inte starta den ("created", som Docker
+  # inte startar själv efter en omstart): nästa körning startar den och gör uppgraderingen klar.
+  ny_varld skapad
+  installation 1.1.0
+  erbjud 1.2.0
+  starta_i_bakgrunden 1 "compose up" --tidsstyrd
+  avbryt KILL
+  printf '%s' "$(bild_id v1.2.0)" >"$T/container/transcribe/bild"
+  echo created >"$T/container/transcribe/status"
+  uppdatera --tidsstyrd
+  kod_ar 0
+  ut_har "Den nya versionen 1.2.0 blev frisk – uppgraderingen gjordes klar."
+  version_ar 1.2.0
+  kor_igang
+  lage_saknar misslyckad_version
+  ingen_markering
+}
+
+s_wal_och_shm_fran_ny_version_tas_bort() {
+  # Den nya versionen skriver egna -wal och -shm innan den kraschar. Efter återgången får inget av
+  # det finnas kvar: -wal är den från kopian och -shm (som inte fanns före) är borta.
+  ny_varld wal-shm
+  installation 1.1.0
+  erbjud 1.2.0 trasig
+  touch "$T/bilder/$(bild_id v1.2.0-trasig | sed 's/^sha256://')/skriver_wal"
+  uppdatera --tidsstyrd
+  kod_ar 1
+  version_ar 1.1.0
+  [[ "$(cat "$VOL/transcribe.db-wal")" == wal ]] || { echo "    -wal är inte den från kopian"; return 1; }
+  [[ ! -e "$VOL/transcribe.db-shm" ]] || { echo "    -shm från den nya versionen finns kvar"; return 1; }
+}
+
+s_versioner_jamfors_som_tal() {
+  # 1.10.0 är nyare än 1.9.0 (inte som text).
+  ny_varld talvis
+  installation 1.9.0
+  erbjud 1.10.0
+  uppdatera --tidsstyrd
+  kod_ar 0
+  version_ar 1.10.0
+  # Erbjuds en lägre version (en annan avbild) installeras den inte.
+  erbjud 1.9.0
+  uppdatera --tidsstyrd
+  kod_ar 0
+  ut_har "Ingen ny version (kör 1.10.0, erbjuds 1.9.0)."
+  version_ar 1.10.0
+  ny_varld lagre
+  installation 1.2.0
+  erbjud 1.1.5
+  uppdatera --tidsstyrd
+  kod_ar 0
+  ut_har "Ingen ny version (kör 1.2.0, erbjuds 1.1.5)."
+  anrop_saknar "docker stop"
+  version_ar 1.2.0
+}
+
+s_fel_version_efter_start() {
+  # Avbilden utgav sig för att vara 1.2.0, men containern visar en annan version: återgång.
+  ny_varld fel-version
+  installation 1.1.0
+  erbjud 1.2.0
+  printf '1.1.9' >"$T/bilder/$(bild_id v1.2.0 | sed 's/^sha256://')/etikett_i_container"
+  uppdatera --tidsstyrd
+  kod_ar 1
+  ut_har "containern kör version 1.1.9 i stället för 1.2.0"
+  version_ar 1.1.0
+  lage_har "misslyckad_version=1.2.0"
+}
+
+s_disken_racker_inte() {
+  # För lite ledigt för kopian: ingen uppgradering, den förra versionen startas igen.
+  ny_varld disk-full
+  installation 1.1.0
+  erbjud 1.2.0
+  echo 10 >"$T/df_ledigt"
+  uppdatera --tidsstyrd
+  kod_ar 1
+  ut_har "För lite ledigt diskutrymme för säkerhetskopian"
+  ut_har "Inget har ändrats; 1.1.0 startades igen."
+  version_ar 1.1.0
+  kor_igang
+  ingen_markering
+  [[ -z "$(kopior)" ]]
+  anrop_saknar "compose up"
+  # Kopian blir kort (disken tar slut mitt i): ingen uppgradering, ingen halv kopia kvar.
+  rm -f "$T/df_ledigt"
+  touch "$T/kort_cp"
+  uppdatera --tidsstyrd
+  kod_ar 1
+  ut_har "transcribe.db kunde inte kopieras"
+  version_ar 1.1.0
+  kor_igang
+  [[ -z "$(kopior)" ]]
+  [[ -z "$(find "$KAT/kopior" -mindepth 1 2>/dev/null)" ]]
+  anrop_saknar "compose up"
+}
+
+s_atergang_oppnar_bara_aterlagda_filer() {
+  # Containern lägger en länk i datakatalogen. Vid återgången öppnar root bara de filer som läggs
+  # tillbaka (sync), aldrig något annat i katalogen.
+  ny_varld sync-lank
+  installation 1.1.0
+  ln -s /dev/zero "$VOL/zz-lank"
+  erbjud 1.2.0 trasig
+  uppdatera --tidsstyrd
+  kod_ar 1
+  version_ar 1.1.0
+  anrop_har "sync -- $VOL $VOL/transcribe.db"
+  anrop_saknar "zz-lank"
+  anrop_saknar "audio"
+}
+
+s_styrtecken_fran_containern() {
+  # Text från containern når varken terminalen eller loggen med styrtecken: inga ESC/BEL, inga
+  # C1-tecken (U+009B) och inga tecken som vänder skrivriktningen (U+202E). Svenska bokstäver blir kvar.
+  ny_varld styrtecken
+  installation 1.1.0
+  printf '10 upptagen\033]0;titel\007 \xc2\x9b31mrött \xe2\x80\xaeomvänd\n' >"$T/upptagen"
+  erbjud 1.2.0
+  uppdatera --tidsstyrd
+  kod_ar 0
+  ut_har "rött"
+  ut_har "omvänd"
+  local f
+  for f in "$VARLD/utskrift.log" "$KAT/uppdatering.log" "$KAT/lage.txt"; do
+    if LC_ALL=C grep -q $'\x1b\\|\x07\\|\xc2\x9b\\|\xe2\x80\xae' "$f"; then
+      echo "    styrtecken från containern i $f"
+      return 1
+    fi
+  done
+}
+
+s_v100_upptagen_fragar_databasen() {
+  # 1.0.0 saknar kommandot "upptagen": databasen frågas direkt, och pågår något väntar uppdateringen.
+  ny_varld v100-upptagen
+  installation 1.0.0-utan
+  erbjud 1.1.0
+  echo 1 >"$T/upptagen_db"
+  uppdatera --tidsstyrd
+  kod_ar 0
+  ut_har "Ny version 1.1.0 finns, men tjänsten är upptagen (upptagen: 1 inspelning(ar) eller bearbetning(ar) pågår)"
+  anrop_saknar "docker stop"
+  version_ar 1.0.0
+  # Ett konstigt svar räknas som ledigt (som kontraktet säger för 1.0.0).
+  echo "1; rm -rf /" >"$T/upptagen_db"
+  uppdatera --tidsstyrd
+  kod_ar 0
+  version_ar 1.1.0
+}
+
+s_lang_vantan_syns() {
+  # Har en ny version väntat i mer än ett dygn på att tjänsten blir ledig syns det som ett fel.
+  ny_varld lang-vantan
+  installation 1.1.0
+  echo "10 upptagen: 1 väntar på slutversion" >"$T/upptagen"
+  erbjud 1.2.0
+  uppdatera --tidsstyrd
+  kod_ar 0
+  grep -q '^vantar_sedan=[0-9]\+$' "$KAT/lage.txt"
+  lage_saknar senaste_fel
+  uppdatera --lage
+  ut_har "Väntar sedan:"
+  # Ett dygn senare.
+  sed -i "s/^vantar_sedan=.*/vantar_sedan=$(($(date +%s) - 90000))/" "$KAT/lage.txt"
+  uppdatera --tidsstyrd
+  kod_ar 0
+  grep -q "^senaste_fel=.*1.2.0 har väntat sedan .* på att tjänsten ska bli ledig" "$KAT/lage.txt"
+  version_ar 1.1.0
+  # När den blir ledig uppgraderas den och väntan glöms.
+  echo "0 ledig" >"$T/upptagen"
+  uppdatera --tidsstyrd
+  kod_ar 0
+  version_ar 1.2.0
+  lage_saknar vantar_sedan
+  lage_saknar senaste_fel
+}
+
+s_lage_vid_full_disk() {
+  # Går lage.txt inte att skriva (full disk) får den inte tömmas eller bytas ut.
+  ny_varld lage-full
+  installation 1.1.0
+  printf 'senaste_kontroll=förut\nmisslyckad_version=1.0.5\n' >"$KAT/lage.txt"
+  ln -s /dev/full "$KAT/lage.txt.tmp"
+  erbjud 1.2.0
+  uppdatera --tidsstyrd
+  kod_ar 0
+  version_ar 1.2.0
+  [[ -f "$KAT/lage.txt" && ! -L "$KAT/lage.txt" ]] || { echo "    lage.txt är inte längre en vanlig fil"; return 1; }
+  grep -q "^senaste_uppgradering=.* – 1.1.0 → 1.2.0$" "$KAT/lage.txt"
+  [[ ! -e "$KAT/lage.txt.tmp" ]]
+}
+
+s_laset_ligger_dar_bara_root_skriver() {
+  # Standardlåset ligger i /run (bara root kan skriva där), inte i /run/lock som alla kan skriva i.
+  grep -qF 'LAS="${TRANSCRIBE_LAS:-/run/transcribe-uppdatering.lock}"' "$SKRIPT_KATALOG/uppdatera.sh"
+  grep -qF 'LAS="${TRANSCRIBE_LAS:-/run/transcribe-uppdatering.lock}"' "$SKRIPT_KATALOG/installera.sh"
+}
+
 echo "uppdatera.sh ($SKRIPT_KATALOG/uppdatera.sh)"
 scenario "ingen ny version" s_ingen_ny_version
 scenario "ny version lyckas (kopia, .env, läge, städning)" s_ny_version_lyckas
@@ -630,4 +952,19 @@ scenario "trasig markering ändrar ingenting" s_trasig_markering
 scenario "--lage i klartext, ändrar ingenting" s_lage_i_klartext
 scenario "loggen roteras vid 1 MB" s_loggen_roteras
 scenario "felaktiga argument" s_fel_argument
+scenario "docker compose eller nätet saknas → inget stoppas" s_compose_fungerar_inte
+scenario "återgången väntar tills docker compose fungerar" s_atergang_vantar_pa_compose
+scenario "tillfälligt fel före start svartlistar inte versionen" s_tillfalligt_fel_svartlistar_inte
+scenario "kraschar strax efter frisk → återgång" s_kraschar_strax_efter_frisk
+scenario "avbrott: ny container skapad men inte startad" s_skapad_men_inte_startad_efter_avbrott
+scenario "-wal/-shm från nya versionen tas bort vid återgång" s_wal_och_shm_fran_ny_version_tas_bort
+scenario "versioner jämförs som tal, aldrig nedåt" s_versioner_jamfors_som_tal
+scenario "fel version efter start → återgång" s_fel_version_efter_start
+scenario "för lite disk / kort kopia → ingen uppgradering" s_disken_racker_inte
+scenario "återgången öppnar bara återlagda filer" s_atergang_oppnar_bara_aterlagda_filer
+scenario "styrtecken från containern tvättas bort" s_styrtecken_fran_containern
+scenario "1.0.0: databasen frågas om något pågår" s_v100_upptagen_fragar_databasen
+scenario "lång väntan på 'upptagen' syns i läget" s_lang_vantan_syns
+scenario "lage.txt vid full disk" s_lage_vid_full_disk
+scenario "låset ligger där bara root kan skriva" s_laset_ligger_dar_bara_root_skriver
 summera "uppdatera.sh"

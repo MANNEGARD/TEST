@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Låtsas-df för proven: finns $PROV_TILL/df_ledigt svarar "df -Pk" att så många kB är lediga,
+# annars den riktiga df.
+set -uo pipefail
+T="${PROV_TILL:?PROV_TILL saknas}"
+printf '%s\n' "df $*" >>"$T/anrop.log"
+if [[ -f "$T/df_ledigt" ]]; then
+  echo "Filesystem     1024-blocks      Used Available Capacity Mounted on"
+  echo "/dev/latsas       10000000   9999999 $(cat "$T/df_ledigt")      100% /"
+  exit 0
+fi
+for d in /usr/bin/df /bin/df; do
+  [[ -x "$d" ]] && exec "$d" "$@"
+done
+exit 127

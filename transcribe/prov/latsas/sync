@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Låtsas-sync för proven: skriver ned vilka filer som synkas (så att provet ser att root aldrig
+# öppnar något annat i datakatalogen än de filer som lagts tillbaka) och kör sedan den riktiga sync.
+set -uo pipefail
+T="${PROV_TILL:?PROV_TILL saknas}"
+printf '%s\n' "sync $*" >>"$T/anrop.log"
+for s in /usr/bin/sync /bin/sync; do
+  [[ -x "$s" ]] && exec "$s" "$@"
+done
+exit 127

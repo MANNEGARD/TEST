@@ -3,12 +3,20 @@
 #   taggar            rader "<ref> <id>": lokala avbilder
 #   fjarr             rader "<ref> <id>": det som "docker pull" hämtar
 #   bilder/<id>/      etikett (versionsetiketten, kan saknas eller vara konstig), pkg (versionen i
-#                     package.json), beteende (frisk|trasig|hanger|sjuk|utan_kontroll),
-#                     utan_upptagen (finns = 1.0.0), planterar (finns = lägger en länk i volymen)
-#   container/<namn>/ bild (id), status (running|exited|restarting), omstarter, kontroller, starter
-#   volym/            datakatalogen (Source för monteringen på /data)
+#                     package.json), beteende (frisk|trasig|hanger|sjuk|utan_kontroll|kraschar_sen:
+#                     frisk en stund, sedan omstarter), utan_upptagen (finns = 1.0.0), planterar
+#                     (finns = lägger en länk i volymen), skriver_wal (finns = skriver egna -wal och
+#                     -shm vid start), etikett_i_container (finns = containern visar den etiketten
+#                     i stället, som om avbilden inte var den den utgav sig för)
+#   container/<namn>/ bild (id), status (running|exited|restarting|created), omstarter, kontroller,
+#                     starter
+#   volym/            datakatalogen (Source för monteringen på /data); volymen "finns" när den inte
+#                     är tom
+#   natverk-<namn>    finns = Docker-nätet finns
 #   upptagen          "<kod> <text>" för "node dist/cli.js upptagen" (standard: 0 ledig)
-#   fel/<namn>        finns = kommandot misslyckas (pull, stop, tag, info, up)
+#   upptagen_db       svaret när databasen frågas direkt (1.0.0; standard: 0)
+#   fel/<namn>        finns = kommandot misslyckas (pull, stop, tag, info, up, compose = alla
+#                     "docker compose", compose_en_gang = nästa "compose up" en gång)
 #   krok              "<n> <mönster>": det n:te anropet som innehåller mönstret skriver krok_nadd
 #                     och väntar sedan tills filen slapp finns (så att provet kan avbryta där)
 #   anrop.log         alla anrop
@@ -62,6 +70,10 @@ starta() { # namn
   id="$(las "$c/bild")"
   b="$(bild "$id")"
   printf 'start %s\n' "$(las "$b/pkg" "?")" >>"$T/volym/transcribe.db"
+  if [[ -f "$b/skriver_wal" ]]; then
+    printf 'wal från %s\n' "$(las "$b/pkg" "?")" >"$T/volym/transcribe.db-wal"
+    printf 'shm från %s\n' "$(las "$b/pkg" "?")" >"$T/volym/transcribe.db-shm"
+  fi
   # En elak version byter ut secret.key mot en länk till en fil utanför datakatalogen.
   if [[ -f "$b/planterar" ]]; then
     rm -f "$T/volym/secret.key"
@@ -93,7 +105,11 @@ inspektera_container() { # format namn
   beteende="$(las "$b/beteende" frisk)"
   case "$1" in
     '{{.State.Running}}') [[ "$status" == running ]] && echo true || echo false ;;
-    "$ETIKETT") if [[ -f "$b/etikett" ]]; then cat "$b/etikett"; echo; else echo; fi ;;
+    "$ETIKETT")
+      if [[ -f "$b/etikett_i_container" ]]; then cat "$b/etikett_i_container"; echo
+      elif [[ -f "$b/etikett" ]]; then cat "$b/etikett"; echo
+      else echo; fi
+      ;;
     '{{.Image}}') las "$c/bild"; echo ;;
     "$MONTERING") echo "$T/volym" ;;
     "$TILLSTAND")
@@ -103,9 +119,15 @@ inspektera_container() { # format namn
         echo $(($(las "$c/omstarter" 0) + 1)) >"$c/omstarter"
       fi
       local halsa=ingen
+      if [[ "$status" == running && "$beteende" == kraschar_sen ]] && ((k > $(las "$b/starttid" 1) + 2)); then
+        # Frisk vid ett par kontroller, sedan kraschar den och startas om av Docker.
+        status=restarting
+        echo restarting >"$c/status"
+        echo $(($(las "$c/omstarter" 0) + 1)) >"$c/omstarter"
+      fi
       if [[ "$status" == running ]]; then
         case "$beteende" in
-          frisk) if ((k > $(las "$b/starttid" 1))); then halsa=healthy; else halsa=starting; fi ;;
+          frisk | kraschar_sen) if ((k > $(las "$b/starttid" 1))); then halsa=healthy; else halsa=starting; fi ;;
           hanger) halsa=starting ;;
           sjuk) halsa=unhealthy ;;
           utan_kontroll) halsa=ingen ;;
@@ -130,6 +152,8 @@ compose_varde() { # namn standard → miljön, annars .env (som compose), annars
 }
 
 compose() {
+  [[ ! -e "$T/fel/compose" ]] || { echo "docker: 'compose' is not a docker command." >&2; exit 1; }
+  [[ "${1:-}" != version ]] || { echo "Docker Compose version v2.0.0-låtsas"; return 0; }
   [[ -f docker-compose.yml ]] || { echo "no configuration file provided" >&2; exit 1; }
   local ref id c
   if grep -qE '^[[:space:]]*image:.*TRANSCRIBE_VERSION' docker-compose.yml; then
@@ -141,6 +165,7 @@ compose() {
   case "$1" in
     up)
       [[ ! -e "$T/fel/up" ]] || exit 1
+      if [[ -e "$T/fel/compose_en_gang" ]]; then rm -f "$T/fel/compose_en_gang"; exit 1; fi
       if ! id="$(upplos "$ref")"; then
         id="$(awk -v r="$ref" '$1 == r { print $2 }' "$T/fjarr" | tail -n 1)"
         [[ -n "$id" ]] || { echo "pull access denied for $ref" >&2; exit 1; }
@@ -158,6 +183,7 @@ compose() {
       [[ -n "$id" ]] && satt_tagg "$T/taggar" "$ref" "$id"
       ;;
     logs) loggar ;;
+    config) [[ -f .env ]] || { echo "env file .env not found" >&2; exit 1; } ;;
     *) ;;
   esac
 }
@@ -178,6 +204,10 @@ case "$kommando" in
       inspect) [[ -e "$T/natverk-$2" ]] ;;
       create) touch "$T/natverk-$2" ;;
     esac
+    ;;
+  volume)
+    # docker volume inspect transcribe_transcribe-data
+    [[ "${1:-}" == inspect && "${2:-}" == transcribe_transcribe-data && -n "$(ls -A "$T/volym" 2>/dev/null)" ]]
     ;;
   compose) compose "$@" ;;
   logs) loggar ;;
@@ -258,6 +288,11 @@ case "$kommando" in
         read -r kod text <<<"$(las "$T/upptagen" "0 ledig")"
         echo "$text"
         exit "$kod"
+        ;;
+      "node -e "*)
+        # 1.0.0: databasen frågas direkt om något pågår.
+        [[ -f "$b/utan_upptagen" ]] || { echo "OKÄNT EXEC (node -e på en avbild med 'upptagen'): $*" >>"$T/anrop.log"; exit 99; }
+        las "$T/upptagen_db" 0; echo
         ;;
       "node dist/cli.js inbjudan admin") echo "Inbjudan (administratör, giltig i 2 dygn):"; echo "https://transcribe.example.com/#/inbjudan/nyinbjudan" ;;
       *) echo "OKÄNT EXEC: $*" >>"$T/anrop.log"; exit 99 ;;

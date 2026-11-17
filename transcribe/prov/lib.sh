@@ -2,7 +2,7 @@
 # Gemensamt för proven i transcribe/prov/ (källas av prov_*.sh, körs inte själv).
 #
 # Proven kör installera.sh och uppdatera.sh mot låtsaskommandon (latsas/: docker, systemctl, curl,
-# sleep) som ligger först i PATH. Låtsas-docker håller sitt tillstånd i filer, så att varje scenario
+# sleep, df, cp, sync) som ligger först i PATH. Låtsas-docker håller sitt tillstånd i filer, så att varje scenario
 # kan ställas in och anropen läsas efteråt. Inget riktigt Docker eller systemd behövs, och inget
 # utanför provets arbetskatalog ändras.
 #
@@ -42,7 +42,7 @@ ny_varld() { # namn
   export TRANSCRIBE_KATALOG="$VARLD/opt/transcribe"
   export TRANSCRIBE_SYSTEMD_DIR="$VARLD/systemd"
   export TRANSCRIBE_LAS="$VARLD/las/transcribe-uppdatering.lock"
-  export TRANSCRIBE_VANTA=10
+  export TRANSCRIBE_VANTA=10 TRANSCRIBE_STABIL=10
   unset TRANSCRIBE_IMAGE TRANSCRIBE_PULL TRANSCRIBE_KOPIOR TRANSCRIBE_CONTAINER TRANSCRIBE_VERSION
   KAT="$TRANSCRIBE_KATALOG"
   T="$PROV_TILL"
@@ -103,6 +103,7 @@ installation() { # version (etikett; "1.0.0-utan" = 1.0.0 utan etikett och utan 
   echo 0 >"$T/container/transcribe/omstarter"
   echo 5 >"$T/container/transcribe/kontroller"
   echo 1 >"$T/container/transcribe/starter"
+  touch "$T/natverk-smgd"
 }
 
 # --- Körning -----------------------------------------------------------------------------------------

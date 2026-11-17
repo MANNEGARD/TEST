@@ -304,6 +304,103 @@ s_felaktiga_argument() {
   [[ ! -s "$T/anrop.log" ]] || inte grep -q "^docker" "$T/anrop.log"
 }
 
+s_container_borta_datat_kvar() {
+  # Containern är borttagen (docker compose down), datat finns kvar, och latest är trasig. Raden
+  # startar först versionen som körde, och den nya provas sedan med kopia och återgång – aldrig
+  # rakt på den gamla databasen.
+  ny_varld inst-borta
+  kalla
+  installation 1.1.0
+  rm -rf "$T/container/transcribe"
+  erbjud 1.2.0 trasig
+  installera "$DL" "$TR"
+  kod_ar 1
+  ut_har "Containern finns inte, men datat finns kvar – startar först version 1.1.0"
+  ut_har "OBS: uppdateringen till den nya versionen gick inte igenom"
+  version_ar 1.1.0
+  kor_igang
+  ls -d "$KAT"/kopior/*-1.1.0 >/dev/null
+  inte grep -q "start 1.2.0" "$VOL/transcribe.db"
+  env_har "TRANSCRIBE_VERSION=1.1.0"
+  timern_pa
+  # Äldre installation utan versionen i .env: avbilden som redan finns startas, utan att hämta.
+  ny_varld inst-borta-v100
+  kalla
+  installation 1.0.0-utan
+  gammal_compose
+  sed -i '/^TRANSCRIBE_VERSION=/d' "$KAT/.env"
+  rm -rf "$T/container/transcribe"
+  erbjud 1.1.0
+  installera "$DL" "$TR"
+  kod_ar 0
+  ut_har "startar först avbilden som redan finns här"
+  version_ar 1.1.0
+  ls -d "$KAT"/kopior/*-1.0.0 >/dev/null
+  [[ "$(cat "$KAT"/kopior/*-1.0.0/transcribe.db)" == $'databas från 1.0.0\nstart 1.0.0' ]]
+  [[ "$(grep -m1 '^compose-ref' "$T/anrop.log")" == "compose-ref $IMG:latest" ]]
+  # Inget hämtades innan den gamla startades (hämtningen görs sedan av uppdatera.sh).
+  (($(grep -n -m1 '^compose-ref' "$T/anrop.log" | cut -d: -f1) < $(grep -n -m1 '^docker pull' "$T/anrop.log" | cut -d: -f1)))
+  inga_okanda_anrop
+}
+
+s_tjansten_kor_inte_efter_misslyckad_atergang() {
+  # Går varken den nya versionen eller återgången: slutbeskedet säger att tjänsten INTE kör.
+  ny_varld inst-nere
+  kalla
+  installation 1.1.0
+  erbjud 1.2.0 trasig
+  echo trasig >"$T/bilder/$(bild_id v1.1.0 | sed 's/^sha256://')/beteende"
+  installera "$DL" "$TR"
+  kod_ar 1
+  ut_har "OBS: tjänsten kör INTE just nu."
+  ut_saknar "Klart. Tjänsten körs"
+  [[ -e "$KAT/pagaende-uppgradering" ]]
+  # docker compose saknas: inget stoppas, och tjänsten kör vidare på den förra versionen.
+  ny_varld inst-compose-saknas
+  kalla
+  installation 1.1.0
+  erbjud 1.2.0
+  touch "$T/fel/compose"
+  installera "$DL" "$TR"
+  kod_ar 1
+  ut_har "kommandot \"docker compose\" fungerar inte"
+  ut_har "Tjänsten kör på den förra versionen."
+  anrop_saknar "docker stop"
+  version_ar 1.1.0
+  kor_igang
+}
+
+s_lage_vid_full_disk() {
+  # lage.txt går inte att skriva (full disk): den lämnas som den var.
+  ny_varld inst-lage-full
+  kalla
+  installation 1.1.0
+  printf 'misslyckad_version=1.2.0\nsenaste_kontroll=x\n' >"$KAT/lage.txt"
+  ln -s /dev/full "$KAT/lage.txt.tmp"
+  erbjud 1.1.0
+  installera "$DL" "$TR"
+  kod_ar 0
+  ut_har "lage.txt kunde inte skrivas"
+  [[ -f "$KAT/lage.txt" && ! -L "$KAT/lage.txt" ]]
+  grep -q "^senaste_kontroll=" "$KAT/lage.txt"
+}
+
+s_loggrader_utan_styrtecken() {
+  # Containerns logg visas utan styrtecken när en ny server inte blir frisk.
+  ny_varld inst-styrtecken
+  kalla
+  erbjud 1.1.0 trasig
+  printf 'x\033]0;titel\007 \xc2\x9bröd \xe2\x80\xaeomvänd\n' >"$T/inbjudan"
+  installera "$DL" "$TR"
+  kod_ar 1
+  ut_har "De sista raderna i tjänstens logg:"
+  ut_har "omvänd"
+  if LC_ALL=C grep -q $'\x1b\\|\x07\\|\xc2\x9b\\|\xe2\x80\xae' <<<"$UT"; then
+    echo "    styrtecken från containern i utskriften"
+    return 1
+  fi
+}
+
 echo "installera.sh ($SKRIPT_KATALOG/installera.sh)"
 scenario "ny server" s_ny_server
 scenario "servern som den ser ut idag (1.0.0, gammal compose)" s_dagens_server
@@ -318,4 +415,8 @@ scenario "server utan systemd" s_utan_systemd
 scenario "väntar på låset" s_vantar_pa_laset
 scenario ".env med konstiga rader" s_env_med_konstiga_rader
 scenario "felaktiga argument" s_felaktiga_argument
+scenario "containern borttagen, datat kvar" s_container_borta_datat_kvar
+scenario "tjänsten nere / compose saknas: rätt slutbesked" s_tjansten_kor_inte_efter_misslyckad_atergang
+scenario "lage.txt vid full disk" s_lage_vid_full_disk
+scenario "loggrader utan styrtecken" s_loggrader_utan_styrtecken
 summera "installera.sh"
