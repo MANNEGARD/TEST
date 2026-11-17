@@ -69,8 +69,8 @@ from typing import Any, Literal
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from app.models import LogicalTrip, MonthClose, RawTrip, TripSegment, Vehicle
-from app.models.enums import LogicalState, MonthCloseState, TimeQuality, TripSource
+from app.models import LogicalTrip, RawTrip, TripSegment
+from app.models.enums import LogicalState, TimeQuality, TripSource
 from app.services import audit
 
 # Starttid ur trippmätaren (K1) är avstängd tills ett prov mot den riktiga bilen visat att

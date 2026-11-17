@@ -86,7 +86,8 @@ def test_file_has_readings_runs_and_trips_without_identifying_data(client, db, u
 
     data = json.loads(text)
     assert set(data) == {"generated_at", "app_version", "days", "vehicle", "observations", "sync_runs", "trips",
-                         "internal_errors"}  # 1.4.1
+                         "internal_errors", "months"}  # 1.4.1; "months" 1.5.0
+    assert data["months"] == []  # ingen rad i månadsskiftet
     assert data["internal_errors"] == []
     assert data["days"] == 14 and data["vehicle"] == {"model": "XC60 Recharge", "fuel_type": "PETROL/ELECTRIC",
                                                        "demo": False}
@@ -102,6 +103,10 @@ def test_file_has_readings_runs_and_trips_without_identifying_data(client, db, u
     assert trip["id"] == "trip-1" and trip["observations"] == ["obs-2", "obs-3"]
     assert trip["distance_km"] == 15.0 and trip["fuel_quality"] == "estimated" and trip["fuel_liters"] == 0.81
     assert trip["quality_flags"] == ["end_time_uncertain", "reconstructed"]
+    # 1.5.0: skyddet och skälen (känd starttid och bensin: inga skäl; elen saknas utan kapacitet).
+    assert trip["protected_by_month"] is False
+    assert (trip["start_unknown_reason"], trip["start_unknown_steps"], trip["fuel_unknown_reason"]) == (None, [], None)
+    assert trip["energy_unknown_reason"] == "no_capacity"
 
 
 def test_days_are_limited_to_one_to_31(client, db, user, vehicle):

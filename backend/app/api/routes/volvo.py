@@ -547,6 +547,9 @@ def build_diagnostics(db: DbDep, vehicle: Vehicle, *, days: int, now: Any) -> di
     from app import __version__
     from app.models import RawTrip
     from app.models.enums import TripSource
+    from app.services.export import month_close
+    from app.services.trips import start_time
+    from app.services.volvo import consumption
 
     since = now - timedelta(days=days)
     observations = list(
@@ -594,13 +597,27 @@ def build_diagnostics(db: DbDep, vehicle: Vehicle, *, days: int, now: Any) -> di
                RawTrip.ended_at >= since)
         .order_by(RawTrip.ended_at)
     ).scalars()
+    raws = list(raws)
+    # 1.5.0: varför starttiden, bensinen och elen är okända – korta koder, inga platser.
+    locks = month_close.protection(db, vehicle.id)
+    usage_reasons = consumption.unknown_reasons(db, vehicle, raws, locks, now=now)
     for n, raw in enumerate(raws, start=1):
+        basis = raw.start_estimate_basis if isinstance(raw.start_estimate_basis, dict) else {}
+        fuel_reason, energy_reason = usage_reasons.get(raw.id, (None, None))
+        start_reasons = [k for k in (_safe_key(c) for c in start_time.unknown_start_reasons(db, raw, locks)) if k]
         trips_out.append({
             "id": f"trip-{n}",
             **{f: _diag_value(getattr(raw, f)) for f in _DIAG_TRIP_FIELDS},
             "voided": raw.voided_at is not None,
             "quality_flags": sorted(k for k in (_safe_key(f) for f in (raw.quality_flags or [])) if k),
             "observations": [obs_ids.get(i, "äldre") for i in (raw.observation_ids or [])],
+            "created_at": _diag_value(raw.created_at),
+            "protected_by_month": locks.in_file(raw),
+            "start_method": _safe_key(basis.get("method")),
+            "start_unknown_reason": start_reasons[-1] if start_reasons else None,
+            "start_unknown_steps": start_reasons,
+            "fuel_unknown_reason": _safe_key(fuel_reason),
+            "energy_unknown_reason": _safe_key(energy_reason),
         })
 
     return {
@@ -611,6 +628,8 @@ def build_diagnostics(db: DbDep, vehicle: Vehicle, *, days: int, now: Any) -> di
         "observations": obs_out,
         "sync_runs": runs,
         "trips": trips_out,
+        # Månadsskiftet (1.5.0): månad, läge, om filen skapades i förväg och när – inga resor eller belopp.
+        "months": month_close.month_overview(db, vehicle),
         # De senaste interna felen (1.4.2): steg, typ, kodställen och ett tvättat meddelande. Bilens
         # VIN och registreringsnummer tvättas bort en gång till här.
         "internal_errors": internal_errors.public_entries(

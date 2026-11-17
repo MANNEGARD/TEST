@@ -54,7 +54,8 @@ Värdet märks ``estimated`` ("Uppskattad ur bilens egna avläsningar") och GRUN
 (``RawTrip.fuel_basis``/``energy_basis``: metod, värdena före och efter, felgränsen,
 anteckningar). Räcker underlaget inte lämnas värdet okänt och webben visar "–". Ett värde som
 redan finns (``verified``/``estimated``) skrivs aldrig över av sig självt, importerade resor
-rörs inte, och resor i månader vars underlag redan är skapat rörs inte. Undantaget är el som
+rörs inte, och resor som finns i ett underlag som redan är skapat rörs inte (en resa som
+tillkommit efter att månadens fil skapades finns inte i den, ``month_close.protection``). Undantaget är el som
 räknats ur batteriets kapacitet: när ägaren ändrar kapaciteten räknas just de värdena om
 (``refill_after_capacity_change``).
 """
@@ -71,8 +72,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import utcnow
-from app.models import LogicalTrip, MonthClose, RawTrip, TripSegment, Vehicle, VehicleObservation
-from app.models.enums import LogicalState, MonthCloseState, TripSource, ValueQuality
+from app.models import LogicalTrip, RawTrip, TripSegment, Vehicle, VehicleObservation
+from app.models.enums import LogicalState, TripSource, ValueQuality
 
 LIVE_SOURCES = (TripSource.VOLVO_API, TripSource.DEMO)
 NEAR = timedelta(hours=2)  # trippmätaren: närmaste avläsning före start och efter slut
@@ -474,10 +475,14 @@ def estimate_for_raw(
 
     fuel = _choose(fuel_c, "level")
     energy = _choose(energy_c, "battery_level")
+    if "energy" not in events and not battery_kwh:
+        events["energy"] = "no_capacity"
     return Estimate(
         fuel_liters=fuel.value if fuel else None, energy_kwh=energy.value if energy else None,
         fuel_method=fuel.method if fuel else None, energy_method=energy.method if energy else None,
         fuel_basis=fuel.basis if fuel else None, energy_basis=energy.basis if energy else None,
+        fuel_reason=None if fuel else REASONS.get(events.get("fuel", "no_after"), "no_after_level"),
+        energy_reason=None if energy else REASONS.get(events.get("energy", "no_after"), "no_after_level"),
     )
 
 
@@ -640,22 +645,87 @@ def _split(raw: RawTrip, readings: list[Reading]) -> tuple[list[Reading], list[R
     return earlier, before, after
 
 
-def _closed_months(db: Session, vehicle: Vehicle) -> tuple[set[str], Any]:
-    months = set(db.execute(select(MonthClose.month).where(
-        MonthClose.vehicle_id == vehicle.id,
-        MonthClose.state.in_((MonthCloseState.EXPORTED, MonthCloseState.STALE)),
-    )).scalars())
-    if not months:
-        return months, None
-    from app.services import settings as settings_svc
+def _protection(db: Session, vehicle: Vehicle) -> Any:
+    """Resorna som finns i ett redan skapat underlag (``month_close.protection``, samma regel som
+    starttiden): en resa som tillkommit efter att månadens fil skapades finns inte i den."""
+    from app.services.export import month_close
 
-    return months, settings_svc.user_timezone(db, vehicle.owner_user_id)
+    return month_close.protection(db, vehicle.id)
 
 
-def _open_month(raws: list[RawTrip], closed: set[str], tz: Any) -> list[RawTrip]:
-    if tz is None:
-        return raws
-    return [r for r in raws if r.sort_time is None or r.sort_time.astimezone(tz).strftime("%Y-%m") not in closed]
+def _open_month(raws: list[RawTrip], locks: Any) -> list[RawTrip]:
+    """Delresorna som inte finns i något skapat underlag."""
+    return [r for r in raws if not locks.in_file(r)]
+
+
+def _estimates(db: Session, vehicle: Vehicle, raws: list[RawTrip]) -> list[tuple[RawTrip, Estimate]]:
+    """Uppskattningen för varje delresa ur bilens avläsningar (skriver ingenting)."""
+    if not raws:
+        return []
+    starts = [r.started_at or r.start_earliest or r.start_latest or r.ended_at for r in raws]
+    window_start = min(s for s in starts if s is not None) - NEAR - LEVEL_WINDOW
+    window_end = max(r.ended_at for r in raws if r.ended_at is not None) + NEAR
+    readings = _readings(db, vehicle.id, window_start, window_end)
+    if not readings:
+        return []
+    battery_kwh, capacity_source = battery_capacity(vehicle)
+    hybrid = bool(battery_kwh) or "ELECTRIC" in (vehicle.fuel_type or "").upper() or None
+    out: list[tuple[RawTrip, Estimate]] = []
+    for raw in raws:
+        earlier, before, after = _split(raw, readings)
+        out.append((raw, estimate_for_raw(raw, before, after, battery_kwh=battery_kwh, tank_l=None, earlier=earlier,
+                                          hybrid=hybrid, capacity_source=capacity_source)))
+    return out
+
+
+def unknown_reasons(
+    db: Session, vehicle: Vehicle, raws: list[RawTrip], locks: Any, *, now: datetime | None = None,
+) -> dict[uuid.UUID, tuple[str | None, str | None]]:
+    """(bensin, el): varför värdet är okänt för varje delresa, som korta koder (felsökningsfilen).
+
+    ``None`` när värdet finns. Skriver ingenting. Utöver beräkningens egna skäl (``REASONS``):
+    ``imported``, ``voided``, ``closed_month`` (resan finns i ett skapat underlag), ``too_old``
+    (skapad före de senaste 14 dygnen), ``no_distance``, ``no_readings`` och ``pending`` (värdet
+    går att räkna fram och fylls i vid nästa efterbearbetning).
+    """
+    now = now or utcnow()
+    out: dict[uuid.UUID, tuple[str | None, str | None]] = {}
+    todo: list[RawTrip] = []
+    for raw in raws:
+        missing = (raw.fuel_liters is None and raw.fuel_quality == ValueQuality.UNKNOWN,
+                   raw.energy_kwh is None and raw.energy_quality == ValueQuality.UNKNOWN)
+        if not any(missing):
+            out[raw.id] = (None, None)
+            continue
+        code: str | None = None
+        if raw.source not in LIVE_SOURCES or raw.import_batch_id is not None:
+            code = "imported"
+        elif raw.voided_at is not None:
+            code = "voided"
+        elif locks.in_file(raw):
+            code = "closed_month"
+        elif raw.ended_at is None or not raw.distance_km or raw.distance_km <= 0:
+            code = "no_distance"
+        elif raw.created_at is not None and raw.created_at < now - LOOKBACK:
+            code = "too_old"
+        elif not raw.observation_ids:
+            code = "no_readings"
+        if code is None:
+            todo.append(raw)
+        out[raw.id] = (code if missing[0] else None, code if missing[1] else None)
+    found = dict((raw.id, est) for raw, est in _estimates(db, vehicle, todo))
+    for raw in todo:
+        est = found.get(raw.id)
+        missing_fuel = raw.fuel_liters is None and raw.fuel_quality == ValueQuality.UNKNOWN
+        missing_energy = raw.energy_kwh is None and raw.energy_quality == ValueQuality.UNKNOWN
+        if est is None:
+            out[raw.id] = ("no_readings" if missing_fuel else None, "no_readings" if missing_energy else None)
+            continue
+        out[raw.id] = (
+            (est.fuel_reason or "pending") if missing_fuel else None,
+            (est.energy_reason or "pending") if missing_energy else None,
+        )
+    return out
 
 
 def _refresh_trips(db: Session, changed: list[uuid.UUID]) -> None:
@@ -677,8 +747,9 @@ def _refresh_trips(db: Session, changed: list[uuid.UUID]) -> None:
 def fill_vehicle(db: Session, vehicle_id: uuid.UUID, *, now: datetime | None = None) -> int:
     """Fyller i förbrukningen för fordonets nya resor från bilen. Returnerar antalet delresor.
 
-    Idempotent. En resa i en månad vars underlag redan har skapats lämnas orörd (samma regel
-    som starttiden ur sträckan): ett underlag som kanske redan är inlämnat ändras inte.
+    Idempotent. En resa som finns i ett underlag som redan har skapats lämnas orörd (samma regel
+    som starttiden, ``month_close.protection``): ett underlag som kanske redan är inlämnat ändras
+    inte. En resa som tillkommit efter att månadens fil skapades finns inte i den och fylls i.
     """
     now = now or utcnow()
     vehicle = db.get(Vehicle, vehicle_id)
@@ -687,24 +758,9 @@ def fill_vehicle(db: Session, vehicle_id: uuid.UUID, *, now: datetime | None = N
     raws = _candidates(db, vehicle_id, now)
     if not raws:
         return 0
-    closed, tz = _closed_months(db, vehicle)
-    raws = _open_month(raws, closed, tz)
-    if not raws:
-        return 0
-    starts = [r.started_at or r.start_earliest or r.start_latest or r.ended_at for r in raws]
-    window_start = min(s for s in starts if s is not None) - NEAR - LEVEL_WINDOW
-    window_end = max(r.ended_at for r in raws if r.ended_at is not None) + NEAR
-    readings = _readings(db, vehicle_id, window_start, window_end)
-    if not readings:
-        return 0
-    battery_kwh, capacity_source = battery_capacity(vehicle)
-    hybrid = bool(battery_kwh) or "ELECTRIC" in (vehicle.fuel_type or "").upper() or None
-
+    raws = _open_month(raws, _protection(db, vehicle))
     changed: list[uuid.UUID] = []
-    for raw in raws:
-        earlier, before, after = _split(raw, readings)
-        est = estimate_for_raw(raw, before, after, battery_kwh=battery_kwh, tank_l=None, earlier=earlier,
-                               hybrid=hybrid, capacity_source=capacity_source)
+    for raw, est in _estimates(db, vehicle, raws):
         touched = False
         if est.fuel_liters is not None and raw.fuel_quality == ValueQuality.UNKNOWN and raw.fuel_liters is None:
             raw.fuel_liters, raw.fuel_quality, raw.fuel_basis = est.fuel_liters, ValueQuality.ESTIMATED, est.fuel_basis
@@ -736,7 +792,7 @@ def refill_after_capacity_change(db: Session, vehicle_id: uuid.UUID, *, now: dat
 
     Bara el som DriveLog själv har räknat ur kapaciteten (estimated, metod battery_level) och el
     som saknas räknas om; ägarens egna och importerade värden rörs aldrig, och inte heller resor
-    i månader vars underlag redan är skapat.
+    som finns i ett underlag som redan är skapat.
     """
     now = now or utcnow()
     vehicle = db.get(Vehicle, vehicle_id)
@@ -752,10 +808,9 @@ def refill_after_capacity_change(db: Session, vehicle_id: uuid.UUID, *, now: dat
             RawTrip.energy_quality.in_((ValueQuality.ESTIMATED, ValueQuality.UNKNOWN)),
         )
     ).scalars())
-    closed, tz = _closed_months(db, vehicle)
     rows = _open_month(
         [r for r in rows if _capacity_based(r) or (r.energy_quality == ValueQuality.UNKNOWN and r.energy_kwh is None)],
-        closed, tz,
+        _protection(db, vehicle),
     )
     old = {r.id: r.energy_kwh for r in rows}
     cleared: list[uuid.UUID] = []
