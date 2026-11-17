@@ -735,3 +735,64 @@ def test_status_does_not_pass_the_locks(db, user, vehicle, actor):
                .values(car_in_use=True, accessibility_reported_at=M.VehicleObservation.fetched_at))
     assert start_time.engine_plan(db, vehicle.id) == []
     assert reload_trip(db, in_closed.id).started_at is None
+
+
+def test_status_never_changes_which_transition_counts():
+    """Granskningen: följden börjar med motorn igång, men statusen höll ihop den över en avläsning med
+    motorn av utan ny tidsstämpel för avstängningen ("motorn igång" låg kvar en hämtning efter stoppet,
+    eller avstängningen saknar tidsstämpel). Förut blev en tidigare motorstart starttiden, eller ingen;
+    nu lämnas statusen och resultatet blir exakt detsamma som utan den."""
+    # F1: motorn igång −56, sedd igång till −45; av (tidsstämpel −48, före förra hämtningen) med
+    # statusen; motorn igång igen −20. Utan statusen är starten −20.
+    f1 = [
+        srow(-60, engine=False, engine_ts=-120, status=FREE, status_ts=-120),
+        srow(-55, -45, engine=True, engine_ts=-56, status=FREE, status_ts=-120),
+        srow(-43, -22, engine=False, engine_ts=-48, status=IN_USE, status_ts=-44),
+        srow(-19, engine=True, engine_ts=-20, status=IN_USE, status_ts=-44),
+    ]
+    for earliest in (-120.0, -48.0, None):
+        kind, when, _, _ = assert_same_as_without_status(f1, "other_transition", km=20.0, earliest=earliest)
+        assert (kind, when) == ("set", at(-20))
+    # A: motorn igång −51, sedan av utan tidsstämpel med statusen fram till ankomsten. Utan statusen
+    # syns ingen pågående körning vid ankomsten: ingen starttid ur avläsningarna (förut −51).
+    a = [
+        srow(-60, -52, engine=False, engine_ts=-120, status=FREE, status_ts=-120),
+        srow(-50, -42, engine=True, engine_ts=-51, status=FREE, status_ts=-120),
+        srow(-40, -1, engine=False, status=IN_USE, status_ts=-41),
+    ]
+    for earliest in (-120.0, None):
+        kind, when, _, basis = assert_same_as_without_status(a, "other_transition", km=20.0, earliest=earliest)
+        assert (kind, when, basis) == ("none", None, {"status_ignored": "other_transition"})
+
+
+def test_other_transition_shows_in_the_debug_steps(db, user, vehicle):
+    from app.services.export import month_close
+
+    sobs(db, vehicle, -60, -52, engine=False, engine_ts=-120, status=FREE, status_ts=-120)
+    sobs(db, vehicle, -50, -42, engine=True, engine_ts=-51, status=FREE, status_ts=-120)
+    sobs(db, vehicle, -40, -1, engine=False, status=IN_USE, status_ts=-41)
+    trip = live_trip(db, vehicle, user, km=20.0, ended=ARR, earliest=ARR - timedelta(hours=3))
+    raw = seg.ordered_raws(trip)[0]
+    assert start_time.engine_plan(db, vehicle.id) == []
+    steps = start_time.unknown_start_reasons(db, raw, month_close.protection(db, vehicle.id))
+    assert steps[:2] == ["no_engine_start", "car_in_use_ignored_other_transition"]
+
+
+def test_start_signal_only_names_a_timestamp_that_gave_the_time():
+    """Statusen och motorstarten i samma hämtning men ingen av bilens tidsstämplar inom fönstret: tiden
+    är minuten mitt emellan hämtningarna (eller bara gränser), och grunden påstår inte att bilen gav den."""
+    rows = [
+        srow(-30, -16, engine=False, engine_ts=-300, status=FREE, status_ts=-300),
+        srow(-12, -0.5, engine=True, engine_ts=None, status=IN_USE, status_ts=None),
+    ]
+    kind, when, _, basis = estimate(rows, km=8.0)
+    assert kind == "set" and when == at(-14) and basis["method"] == "poll_midpoint"
+    assert basis["start_signal"] is None
+    rows[0].last_seen_at = at(-40)  # långt fönster: bara gränser
+    kind, _, _, basis = estimate(rows, km=8.0)
+    assert kind == "narrow" and basis["method"] == "engine_window" and basis["start_signal"] is None
+    # Motorns tid utanför fönstret, statusens inom: statusen gav tiden.
+    rows[0].last_seen_at = at(-16)
+    rows[1].engine_reported_at, rows[1].accessibility_reported_at = at(-200), at(-13.2)
+    kind, when, _, basis = estimate(rows, km=8.0)
+    assert kind == "set" and when == at(-13) and basis["start_signal"] == "car_in_use"

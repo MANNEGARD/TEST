@@ -68,6 +68,11 @@ regel gäller ensam, med samma resultat och grund som utan statusen; grunden få
   med statusen påslagen och sedan körs på el går inte att skilja från en start på el. Resultatet och
   grunden blir exakt desamma som utan statusen (oftast ingen starttid ur avläsningarna), utom
   ``status_ignored``.
+* ``other_transition`` – följden börjar med motorn igång, men statusen ger ändå en annan övergång än
+  motorstartens regel ensam: den håller ihop följden över en avläsning med motorn av utan ny
+  tidsstämpel för avstängningen (t.ex. när "motorn igång" låg kvar en hämtning efter stoppet), så att
+  en tidigare motorstart – eller ingen – blev övergången. Statusen förfinar bara tiden för SAMMA
+  övergång som motorstarten ger utan den.
 
 Statusen ligger kvar på avläsningarna och syns i felsökningsfilen, så att regeln kan prövas mot
 hur ägarens bil faktiskt rapporterar innan statusen får göra mer.
@@ -651,6 +656,9 @@ def _find_start(
       igång före ankomsten (t.ex. hela resan på el). Statusen sätter aldrig ensam en starttid: det är
       inte sett hur den riktiga bilen rapporterar statusen, och en bil som stått länge med statusen
       påslagen går inte att skilja från en start på el. Resultatet blir detsamma som utan statusen.
+    * ``other_transition`` – följden börjar med motorn igång, men statusen ger ändå en annan övergång
+      än motorstartens regel ensam (t.ex. håller den ihop följden över en avläsning med motorn av utan
+      ny tidsstämpel för avstängningen). Statusen förfinar bara tiden för samma övergång.
     """
     def readings(use_status: bool) -> list[Any]:
         # En avläsning där motorstatusen inte kunde läsas (None) och statusen inte säger "används"
@@ -672,6 +680,14 @@ def _find_start(
         # Statusen slog om utan motorn igång. Den sätter aldrig ensam en starttid (och snävar inte
         # in gränserna): motorstartens regel gäller ensam, som utan statusen.
         ignored = "engine_later" if any(r.engine_running is True for r in seen[i + 1:]) else "no_engine_start"
+    if ignored is None and any(_in_use(r) for r in seen[i:]):
+        # Statusen får bara förfina tiden för SAMMA övergång som motorstarten ger utan statusen. Håller
+        # den ihop följden över en avläsning med motorn av (utan ny tidsstämpel för avstängningen) blir
+        # övergången en annan – en tidigare motorstart, eller ingen – och då lämnas statusen.
+        plain = readings(False)
+        j = _start_index(plain, use_status=False)
+        if not (0 < i and 0 < j < len(plain) and plain[j] is seen[i] and plain[j - 1] is seen[i - 1]):
+            ignored = "other_transition"
     if ignored is not None:
         seen = readings(False)
         i = _start_index(seen, use_status=False)
@@ -726,10 +742,10 @@ def engine_estimate(
     chosen = min(t for t, _ in candidates) if candidates else None
     if in_use:
         # Vilket besked som gav tiden när metoden är engine_start (statusen och motorstarten slog
-        # om i samma hämtning); utan statusen förblir grunden som förut.
-        signals = [name for t, name in candidates if t == chosen] or (
-            ["engine", "car_in_use"] if engine_on else ["car_in_use"])
-        basis.update(in_use_reported_at=_iso(in_use_at), start_signal="_and_".join(signals))
+        # om i samma hämtning); utan statusen förblir grunden som förut. Gav ingen av bilens
+        # tidsstämplar tiden (minuten mitt emellan hämtningarna, eller bara gränser) är den None.
+        signals = [name for t, name in candidates if t == chosen]
+        basis.update(in_use_reported_at=_iso(in_use_at), start_signal="_and_".join(signals) or None)
     if chosen is not None:
         method, raw_at = "engine_start", chosen
     elif gap <= ENGINE_SHORT_WINDOW_MINUTES:
@@ -898,7 +914,7 @@ def unknown_start_reasons(db: Session, raw: RawTrip, locks: Any, history: Any = 
     underlag), ``no_arrival``; steget ur motorstarten: ``no_readings``, ``too_old``, ``no_engine_start``,
     ``engine_window`` (för långt mellan hämtningarna), ``engine_late`` (orimligt sen motorstart),
     följt av ``car_in_use_ignored_<kod>`` när statusen "bilen används" lämnades (``stop``,
-    ``engine_later`` eller ``no_engine_start``, se ``_find_start``);
+    ``engine_later``, ``no_engine_start`` eller ``other_transition``, se ``_find_start``);
     K4: ``no_odometer``, ``no_distance``, ``no_latest_start``, ``contradictory_bounds``,
     ``no_distance_estimate``; ``pending`` när steget skulle ge en tid vid nästa efterbearbetning.
     """

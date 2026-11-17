@@ -161,10 +161,13 @@ def _started_after(obs: VehicleObservation, odo_ts: datetime | None, arrived_at:
     return started > arrived_at and (odo_ts is None or odo_ts >= started)
 
 
-def _restarted(steps: list[Step], odo_ts: datetime | None, arrived_at: datetime) -> bool:
+def _restarted(steps: list[Step], odo_ts: datetime | None, arrived_at: datetime | None) -> bool:
     """``_started_after`` för varje avläsning i ``steps`` – även de oförändrade. Ägarens bil
     rapporterar motorstarten på en egen rad utan ny mätarställning eller position, och när
-    mätarökningen sedan kommer är motorn redan av igen."""
+    mätarökningen sedan kommer är motorn redan av igen. Utan tidsstämpel för ankomsten räknas
+    varje avläsning med motorn igång som en ny start."""
+    if arrived_at is None:
+        return any(s.obs.engine_running is True for s in steps)
     return any(_started_after(s.obs, odo_ts, arrived_at) for s in steps)
 
 
@@ -360,7 +363,6 @@ def _build_legs(anchor: VehicleObservation, anchor_eff: Eff, steps: list[Step], 
             end_idx = next(i for i, s in enumerate(steps) if s.obs is last_leg.end_obs)
             lagging = lagging or (
                 end.eff.odo is not None
-                and arrival_ts is not None
                 and not _restarted(steps[end_idx + 1:], end.eff.odo_ts, arrival_ts)
                 and _catches_up(last_leg.start, last_leg.end, end.eff.odo, settings)
             )

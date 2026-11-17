@@ -44,9 +44,11 @@ tändningen syns resan i journalen vid första hämtningen efter ankomsten (med 
 minut alltså inom ett par minuter). Saknas något – till exempel mätarvärdet kommer en stund
 efter positionen – väntar DriveLog som förut tills uppgifterna har lagt sig. Kommer mätarvärdet
 efter att resan redan syns rättas resans sträcka i stället för att det blir en extra resa, och
-rättningen syns i resans historik. Frågan i telefonen kommer som förut tidigast en stund
-(normalt tio minuter) efter ankomsten, så att en körning som fortsätter efter ett kort stopp
-hinner slås ihop först.
+rättningen syns i resans historik. Frågan i telefonen väntar ungefär som förut: normalt tills
+ankomsten har setts i tio minuter, så att en körning som fortsätter efter ett kort stopp hinner
+slås ihop först. Med ett kortare samlingsfönster än så, och när bilen har rapporterat motorn
+avstängd, kommer frågan redan vid andra hämtningen efter ankomsten, som förut. I manuellt läge kan den
+komma en hämtning (ett par minuter) tidigare än förut, eftersom resan syns tidigare.
 
 ## Självgående läge
 
@@ -265,7 +267,8 @@ får bara finslipa starttiden: slår det om i samma hämtning som motorstarten o
 tid än motorn, blir den tiden starttiden, och grunden säger "Bilen rapporterade själv att den
 började användas 06:14". Beskedet sätter aldrig ensamt en starttid – inte heller för en resa
 helt på el där motorn aldrig startar; då blir starttiden som om beskedet inte fanns (oftast
-uppskattad ur sträckan, eller okänd). Felsökningsfilen visar vad bilen svarade.
+uppskattad ur sträckan, eller okänd). Det ändrar inte heller vilken motorstart som räknas som
+resans start. Felsökningsfilen visar vad bilen svarade.
 
 Resor från de senaste två veckorna som saknar starttid eller har en uppskattad starttid
 rättas vid nästa hämtning, och ändringen syns i resans historik – utom resor där du angett

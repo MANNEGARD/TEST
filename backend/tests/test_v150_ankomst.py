@@ -452,8 +452,11 @@ def test_stale_arrival_then_restart_keeps_round_trip_separate(db, user, vehicle,
 # ----------------------------------------------------------------------------- frågan till telefonen
 
 
-def test_question_not_sent_before_arrival_seen_plus_settle(db, user, vehicle):
-    """Resan syns direkt, men frågan väntar som förut tills ankomsten setts i settle_minutes."""
+@pytest.mark.parametrize("engine_off", [False, True], ids=["utan-motor-av", "motor-av"])
+def test_question_not_sent_before_arrival_seen_plus_settle(db, user, vehicle, engine_off):
+    """Resan syns direkt, men frågan väntar som förut: tills ankomsten setts i settle_minutes,
+    eller – när bilen rapporterade motorn avstängd vid ankomsten, då väntan från före 1.5.0
+    stängde resan vid nästa hämtning – till nästa hämtning."""
     connect(db, user, vehicle)
     setup_push(db, user, batch_window_minutes=0)
     base = utcnow().replace(microsecond=0) - timedelta(minutes=20)
@@ -465,13 +468,16 @@ def test_question_not_sent_before_arrival_seen_plus_settle(db, user, vehicle):
     poll(db, vehicle, car, base + timedelta(minutes=12))
     car.lat, car.lon, car.pos_ts = PB[0], PB[1], base + timedelta(minutes=19)
     car.odometer += 9
-    car.odo_ts = car.engine_ts = base + timedelta(minutes=19, seconds=30)
-    car.engine = "STOPPED"
+    car.odo_ts = base + timedelta(minutes=19, seconds=30)
+    if engine_off:
+        car.engine, car.engine_ts = "STOPPED", car.odo_ts
     seen = base + timedelta(minutes=20)
     poll(db, vehicle, car, seen)
     (raw,) = raws(db)
     trip = trip_of(db, raw)
-    assert detection.question_hold_until(db, trip, user.id) == seen + timedelta(minutes=10)
+    poll_s = float(settings_svc.get_section(db, user.id, "volvo")["poll_interval_seconds"])
+    hold = seen + (timedelta(seconds=poll_s) if engine_off else timedelta(minutes=10))
+    assert detection.question_hold_until(db, trip, user.id) == hold
     req = db.execute(select(M.NotificationRequest).where(
         M.NotificationRequest.logical_trip_id == trip.id)).scalars().first()
     if req is None:  # inget ärende skapades av pipelinen: fråga direkt med samma regler
@@ -479,7 +485,7 @@ def test_question_not_sent_before_arrival_seen_plus_settle(db, user, vehicle):
             db, user_id=user.id, vehicle=vehicle, merge_items=[], trip_items=[(trip, [ReviewKind.CATEGORY])], now=seen,
         )
     assert req.kind in (NotificationKind.CLASSIFY, NotificationKind.COMPANY, NotificationKind.PURPOSE)
-    assert req.send_after >= seen + timedelta(minutes=10)
+    assert req.send_after >= hold
 
 
 def test_self_driving_question_waits_for_settle(db, user, vehicle):
@@ -494,7 +500,7 @@ def test_self_driving_question_waits_for_settle(db, user, vehicle):
     poll(db, vehicle, car, base)
     car.lat, car.lon, car.pos_ts = PB[0], PB[1], base + timedelta(minutes=19)
     car.odometer += 9
-    car.odo_ts = car.engine_ts = base + timedelta(minutes=19, seconds=30)
+    car.odo_ts = base + timedelta(minutes=19, seconds=30)  # ingen ny motorstatus: settle_minutes gäller
     seen = base + timedelta(minutes=20)
     poll(db, vehicle, car, seen)
     (raw,) = raws(db)
@@ -507,6 +513,43 @@ def test_self_driving_question_waits_for_settle(db, user, vehicle):
     assert stats.get("waiting_arrival") == 1 and not stats.get("created")
     stats = notifier.ensure_open_questions(db, seen + timedelta(minutes=10, seconds=1), user_id=user.id)
     assert stats.get("created") == 1
+
+
+def _question_minute(db, user, vehicle, car) -> float | None:
+    """Ägarens förlopp i självgående läge: minuten (relativt ankomsten) då frågan om resan skapas."""
+    settings_svc.update_section(db, user.id, "automation", {"mode": "self_driving"})
+    settings_svc.update_section(db, user.id, "automation", {"active_since": (X - timedelta(days=3)).isoformat()},
+                                allow_read_only=True)
+    owner_timeline(db, vehicle, car, until=-0.3)
+    arrive(car, PC, 194, pos_min=0.0, odo_min=0.5, fuel=13.0)
+    t = 1.7
+    while t < 30:
+        poll(db, vehicle, car, at(t))
+        notifier.ensure_open_questions(db, at(t), user_id=user.id)
+        rows = raws(db)
+        if len(rows) == 3 and db.execute(select(M.NotificationRequest).where(
+                M.NotificationRequest.logical_trip_id == trip_of(db, rows[-1]).id)).first():
+            return round(t, 1)
+        t += 2
+    return None
+
+
+@pytest.mark.parametrize("window, expected", [(0, 3.7), (10, 11.7)])
+def test_owner_question_same_time_as_before(db, user, vehicle, car, window, expected):
+    """Granskningsfynd: med samlingsfönster 0 kom frågan 8 minuter senare än i 1.4.2 (väntan
+    räknade alltid settle_minutes, fast 1.4.2 stängde resan vid andra hämtningen när motorn
+    rapporterats av). Nu samma minut som i 1.4.2 – och aldrig vid första hämtningen."""
+    setup_push(db, user, batch_window_minutes=window)
+    assert _question_minute(db, user, vehicle, car) == expected
+
+
+@pytest.mark.parametrize("window, expected", [(0, 3.7), (10, 11.7)])
+def test_owner_question_minute_in_old_engine(db, user, vehicle, car, old_engine, monkeypatch, window, expected):
+    """Samma förlopp med motorn i 1.4.2 (utan väntan efter ankomsten): facit för testet ovan."""
+    old_engine.install()
+    monkeypatch.setattr(notifier, "_arrival_hold_until", lambda *a, **k: None)
+    setup_push(db, user, batch_window_minutes=window)
+    assert _question_minute(db, user, vehicle, car) == expected
 
 
 # ----------------------------------------------------------------------------- jämförelse med 1.4.2
@@ -796,7 +839,8 @@ def compare(db, user, old_module: ModuleType, seed: int) -> dict[str, Any]:
         wrong_bounds = dropped - truth
         fake_round_trips = {(r.odometer_start, r.odometer_end) for r in old_rows
                             if "round_trip_unobserved" in r.quality_flags and r.odometer_end - r.odometer_start <= detection.LAG_KM}
-        merged_fake = bool(dropped) and _bounds(new_spans) <= _bounds(old_spans) and all(
+        # En tappad gräns som är en verklig ankomst är alltid en avvikelse (granskningsfynd).
+        merged_fake = bool(dropped) and not dropped & truth and _bounds(new_spans) <= _bounds(old_spans) and all(
             any(b in span for span in fake_round_trips) for b in dropped)
         assert old_double or wrong_bounds or merged_fake, detail
         if merged_fake and not (old_double or wrong_bounds):

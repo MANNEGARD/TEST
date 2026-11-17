@@ -209,7 +209,7 @@ Resedetekteringen (`detection.process_vehicle`) är en tillståndsmaskin:
   fågelvägen (1 km marginal för heltalsmätaren), stängs resan vid den hämtning som först ser
   ankomsten. Motorstatus och "sedd två gånger" krävs inte. En mätarökning efter ankomsten
   räknas bara med om bilen inte har rapporterat en ny motorstart som värdet kan vara avläst
-  efter. Det gäller också mycket korta resor där mätaren inte hann öka (sträckan uppskattas då
+  efter – på någon avläsning efter ankomsten, även den egna raden med motorstarten. Det gäller också mycket korta resor där mätaren inte hann öka (sträckan uppskattas då
   ur fågelvägen och märks).
 * Annars gäller väntan från före 1.5.0 oförändrad: resan anses avslutad när läget varit
   oförändrat i `settle_minutes` (10 min) – eller när bilen rapporterat avstängd motor efter en
@@ -225,13 +225,18 @@ Resedetekteringen (`detection.process_vehicle`) är en tillståndsmaskin:
   ändrades*. Ingår resan i en månad vars underlag redan är skapat märker underlagets avtryck
   ändringen som vilken annan ändring som helst. Samma sak gäller när mätarsträckan vid
   ankomsten var kortare än fågelvägen (mätarvärdet bevisligen gammalt) och ökningen ryms inom
-  omvägsgränsen. Annars blir ökningen som förut en egen rörelse. På samma sätt förs en position
+  omvägsgränsen – men aldrig efter en ny motorstart (då kan ökningen vara en ny körning, till
+  exempel en rundresa, och den blir som förut en egen resa med flaggor för granskning). Annars blir ökningen som förut en egen rörelse. På samma sätt förs en position
   som kommer efter att en resa utan ankomst ("rundresa") har stängts till den resan, när
   positionens tidsstämpel ligger inom 2 minuter från resans sluttid och bilen inte har startat
   igen. Så räknas samma körning aldrig två gånger.
-* **Frågan till telefonen kommer inte tidigare än förut:** tidigast när ankomsten först setts
-  plus `settle_minutes`, så att en fortsatt körning efter ett kort stopp hinner slås ihop
-  först. Lunchregelns egen väntan gäller som förut.
+* **Frågan till telefonen väntar som förut:** tidigast när ankomsten först setts plus
+  `settle_minutes`, så att en fortsatt körning efter ett kort stopp hinner slås ihop först –
+  eller, när bilen rapporterade motorn avstängd vid ankomsten, till nästa hämtning (där stängde
+  väntan från före 1.5.0 resan). I självgående läge kommer frågan då samma minut som förut. I
+  manuellt läge räknas samlingsfönstret (`batch_window_minutes`) från när resan skapades, och
+  eftersom resan nu skapas en hämtning tidigare kan frågan komma en hämtning tidigare än förut
+  (dock aldrig före väntan ovan). Lunchregelns egen väntan gäller som förut.
 * Varje ny positionsrapport inom en rörelse delar upp den i delresor.
 * **Sträcka** = skillnad i mätarställning (`distance_quality = odometer`).
 * **Sluttid** = bilens positionstidsstämpel (`reported`) om den är rimlig, annars en märkt
@@ -255,14 +260,19 @@ Resedetekteringen (`detection.process_vehicle`) är en tillståndsmaskin:
     av bilens två tidsstämplar inom fönstret starttiden, fortfarande metod `engine_start` och
     kvalitet `reported`. Grunden anger då `start_signal` (`engine`, `car_in_use` eller
     `engine_and_car_in_use`) och `in_use_reported_at`, och appen skriver "Bilen rapporterade
-    själv att den började användas 06:14" när statusens tid gav starttiden. I alla andra fall
+    själv att den började användas 06:14" när statusens tid gav starttiden (gav ingen av
+    tidsstämplarna tiden, t.ex. minuten mitt emellan hämtningarna, är `start_signal` tom). Statusen
+    får aldrig ändra vilken övergång som räknas. I alla andra fall
     lämnas statusen och resultatet blir exakt detsamma som utan den; grunden får
     `status_ignored` och felsökningsfilen steget `car_in_use_ignored_<kod>`:
     `no_engine_start` (statusen slog om men motorn gick aldrig före ankomsten, t.ex. hela
     resan på el – ingen starttid ur statusen), `engine_later` (statusen slog om en eller flera
     hämtningar före motorstarten – motorstarten räknas, eftersom en bil som stått med statusen
-    påslagen inte går att skilja från en start på el) och `stop` (motorn rapporterades
-    avstängd med ny tidsstämpel medan statusen låg kvar). Ingenting av detta är prövat mot den
+    påslagen inte går att skilja från en start på el), `stop` (motorn rapporterades
+    avstängd med ny tidsstämpel medan statusen låg kvar) och `other_transition` (statusen
+    skulle ha hållit ihop följden över en avläsning med motorn av utan ny tidsstämpel för
+    avstängningen, t.ex. när "motorn igång" låg kvar en hämtning efter stoppet, och gett en
+    annan övergång än motorstarten ensam). Ingenting av detta är prövat mot den
     riktiga bilen.
   * Rimlighet: tiden ligger aldrig före den tidigaste gränsen eller efter ankomsten, och inte
     på eller efter senaste möjliga start (t.ex. första mätarökningen). Snittfarten från

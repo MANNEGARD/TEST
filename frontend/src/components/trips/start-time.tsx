@@ -94,8 +94,14 @@ export function basisText(basis: StartBasis): string {
         : "";
     // Statusen "bilen används" gav tiden: den slog om i samma hämtning som motorstarten, tidigare.
     if (basis.start_signal === "car_in_use" && basis.in_use_reported_at) {
+      // Motorns tid nämns bara när den låg inom fönstret (efter statusens tid och högst två minuter
+      // efter hämtningen med motorn igång); en tid som backend inte litade på visas inte.
+      const engineAt = basis.engine_reported_at ? new Date(basis.engine_reported_at).getTime() : NaN;
+      const inUseAt = new Date(basis.in_use_reported_at).getTime();
+      const runningAt = basis.polled_running ? new Date(basis.polled_running).getTime() : NaN;
+      const engineInWindow = engineAt > inUseAt && engineAt <= runningAt + 2 * 60000;
       const engine =
-        basis.engine_reported_at && formatTime(basis.engine_reported_at) !== formatTime(basis.in_use_reported_at)
+        basis.engine_reported_at && engineInWindow && formatTime(basis.engine_reported_at) !== formatTime(basis.in_use_reported_at)
           ? ` Motorn startade ${formatTime(basis.engine_reported_at)}.`
           : "";
       return `Bilen rapporterade själv att den började användas ${formatTime(basis.in_use_reported_at)}${polls}.${engine} Tiden ändras inte av sig själv.`;
