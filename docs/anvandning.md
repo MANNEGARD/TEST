@@ -638,8 +638,10 @@ i journalen. Frågan utgår från vad DriveLog har kommit fram till: har resan b
 tjänst med ett ärende frågar notisen *Tjänsteresa – stämmer det?* med *Godkänn* (tjänst och
 ärendet i ett tryck), *Ändra ärende*, *Privat* och *Senare*; utan ärende *Tjänsteresa –
 vilket ärende?* med förslag; bedömd som privat *Privat resa – stämmer det?*. Bara en resa som
-inte är bedömd får *Tjänst eller privat?* med knappar som *Tjänst: Kundbesök …*, *Tjänst –
-skriv ärende*, *Privat* och *Alltid privat här*. I självgående läge kommer en fråga åt
+inte är bedömd, som kan vara flera körningar eller som har delsträckor med olika kategori får
+den gamla frågan: i självgående läge *Tjänst eller privat?* med knappar som *Tjänst: Kundbesök
+…*, *Tjänst – skriv ärende*, *Privat* och *Alltid privat här*, i manuellt läge *Var detta
+arbete eller privat?* med *Arbete*, *Privat*, *Granska* och *Senare*. I självgående läge kommer en fråga åt
 gången. DriveLog påminner efter 24 timmar och lägger undan frågan efter 48, så att nästa
 får plats. Larm när något har slutat fungera (Volvo, kalendern) och månadsnotisen kommer också
 hit. Obesvarade frågor ligger kvar under *Granskning*. Tysta timmar, max antal per

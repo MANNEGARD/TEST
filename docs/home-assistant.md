@@ -215,7 +215,8 @@ från 1.1.0) ser notiserna ut så här:
   ärende* godkänner tjänst med det ärende du skriver. Har förslaget ändrats sedan notisen kom
   (du ändrade ärendet i webben eller resan bedömdes om) godkänns ingenting: du får ett
   meddelande om att öppna körjournalen. Bara en resa som DriveLog inte har bedömt får
-  frågan *Tjänst eller privat?*, och en resa som kan vara flera körningar får den alltid.
+  frågan *Tjänst eller privat?*, och en resa som kan vara flera körningar eller
+  har delsträckor med olika kategori får den alltid.
   Svaren ger samma resultat i journalen som motsvarande val i webben: godkänd resa, ärendena
   i Granskning stängs och DriveLog lär sig av svaret.
 - Kategori och ärende besvaras i **samma tryck**. Det kommer **en fråga åt gången**; nästa
