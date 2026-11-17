@@ -714,7 +714,7 @@ def _process(
     Raden under "Senaste fel" försvinner först när bearbetningen har lyckats: ett fel i
     detekteringen när detekteringen sedan körs utan fel, ett fel i ett delsteg när en
     efterbearbetning sedan körs klart utan fel. En hämtning utan något att bearbeta lämnar raden
-    kvar (``previous_error`` är raden före hämtningen, som mark_success har tömt).
+    kvar (se ``_keep_unresolved_processing_line``).
     """
     from app.services import internal_errors
     from app.services.volvo import detection
@@ -735,11 +735,17 @@ def _process(
     steps = list(dict.fromkeys(f["step"] for f in failures))
     if not vehicle.is_demo:
         # Hämtningen lyckades (mark_success har tömt raden); bearbetningen gjorde det inte.
-        # Raden försvinner av sig själv vid nästa hämtning där bearbetningen lyckas.
+        # Raden försvinner av sig själv vid nästa hämtning där bearbetningen lyckas. Den sparas
+        # också för sig, så att ett tillfälligt fel i en senare hämtning inte gör att den glöms.
         conn.last_error = message
         conn.last_error_at = now
+        integrations.update_config(conn, {UNRESOLVED_PROCESSING: {"message": message, "at": now.isoformat()}})
     step = "detection" if "detection" in steps else steps[0]
     return list(created or []), {"step": step, "steps": steps, "message": message}
+
+
+# Nyckel i conn.config: den olösta raden om en misslyckad bearbetning, {"message", "at"}.
+UNRESOLVED_PROCESSING = "unresolved_processing"
 
 
 def _keep_unresolved_processing_line(
@@ -753,17 +759,41 @@ def _keep_unresolved_processing_line(
 
     Ett fel i detekteringen är löst när detekteringen har körts utan fel (avläsningarna har då
     prövats igen). Ett fel i ett delsteg är löst först när en efterbearbetning har körts klart
-    utan fel – annars saknar resan t.ex. sin fråga eller sin klassning och ingenting görs om."""
+    utan fel – annars saknar resan t.ex. sin fråga eller sin klassning och ingenting görs om.
+
+    Raden läses ur ``conn.config[UNRESOLVED_PROCESSING]``, inte bara ur raden strax före
+    hämtningen: har ett tillfälligt hämtningsfel (5xx, 429) skrivit över den ska den ändå
+    komma tillbaka vid nästa lyckade hämtning. ``previous_error`` används bara som reserv för
+    en rad som skrevs innan nyckeln fanns."""
     from app.services import internal_errors
 
-    message, at = previous_error
-    if vehicle.is_demo or conn.last_error is not None or not message:
-        return  # demobilen rör inte raden; ett nytt fel i den här hämtningen går före
-    if not message.startswith(internal_errors.PROCESSING_PREFIX):
+    if vehicle.is_demo:
+        return  # demobilen rör inte raden
+    saved = (conn.config or {}).get(UNRESOLVED_PROCESSING)
+    if isinstance(saved, dict) and isinstance(saved.get("message"), str):
+        message, at = saved["message"], _parse_time(saved.get("at"))
+    else:
+        message, at = previous_error
+    if not message or not message.startswith(internal_errors.PROCESSING_PREFIX):
         return
     if message == internal_errors.DETECTION_MESSAGE or pipeline_done:
+        if saved is not None:
+            integrations.update_config(conn, {UNRESOLVED_PROCESSING: None})
         return
+    if saved is None:  # en rad från före uppgraderingen: spara den på det nya sättet
+        integrations.update_config(
+            conn, {UNRESOLVED_PROCESSING: {"message": message, "at": at.isoformat() if at else None}}
+        )
+    if conn.last_error is not None:
+        return  # ett nytt fel i den här hämtningen går före; raden kommer tillbaka sedan
     conn.last_error, conn.last_error_at = message, at
+
+
+def _parse_time(value: Any) -> datetime | None:
+    try:
+        return datetime.fromisoformat(value) if isinstance(value, str) else None
+    except ValueError:
+        return None
 
 
 def _due(conn: IntegrationConnection, interval: float, now: datetime) -> bool:

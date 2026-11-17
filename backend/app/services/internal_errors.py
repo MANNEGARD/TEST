@@ -228,8 +228,10 @@ _PLATE = re.compile(r"\b(?:[A-ZÅÄÖ]{3} ?\d{2}[A-ZÅÄÖ0-9]|[A-Za-zÅÄÖåä
 _VIN_ANY = re.compile(
     r"(?i)\b(?=[a-hj-npr-z0-9]{17}\b)(?=[a-z0-9]*\d)(?=[a-z0-9]*[a-z])[a-hj-npr-z0-9]{17}\b"
 )
+# Prefixet är begränsat ({0,40}, inte *): annars tar långa följder av ord och bindestreck
+# kvadratisk tid, och re släpper inte GIL (granskningen av 1.4.2).
 _STREET = re.compile(
-    r"(?i)\b[\wåäöéü\-]*(?:gatan|gata|vägen|väg|gränden|gränd|torget|torg|allén|allé|stigen|backen|leden"
+    r"(?i)\b[\wåäöéü\-]{0,40}(?:gatan|gata|vägen|väg|gränden|gränd|torget|torg|allén|allé|stigen|backen|leden"
     r"|platsen|plan|stranden|strand|kajen|esplanaden|street|road|avenue)\s+\d{1,4}(?:\s?[a-z](?![\wåäö]))?"
 )
 _POSTCODE_CITY = re.compile(r"\b\d{3} ?\d{2}\s+[A-ZÅÄÖ][\wåäöÅÄÖéü\-]+")

@@ -266,6 +266,116 @@ def test_a_new_error_in_the_fetch_replaces_the_processing_line(client, db, user,
     assert "Volvo svarar inte" in client.get(f"{API}/status").json()["last_error"]
 
 
+def _fetch_500(name, vin):
+    return collector.ApiResult("error", 500, message="Volvo svarar inte (påhittat)")
+
+
+def _fetch_429(name, vin):
+    return collector.ApiResult("throttled", 429, message="kvot", retry_after=60)
+
+
+def _fetch_raises(name, vin):
+    raise collector.VolvoError("Nätverksfel (påhittat)")
+
+
+def _fetch_raises_429(name, vin):
+    raise collector.vc.VolvoThrottled(60)
+
+
+@pytest.mark.parametrize("bad", [None, _fetch_500, _fetch_429, _fetch_raises, _fetch_raises_429],
+                         ids=["kontroll", "alla500", "429svar", "volvoerror", "429undantag"])
+def test_processing_line_comes_back_after_a_temporary_fetch_error(bad, client, db, user, vehicle, car, monkeypatch,
+                                                                   tolerant):
+    """Granskningsfynd (1.4.2): ett tillfälligt fel i hämtningen skrev över raden, och vid nästa
+    lyckade hämtning försvann den fast inget hade bearbetats om. Nu kommer den tillbaka."""
+    break_step(monkeypatch, notifier, "enqueue_for_changes")
+    drive_until_processed(db, vehicle, car)
+    db.commit()
+    line = client.get(f"{API}/status").json()["last_error"]
+    assert line.startswith(internal_errors.PROCESSING_PREFIX)
+    real = car.fetch
+    if bad is not None:
+        monkeypatch.setattr(car, "fetch", bad)
+        poll(db, vehicle, car, m(100))
+        db.commit()
+        assert client.get(f"{API}/status").json()["last_error"] != line  # hämtningsfelet går före
+    monkeypatch.setattr(car, "fetch", real)
+    poll(db, vehicle, car, m(130))  # bilen står still, steget är fortfarande trasigt
+    db.commit()
+    assert client.get(f"{API}/status").json()["last_error"] == line
+    # En ny resa bearbetas utan fel: raden försvinner, också den sparade.
+    monkeypatch.undo()
+    drive_another_trip(db, vehicle, car, start=140)
+    db.commit()
+    assert client.get(f"{API}/status").json()["last_error"] is None
+    db.expire_all()
+    conn = db.execute(select(M.IntegrationConnection)).scalars().one()
+    assert collector.UNRESOLVED_PROCESSING not in (conn.config or {})
+
+
+def test_detection_line_is_cleared_when_detection_succeeds(client, db, user, vehicle, car, monkeypatch, tolerant):
+    real = seg.create_logical_for_raw
+    monkeypatch.setattr(seg, "create_logical_for_raw", broken_step)
+    drive_until_processed(db, vehicle, car)
+    db.commit()
+    db.expire_all()
+    conn = db.execute(select(M.IntegrationConnection)).scalars().one()
+    saved = conn.config[collector.UNRESOLVED_PROCESSING]
+    assert saved["message"] == internal_errors.DETECTION_MESSAGE
+    real_fetch = car.fetch
+    monkeypatch.setattr(car, "fetch", _fetch_500)
+    poll(db, vehicle, car, m(150))
+    db.commit()
+    monkeypatch.setattr(car, "fetch", real_fetch)
+    monkeypatch.setattr(seg, "create_logical_for_raw", real)
+    again = poll(db, vehicle, car, m(200))
+    db.commit()
+    assert again["new_trips"] == 1 and "processing_error" not in again
+    assert client.get(f"{API}/status").json()["last_error"] is None
+    db.expire_all()
+    conn = db.execute(select(M.IntegrationConnection)).scalars().one()
+    assert collector.UNRESOLVED_PROCESSING not in (conn.config or {})
+
+
+def test_demo_vehicle_never_saves_the_processing_line(db, user, vehicle, car, monkeypatch, tolerant):
+    vehicle.is_demo = True
+    db.flush()
+    break_step(monkeypatch, notifier, "enqueue_for_changes")
+    result = drive_until_processed(db, vehicle, car)
+    db.commit()
+    assert result["processing_error"]["steps"] == ["pipeline.notify"]
+    db.expire_all()
+    conn = db.execute(select(M.IntegrationConnection)).scalars().one()
+    assert collector.UNRESOLVED_PROCESSING not in (conn.config or {})
+
+
+def test_processing_line_from_before_the_upgrade_is_kept(client, db, user, vehicle, car, monkeypatch, tolerant):
+    """En rad som skrevs innan nyckeln fanns (bara i last_error) står kvar som förut och sparas
+    sedan på det nya sättet, så att den också överlever ett tillfälligt hämtningsfel."""
+    break_step(monkeypatch, notifier, "enqueue_for_changes")
+    drive_until_processed(db, vehicle, car)
+    db.commit()
+    line = client.get(f"{API}/status").json()["last_error"]
+    conn = db.execute(select(M.IntegrationConnection)).scalars().one()
+    from app.services import integrations
+    integrations.update_config(conn, {collector.UNRESOLVED_PROCESSING: None})
+    db.commit()
+    poll(db, vehicle, car, m(100))
+    db.commit()
+    assert client.get(f"{API}/status").json()["last_error"] == line
+    db.expire_all()
+    conn = db.execute(select(M.IntegrationConnection)).scalars().one()
+    assert conn.config[collector.UNRESOLVED_PROCESSING]["message"] == line
+    real = car.fetch
+    monkeypatch.setattr(car, "fetch", _fetch_500)
+    poll(db, vehicle, car, m(110))
+    db.commit()
+    monkeypatch.setattr(car, "fetch", real)
+    poll(db, vehicle, car, m(130))
+    db.commit()
+    assert client.get(f"{API}/status").json()["last_error"] == line
+
+
 def test_review_items_fall_back_to_one_trip_at_a_time(db, user, vehicle, car, monkeypatch, tolerant):
     """Fäller en enda resa avstämningen av ärenden får de andra resorna ändå sina ärenden."""
     real = pipeline.sync_trip_review_items
@@ -745,6 +855,38 @@ def test_clean_message_masks_patterns_but_keeps_ordinary_text():
     for leak in ("Kungsvägen 3B", "111 22 Stockholm", "Torget 4", "yv1pza3test000042", "abc123", "59.090"):
         assert leak not in text, leak
     assert "got 100 rows" in text and "1.234 s" in text and "12:30:45.123" in text and "1.4.1" in text
+
+
+@pytest.mark.parametrize("text", [
+    "a-" * 50_000,
+    "svar-" * 20_000,
+    "trip-segment-merge-candidate-" * 700,
+    "x" * 30 + "-" + "y" * 30 + "gatan 5",
+], ids=["a-", "svar-", "kebab", "langt-ord"])
+def test_clean_message_is_fast_for_long_hyphenated_text(text):
+    """Granskningsfynd (1.4.2): adressmönstret tog kvadratisk tid på långa följder av ord och
+    bindestreck (minuter för 100 000 tecken) och höll GIL medan hämtningens transaktion var öppen."""
+    import time
+
+    started = time.perf_counter()
+    internal_errors.clean_message(text)
+    internal_errors.describe("notify", Boom(text))
+    assert time.perf_counter() - started < 3.0
+
+
+def test_street_pattern_still_masks_ordinary_addresses():
+    cases = {
+        "Karl-Johans-gatan 5B": "[DOLD]",
+        "x-y-Långholmsgatan 7": "[DOLD]",
+        "123 Main Street 4": "123 Main [DOLD]",
+        "Storgatan 5": "[DOLD]",
+        "Påhittarvägen 12B": "[DOLD]",
+        "Lilla Torget 4": "Lilla [DOLD]",
+    }
+    for address, masked in cases.items():
+        assert internal_errors.clean_message(f"Kunde inte tolka {address}; okänt svar") == (
+            f"Kunde inte tolka {masked}; okänt svar"
+        ), address
 
 
 # ----------------------------------------------------------------------------- utan fel: som 1.4.0

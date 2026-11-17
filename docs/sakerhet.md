@@ -126,9 +126,16 @@ Månadsnotisen i självgående läge har en länk som hämtar underlaget utan in
 (mätarställning, bränsle, batteri, trippmätare, snittvärden, motorstatus med tidsstämplar),
 hämtningarnas utfall och de resor som byggdes av dem, för de senaste 14 dygnen. Filen innehåller
 **inte** chassinummer (VIN), registreringsnummer, positioner, adresser, platsnamn, Volvos rådata,
-feltexter (bara felens nycklar och HTTP-koder) eller nycklar och tokens; databasens id ersätts
-av löpnummer. Den skapas bara när du hämtar den och lämnar servern först när du själv skickar den
-vidare.
+Volvos feltexter (bara felens nycklar och HTTP-koder) eller nycklar och tokens; databasens id
+ersätts av löpnummer. Den skapas bara när du hämtar den och lämnar servern först när du själv
+skickar den vidare.
+
+Från 1.4.2 innehåller filen också `internal_errors`: DriveLogs senaste interna fel (högst 20)
+med tid, steg, typ av fel, kodställen och ett tvättat felmeddelande kapat till 300 tecken.
+Kända värden (VIN, registreringsnummer, nycklar, kalenderlänken, sparade platser och de senaste
+resornas adresser) och mönster för gatuadresser, postnummer och koordinater tas bort ur
+meddelandet, men en adress eller ett platsnamn som varken är känt eller följer mönstren kan
+finnas kvar. Läs filen innan du skickar den vidare.
 
 ## Vad lämnar servern?
 

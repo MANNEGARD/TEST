@@ -85,7 +85,9 @@ Nothing is sold, and nothing is used for advertising or profiling.
 * A diagnostics file ("felsökningsfil") with the vehicle's recent readings, fetch results and
   trips is created only when the owner downloads it, and leaves the server only if the owner
   sends it on. It contains no VIN, registration number, positions, addresses, place names,
-  raw Volvo data, error texts or secrets.
+  raw Volvo data, Volvo error texts or secrets. Since 1.4.2 it also lists DriveLog's recent
+  internal errors (step, error type, code location and a scrubbed message). Known values and
+  addresses are removed from the message, but an unknown address or place name could remain.
 * Fuel and energy use per trip is calculated on the server from the vehicle's own readings;
   nothing extra is fetched or sent for it.
 

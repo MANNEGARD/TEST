@@ -223,8 +223,14 @@ Resedetekteringen (`detection.process_vehicle`) är en tillståndsmaskin:
 * **Felsökningsfil** (1.3.0): *Ladda ner felsökningsfil* under *Integrationer → Volvo*
   (`GET /api/v1/volvo/diagnostics?days=14`, 1–31 dygn) ger bilens avläsningar, hämtningarnas
   utfall (status och HTTP-kod) och de resor som byggdes av dem som JSON – utan VIN,
-  registreringsnummer, positioner, adresser, platsnamn, rådata, feltexter och nycklar. Id:n
+  registreringsnummer, positioner, adresser, platsnamn, rådata och nycklar. Id:n
   är löpnummer (`obs-1`, `trip-1`). Filen är till för den som hjälper dig felsöka.
+  Från 1.4.2 innehåller filen också `internal_errors`: DriveLogs senaste interna fel (högst 20)
+  med tid, steg, typ av fel, kodställen i DriveLogs egna filer och ett tvättat felmeddelande,
+  kapat till 300 tecken. Kända värden (VIN, registreringsnummer, nycklar, kalenderlänken,
+  sparade platser och de senaste resornas adresser) och mönster för gatuadresser, postnummer och
+  koordinater tas bort ur meddelandet, men en adress eller ett platsnamn som varken är känt eller
+  följer mönstren kan finnas kvar – läs filen innan du skickar den vidare.
 * **Platsen:** ligger stoppet vid en känd plats används den. Annars skapas en ny obekräftad
   plats (radie 75 m) vars adress slås upp i OpenStreetMap i bakgrunden – aldrig under själva
   detekteringen. Se [Användning → Adresser](anvandning.md#adresser).

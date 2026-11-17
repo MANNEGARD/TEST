@@ -652,6 +652,13 @@ felsökningsfil**. Filen innehåller bilens avläsningar och hämtningar de sena
 resor som byggdes av dem, men inte chassinummer, registreringsnummer, positioner, adresser eller
 platsnamn. Skicka den till den som hjälper dig felsöka.
 
+Kraschar ett steg i bearbetningen efter en hämtning står det under *Senaste fel* i Volvo-panelen
+("Avläsningen hämtades, men …"). Resan finns ändå i journalen. Raden försvinner när
+bearbetningen har lyckats igen, oftast efter nästa körning. Från 1.4.2 står de senaste interna
+felen också under `internal_errors` i felsökningsfilen, med ett tvättat felmeddelande: kända
+adresser och platser tas bort, men ett okänt platsnamn kan bli kvar, så läs filen innan du
+skickar den vidare.
+
 ## Demoläge
 
 Utan nycklar kan varje integration provas i demoläge. Demodata hamnar på en separat
