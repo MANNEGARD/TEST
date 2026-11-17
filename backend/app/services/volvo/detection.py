@@ -6,8 +6,13 @@ och mätarställningen är ett heltal i kilometer. Motorn gör därför så här
 * *Ankare* = senaste stabila observationen (bilen står still).
 * *Rörelse* = mätarställningen har ökat minst ``min_odometer_delta_km`` eller
   positionen har flyttats minst ``position_threshold_m``.
-* Rörelsen anses avslutad när läget varit oförändrat i ``settle_minutes`` (bekräftat
+* En ankomst (ny positionsrapport) med kompletta uppgifter – mätarvärdet avläst vid
+  ankomsten och minst fågelvägen – stänger rörelsen direkt (1.5.0, ``_arrival_complete``).
+* Annars anses rörelsen avslutad när läget varit oförändrat i ``settle_minutes`` (bekräftat
   av en senare hämtning) eller när bilen rapporterat avstängd motor efter ändringen.
+* Ett mätarvärde som släpar efter en redan stängd resa förs till den resan i stället för att
+  bli en egen resa (1.5.0, ``_attach_late_odometer``); frågan till telefonen väntar ändå som
+  förut (``question_hold_until``).
 * Varje ny positionsrapport inom rörelsen är ett ankomstbesked och delar upp den i
   delresor.
 
