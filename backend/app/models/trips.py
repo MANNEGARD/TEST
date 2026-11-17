@@ -81,6 +81,15 @@ class VehicleObservation(Base):
     avg_energy_consumption_auto: Mapped[float | None] = mapped_column(Float, nullable=True)  # kWh/100 km
     statistics_reported_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
 
+    # "Bilen används" (command-accessibility, 1.5.0): bilens availabilityStatus och
+    # unavailableReason som de kom (t.ex. AVAILABLE, UNAVAILABLE + CAR_IN_USE), bilens egen
+    # tidsstämpel för statusen och det härledda car_in_use (sant bara för UNAVAILABLE med
+    # CAR_IN_USE; None när ingen status lästes). Hämtningstiden för övergången är fetched_at.
+    accessibility_status: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    accessibility_reason: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    accessibility_reported_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    car_in_use: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+
     content_hash: Mapped[str] = mapped_column(String(64), index=True)
     raw: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict)
     errors: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict)
@@ -161,6 +170,10 @@ class RawTrip(Base):
     energy_kwh: Mapped[float | None] = mapped_column(Float, nullable=True)
     energy_quality: Mapped[str] = mapped_column(String(20), default="unknown")
     regen_kwh: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Hur en uppskattad förbrukning räknades fram (1.5.0, volvo.consumption): metod, värdena före
+    # och efter, felgränsen och anteckningar. Tom för äldre resor och värden som inte är uträknade.
+    fuel_basis: Mapped[dict[str, Any] | None] = mapped_column(JSONType, nullable=True)
+    energy_basis: Mapped[dict[str, Any] | None] = mapped_column(JSONType, nullable=True)
 
     # Exakt bevarade originaluppgifter från källan.
     original_category: Mapped[str | None] = mapped_column(String(60), nullable=True)

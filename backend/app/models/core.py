@@ -6,7 +6,7 @@ import uuid
 from datetime import date, datetime
 from typing import Any
 
-from sqlalchemy import Boolean, Date, ForeignKey, Index, Integer, String, Text, UniqueConstraint, Uuid
+from sqlalchemy import Boolean, Date, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base, JSONType, UTCDateTime, new_id, utcnow
@@ -82,6 +82,9 @@ class Vehicle(Base):
         ForeignKey("integration_connections.id", ondelete="SET NULL"), nullable=True
     )
     capabilities: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict)
+    # Batteriets användbara kapacitet i kWh, angiven av ägaren (1.5.0). Tom = förslaget ur modell
+    # och årsmodell (volvo.consumption.suggested_battery_kwh), annars är elen okänd.
+    usable_battery_kwh: Mapped[float | None] = mapped_column(Float, nullable=True)
     # Omräkning efter ägarens beslut (learning.recompute): räknas upp vid varje beslut och
     # bockas av när omräkningen som började vid det värdet är klar. Ligger kvar över omstarter.
     recompute_requested: Mapped[int] = mapped_column(Integer, default=0, server_default="0")

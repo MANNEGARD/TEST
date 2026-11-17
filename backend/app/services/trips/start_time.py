@@ -592,7 +592,8 @@ def engine_estimate(
     if raw_at >= ended_at or (earliest is not None and raw_at < earliest - ENGINE_CLOCK_SKEW):
         return "none", None, None, {}  # motsägelsefulla tider: hellre okänd än fel
     at = _clamp_round(raw_at, earliest, ended_at)
-    speed = distance_km / (_minutes(ended_at - at) / 60) if distance_km and ended_at > at else None
+    # Snittfarten räknas på den oavrundade tiden, så att avrundningen inte avgör rimligheten.
+    speed = distance_km / (_minutes(ended_at - raw_at) / 60) if distance_km else None
     basis.update(method=method, avg_speed_kmh=round(speed, 1) if speed is not None else None)
     too_fast = speed is not None and speed > plausible_speed_kmh(distance_km or 0.0)
     too_late = latest is not None and at > latest + timedelta(seconds=30)

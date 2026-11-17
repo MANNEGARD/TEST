@@ -131,7 +131,10 @@ def normalisera_doman(varde: str, nyckel: str = "domain") -> str:
 
 def ar_forbjuden_vard(vard: str) -> bool:
     """Sant om värden (redan i gemener) är DriveLog självt, en IP-adress eller värdmaskinen."""
-    if vard in FORBJUDNA_VARDAR or vard.endswith(".localhost"):
+    # Ett namn med avslutande punkt (localhost.) slås upp som samma namn och spärras likadant.
+    vard = vard.rstrip(".")
+    # I Home Assistant heter appen <förrådsprefix>-drivelog (t.ex. local-drivelog) på Supervisors nät.
+    if vard in FORBJUDNA_VARDAR or vard.endswith((".localhost", "-drivelog")):
         return True
     if _IP_LIKNANDE.fullmatch(vard):
         return True

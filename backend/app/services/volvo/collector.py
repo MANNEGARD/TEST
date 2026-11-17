@@ -44,6 +44,13 @@ _HASH_FIELDS = (
     "avg_energy_consumption", "avg_speed", "trip_meter_auto_km", "trip_meter_manual_km",
     "avg_speed_auto", "statistics_reported_at", "avg_fuel_consumption_auto", "avg_energy_consumption_auto",
 )
+# "Bilen används" (command-accessibility, 1.5.0). Status och orsak ingår i content_hash, så att
+# en ändrad status ger en ny avläsningsrad med egen hämtningstid. Bilens tidsstämpel ingår
+# inte: den kan tänkas följa varje anrop och skulle då ge en ny rad vid varje hämtning.
+# Fälten tas bara med i hashen när en status har lästs, så att en bil utan stöd för
+# ändpunkten får samma hash som före 1.5.0.
+_ACCESS_HASH_FIELDS = ("accessibility_status", "accessibility_reason")
+_ACCESS_FIELDS = (*_ACCESS_HASH_FIELDS, "accessibility_reported_at", "car_in_use")
 _REPORTED_FIELDS = (
     "odometer_reported_at", "position_reported_at", "fuel_reported_at", "battery_reported_at", "engine_reported_at",
 )
@@ -149,7 +156,7 @@ def _apply_throttle(conn: IntegrationConnection, now: datetime, retry_after: flo
 
 def parse_results(results: dict[str, ApiResult]) -> dict[str, Any]:
     """Översätter API-svaren till observationsfält. Saknade fält förblir None."""
-    f: dict[str, Any] = {name: None for name in _HASH_FIELDS}
+    f: dict[str, Any] = {name: None for name in (*_HASH_FIELDS, *_ACCESS_FIELDS)}
 
     r = results.get("odometer")
     if r is not None and r.ok:
@@ -225,6 +232,14 @@ def parse_results(results: dict[str, ApiResult]) -> dict[str, Any]:
         value, _unit, _ = vc.energy_field(r.data, "chargingStatus")
         if isinstance(value, str):
             f["charging_status"] = value[:60]
+
+    r = results.get(C.ACCESSIBILITY_ENDPOINT)
+    if r is not None and r.ok:
+        status, reason, ts = vc.accessibility_field(r.data)
+        if status is not None:
+            f["accessibility_status"], f["accessibility_reason"] = status, reason
+            f["accessibility_reported_at"] = ts
+            f["car_in_use"] = vc.is_car_in_use(status, reason)
     return f
 
 
@@ -244,6 +259,8 @@ def content_hash(fields: dict[str, Any]) -> str:
     basis = {
         k: (fields.get(k).isoformat() if isinstance(fields.get(k), datetime) else fields.get(k)) for k in _HASH_FIELDS
     }
+    if fields.get("accessibility_status") is not None:
+        basis.update({k: fields.get(k) for k in _ACCESS_HASH_FIELDS})
     return hashlib.sha256(json.dumps(basis, sort_keys=True).encode()).hexdigest()
 
 
@@ -266,8 +283,10 @@ def store_observation(
     source: str = "volvo_api",
 ) -> tuple[VehicleObservation | None, bool]:
     """Sparar en observation. Returnerar (observation, skapades_ny_rad)."""
-    if not any(r.ok for r in results.values()):
-        return None, False  # inget observerades – hitta inte på en tom datapunkt
+    if not any(r.ok for n, r in results.items() if n != C.ACCESSIBILITY_ENDPOINT):
+        # Inget observerades (ett svar bara om tillgängligheten räcker inte heller) – hitta
+        # inte på en tom datapunkt.
+        return None, False
     fields = parse_results(results)
     digest = content_hash(fields)
     last = latest_observation(db, vehicle.id)
@@ -647,8 +666,11 @@ def poll_vehicle(
         db, vehicle, results, fetched_at=now, sync_run_id=run.id, source="demo" if vehicle.is_demo else "volvo_api"
     )
     stats["observation"] = "new" if created else ("duplicate" if obs is not None else "none")
-    ok_count = sum(1 for r in results.values() if r.ok)
-    hard_errors = [n for n, r in results.items() if r.status == "error"]
+    # "Bilen används" är ett tillägg: ett fel i den ändpunkten (eller ett svar bara från den)
+    # avgör aldrig om hämtningen lyckades.
+    core = {n: r for n, r in results.items() if n != C.ACCESSIBILITY_ENDPOINT}
+    ok_count = sum(1 for r in core.values() if r.ok)
+    hard_errors = [n for n, r in core.items() if r.status == "error"]
 
     if throttled is not None:
         _apply_throttle(conn, now, throttled.retry_after)

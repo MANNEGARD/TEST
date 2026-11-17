@@ -60,6 +60,12 @@ DALIGA = [
     "t.example.se=ip6-localhost:80",
     "t.example.se=a.localhost:80",
     "t.example.se=drivelog:8000",
+    "t.example.se=localhost.:80",
+    "t.example.se=drivelog.:8000",
+    "t.example.se=host.docker.internal.:80",
+    "t.example.se=x.localhost.:1",
+    "t.example.se=local-drivelog:8000",
+    "t.example.se=local-drivelog.:8000",
     # Värden och porten i övrigt
     "t.example.se=http://x:1",
     "t.example.se=-x:1",
@@ -94,7 +100,7 @@ while IFS= read -r del; do
   if ar_extra_doman "$del" && ! ar_forbjuden_vard "$vard"; then echo ja; else echo nej; fi
 done
 """
-    ut = subprocess.run(  # noqa: S603
+    ut = subprocess.run(
         [bash, "-c", program], input="\n".join(varden) + "\n", capture_output=True, text=True, check=True,
         timeout=60,
     )
@@ -134,6 +140,6 @@ def test_forbjudna_namn_ar_samma_lista():
     from drivelog_addon.installningar import FORBJUDNA_VARDAR
 
     text = SERVERSKRIPT.read_text(encoding="utf-8")
-    rad = re.search(r"^ar_forbjuden_vard\(\) \{\n  case \"\$1\" in\n    (.*?)\) return 0 ;;", text, re.MULTILINE)
+    rad = re.search(r"^ar_forbjuden_vard\(\) \{\n.*?^  case \"\$v\" in\n    (.*?)\) return 0 ;;", text, re.MULTILINE | re.DOTALL)
     assert rad
     assert {namn.strip() for namn in rad.group(1).split("|")} == FORBJUDNA_VARDAR

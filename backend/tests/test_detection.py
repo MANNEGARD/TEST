@@ -192,7 +192,10 @@ def test_short_stop_inside_one_movement_splits_into_legs(db, user, vehicle, car)
     assert (first.odometer_start, first.odometer_end) == (1000, 1014)
     assert (second.odometer_start, second.odometer_end) == (1014, 1030)
     assert first.ended_at == m(18) and second.ended_at == m(33)
-    assert "split_by_position_reports" in first.quality_flags
+    # 1.5.0: ankomsten till B hade kompletta uppgifter och stängdes direkt (hämtningen 07:20),
+    # innan bilen körde vidare. De två resorna kommer därför från var sin rörelse och märks
+    # inte längre "uppdelad efter positionsrapporter".
+    assert "split_by_position_reports" not in first.quality_flags
     assert second.start_earliest >= first.ended_at - timedelta(minutes=2)
     # Starten efter stoppet räknas fram ur farten och ligger inom gränserna (efter ankomsten till B).
     assert second.start_time_quality == TimeQuality.ESTIMATED
@@ -214,11 +217,15 @@ def test_detection_is_idempotent(db, user, vehicle, car):
 
 
 def test_engine_stopped_closes_trip_early(db, user, vehicle, car):
+    """Genvägen med avstängd motor gäller när ankomstens uppgifter inte är kompletta (1.5.0:
+    med kompletta uppgifter stängs resan redan vid första hämtningen, se test_v150_ankomst.py).
+    Här är mätarvärdet avläst fyra minuter före positionen."""
     settings_svc.update_section(db, user.id, "volvo", {"settle_minutes": 60})
     poll_every(db, vehicle, car, m(0), m(5))
     car.moving(5, m(9))
     poll(db, vehicle, car, m(10))
     car.drive_to(B, 9, m(18))
+    car.odo_ts = m(14)
     poll(db, vehicle, car, m(20))
     assert raws(db) == []
     poll(db, vehicle, car, m(25))  # bekräftat av en andra hämtning

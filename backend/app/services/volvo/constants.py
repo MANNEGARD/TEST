@@ -92,11 +92,16 @@ ENDPOINTS: dict[str, Endpoint] = {
             API_CONNECTED_VEHICLE,
             "/vehicles/{vin}/command-accessibility",
             ("conve:command_accessibility",),
-            "Bilens uppkoppling (tillgänglighet)",
-            polled=False,
+            "Bilens tillgänglighet (bl.a. om bilen används)",
         ),
     )
 }
+
+# Hämtas vid varje hämtning sedan 1.5.0 ("bilen används"). Ett fel i just den här
+# ändpunkten får aldrig göra att hämtningen räknas som misslyckad (collector.poll_vehicle).
+ACCESSIBILITY_ENDPOINT = "command_accessibility"
+ACCESSIBILITY_UNAVAILABLE = "UNAVAILABLE"
+ACCESSIBILITY_CAR_IN_USE = "CAR_IN_USE"
 
 POLL_ENDPOINTS: tuple[str, ...] = tuple(name for name, e in ENDPOINTS.items() if e.polled)
 

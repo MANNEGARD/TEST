@@ -181,11 +181,14 @@ ar_extra_doman() {
 # inne i DriveLogs container, så localhost/127.0.0.1 och containerns eget namn är DriveLog självt,
 # och IP-adresser och Dockers namn på värdmaskinen leder ut ur Docker-nätet.
 ar_forbjuden_vard() {
-  case "$1" in
+  local v="$1"
+  # Ett namn med avslutande punkt (localhost.) slås upp som samma namn och spärras likadant.
+  while [[ "$v" == *. ]]; do v="${v%.}"; done
+  case "$v" in
     localhost | ip6-localhost | ip6-loopback | host.docker.internal | gateway.docker.internal | drivelog) return 0 ;;
-    *.localhost) return 0 ;;
+    *.localhost | *-drivelog) return 0 ;;
   esac
-  [[ "$1" =~ ^(0x[0-9a-f]*|[0-9]+)(\.(0x[0-9a-f]*|[0-9]+))*\.?$ ]]
+  [[ "$v" =~ ^(0x[0-9a-f]*|[0-9]+)(\.(0x[0-9a-f]*|[0-9]+))*\.?$ ]]
 }
 
 sakert_varde() { [[ "$1" =~ ^[A-Za-z0-9._:/@+=-]*$ && "${#1}" -le 300 ]]; }

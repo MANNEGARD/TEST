@@ -438,6 +438,53 @@ def energy_field(payload: Any, key: str) -> tuple[Any, str | None, datetime | No
     return item.get("value"), item.get("unit"), parse_timestamp(item.get("updatedAt"))
 
 
+_CODE_MAX = 40
+
+
+def _code(value: Any) -> str | None:
+    """En kort statuskod ur svaret (t.ex. "AVAILABLE"); annat än text blir None."""
+    if isinstance(value, dict):  # tålig mot {"value": "CAR_IN_USE"}
+        value = value.get("value")
+    if not isinstance(value, str):
+        return None
+    text = sanitize_text(value.strip(), _CODE_MAX)
+    return text or None
+
+
+def accessibility_field(payload: Any) -> tuple[str | None, str | None, datetime | None]:
+    """command-accessibility → (availabilityStatus, unavailableReason, bilens tidsstämpel).
+
+    Dokumenterad form (Connected Vehicle v2):
+    ``{"data": {"availabilityStatus": {"value": "UNAVAILABLE", "unavailableReason": "CAR_IN_USE",
+    "timestamp": "..."}}}``. Orsaken läses också om den ligger bredvid statusen i ``data``.
+    Värdena sparas som de är (bara tvättade och kapade); saknas statusen blir allt None.
+    """
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, dict):
+        return None, None, None
+    item = data.get("availabilityStatus")
+    if isinstance(item, dict):
+        status, ts = _code(item.get("value")), parse_timestamp(item.get("timestamp"))
+        reason = _code(item.get("unavailableReason"))
+    else:
+        status, ts, reason = _code(item), None, None
+    if status is None:
+        return None, None, None
+    if reason is None:
+        side = data.get("unavailableReason")
+        reason = _code(side)
+        if ts is None and isinstance(side, dict):
+            ts = parse_timestamp(side.get("timestamp"))
+    return status, reason, ts
+
+
+def is_car_in_use(status: str | None, reason: str | None) -> bool | None:
+    """Sant bara för UNAVAILABLE med orsaken CAR_IN_USE; None när ingen status lästes."""
+    if status is None:
+        return None
+    return status.upper() == C.ACCESSIBILITY_UNAVAILABLE and (reason or "").upper() == C.ACCESSIBILITY_CAR_IN_USE
+
+
 def to_km(value: Any, unit: str | None) -> float | None:
     num = parse_number(value)
     if num is None:
