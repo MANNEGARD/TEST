@@ -400,11 +400,11 @@ def parse_timestamp(value: Any) -> datetime | None:
         return None
     try:
         dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=UTC)
+        return dt.astimezone(UTC)
+    except (ValueError, OverflowError):  # OverflowError: tidsstämpel vid datumgränsen
         return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=UTC)
-    return dt.astimezone(UTC)
 
 
 def parse_number(value: Any) -> float | None:

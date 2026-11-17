@@ -38,6 +38,17 @@ orimligt hög snittfart (``plausible_speed_kmh``), eller är fönstret längre, 
 senaste möjliga start och K4 uppskattar som förut. En fastställd starttid ändras aldrig av sig
 själv; bara ägaren kan ange en annan.
 
+Statusen "bilen används" (Volvos command-accessibility, ``VehicleObservation.car_in_use``)
+räknas lika med "motorn igång": en avläsning visar att bilen används när motorn är igång ELLER
+statusen är UNAVAILABLE med orsaken CAR_IN_USE. Laddhybriden kan starta på el, och då kan
+"motorn igång" komma först en bit in i resan. Starttiden blir den tidigaste av bilens egna
+tidsstämplar (motorstartens och statusens) inom fönstret; grunden anger då vilket besked som
+gav tiden (``start_signal``: ``engine``, ``car_in_use`` eller ``engine_and_car_in_use``, och
+``in_use_reported_at``). Det är inte prövat att den riktiga bilen svarar CAR_IN_USE under färd:
+utan statusen blir allt som förut, och statusen AVAILABLE räknas aldrig som att bilen stod
+still (det kräver fortfarande motorn avstängd). Metoden är ``engine_start`` även när statusen
+gav tiden, så att den ligger fast och visas som bilens egen tid.
+
 Tider som räknar med starttiden som känd (kalenderns avfärd, pendlingskedjan, AI-underlaget)
 använder ``known_start``: en uppskattning ur sträckan räknas där som okänd, precis som
 stilleståndet mellan resor (``merge.stop_gap``) redan bedöms med gränserna.
@@ -529,27 +540,38 @@ def plausible_speed_kmh(distance_km: float) -> float:
     return min(MAX_AVG_SPEED_KMH, ENGINE_SPEED_FACTOR * table_speed(distance_km))
 
 
+def _in_use(row: Any) -> bool:
+    """Statusen "bilen används" (UNAVAILABLE med orsaken CAR_IN_USE, kolumnen ``car_in_use``).
+
+    Bara ``True`` räknas. Statusen AVAILABLE (``False``) räknas inte som att bilen stod still
+    när motorstatusen saknas: det är inte prövat att bilen svarar CAR_IN_USE under färd, så
+    "stod still" kräver fortfarande att motorn rapporterades avstängd.
+    """
+    return getattr(row, "car_in_use", None) is True
+
+
 def find_engine_start(
     rows: Sequence[Any], *, earliest: datetime | None, ended_at: datetime,
 ) -> tuple[Any, Any] | None:
-    """(föregående avläsning, första avläsningen med motorn igång) för den SISTA övergången
-    "stod still" → "motorn igång" före ankomsten, eller ``None`` (ren funktion).
+    """(föregående avläsning, första avläsningen där bilen används) för den SISTA övergången
+    "stod still" → "används" före ankomsten, eller ``None`` (ren funktion).
 
-    ``rows`` är bilens avläsningar sorterade på ``fetched_at``. Avläsningar hämtade efter
-    ankomsten räknas inte, och inte heller en avslutande rad med motorn av som rapporterades
-    vid ankomsten. Motorn ska ha gått i alla avläsningar från övergången fram till ankomsten
-    (sågs bilen med motorn av emellan var det en annan körning), och övergången ska ligga
-    efter resans tidigaste gräns.
+    ``rows`` är bilens avläsningar sorterade på ``fetched_at``. En avläsning visar att bilen
+    används när motorn är igång eller statusen är "bilen används" (``car_in_use``, se
+    ``_in_use``). Avläsningar hämtade efter ankomsten räknas inte, och inte heller en avslutande
+    rad med motorn av som rapporterades vid ankomsten. Bilen ska ha använts i alla avläsningar
+    från övergången fram till ankomsten (sågs den stå still emellan var det en annan körning),
+    och övergången ska ligga efter resans tidigaste gräns.
     """
-    # En avläsning där motorstatusen inte kunde läsas (None) säger ingenting: den räknas varken
-    # som "stod still" eller "motorn igång", så att ett enstaka fel mitt i resan inte blir en start.
-    seen = [r for r in rows if r.fetched_at <= ended_at and r.engine_running is not None]
+    # En avläsning där motorstatusen inte kunde läsas (None) och statusen inte säger "används"
+    # räknas inte alls, så att ett enstaka fel mitt i resan inte blir en start.
+    seen = [r for r in rows if r.fetched_at <= ended_at and (r.engine_running is not None or _in_use(r))]
     while seen and seen[-1].engine_running is False and (
         seen[-1].engine_reported_at is not None and seen[-1].engine_reported_at >= ended_at - ENGINE_CLOCK_SKEW
     ):
         seen.pop()  # ankomstraden
     i = len(seen)
-    while i > 0 and seen[i - 1].engine_running is True:
+    while i > 0 and (seen[i - 1].engine_running is True or _in_use(seen[i - 1])):
         i -= 1
     if i == len(seen) or i == 0:
         return None  # motorn gick inte vid ankomsten, eller övergången syns inte
@@ -563,7 +585,8 @@ def engine_estimate(
     rows: Sequence[Any], *, earliest: datetime | None, latest: datetime | None, ended_at: datetime,
     distance_km: float | None,
 ) -> tuple[Literal["set", "narrow", "none"], datetime | None, datetime | None, dict[str, Any]]:
-    """Starttiden ur övergången till "motorn igång" (ren funktion).
+    """Starttiden ur övergången till "används" – motorn igång eller statusen "bilen används"
+    (ren funktion).
 
     Ger ``("set", tid, None, grund)``, ``("narrow", None, ny senaste start, grund)`` eller
     ``("none", None, None, {})``. Se modulens docstring för reglerna.
@@ -575,7 +598,12 @@ def engine_estimate(
     lo = prev.last_seen_at - ENGINE_CLOCK_SKEW
     hi = first_on.fetched_at + ENGINE_CLOCK_SKEW
     gap = _minutes(first_on.fetched_at - prev.last_seen_at)
-    reported = first_on.engine_reported_at
+    in_use = _in_use(first_on)
+    # Motorstartens tidsstämpel gäller bara när avläsningen visar motorn igång: vid start på el
+    # (bara statusen) är den tidsstämpeln förra avstängningen.
+    engine_on = first_on.engine_running is True
+    reported = first_on.engine_reported_at if engine_on or not in_use else None
+    in_use_at = getattr(first_on, "accessibility_reported_at", None) if in_use else None
     basis: dict[str, Any] = {
         "polled_before": _iso(prev.last_seen_at),
         "polled_running": _iso(first_on.fetched_at),
@@ -584,8 +612,17 @@ def engine_estimate(
         "earliest": _iso(earliest),
         "trip_km": round(distance_km, 1) if distance_km else None,
     }
-    if reported is not None and lo <= reported <= hi:
-        method, raw_at = "engine_start", reported
+    # Bilens egna tidsstämplar inom fönstret mellan hämtningarna; den tidigaste är starten.
+    candidates = [(t, name) for t, name in ((reported, "engine"), (in_use_at, "car_in_use"))
+                  if t is not None and lo <= t <= hi]
+    chosen = min(t for t, _ in candidates) if candidates else None
+    if in_use:
+        # Vilket besked som gav tiden (utan statusen förblir grunden som förut).
+        signals = [name for t, name in candidates if t == chosen] or (
+            ["engine", "car_in_use"] if engine_on else ["car_in_use"])
+        basis.update(in_use_reported_at=_iso(in_use_at), start_signal="_and_".join(signals))
+    if chosen is not None:
+        method, raw_at = "engine_start", chosen
     elif gap <= ENGINE_SHORT_WINDOW_MINUTES:
         method, raw_at = "poll_midpoint", prev.last_seen_at + (first_on.fetched_at - prev.last_seen_at) / 2
     else:

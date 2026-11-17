@@ -26,6 +26,7 @@ from sqlalchemy import create_engine, inspect, make_url, select, text
 import app.models as M
 from alembic import command
 from app.api.routes import volvo as volvo_routes
+from app.models.enums import IntegrationStatus
 from app.services.volvo import client as vc
 from app.services.volvo import collector, demo
 from app.services.volvo import constants as C
@@ -220,6 +221,57 @@ def test_an_error_in_this_endpoint_never_fails_the_poll(db, user, vehicle):
     assert run.status == "ok"
     obs = _rows(db, vehicle)[0]
     assert obs.odometer_km == 1234 and obs.accessibility_status is None and obs.car_in_use is None
+
+
+def test_401_only_in_this_endpoint_keeps_the_poll_and_the_connection(db, user, vehicle):
+    conn = connect(db, user, vehicle)
+    rec = Recorder(overrides={"command-accessibility": httpx.Response(401, json={})})
+    out = collector.poll_vehicle(db, vehicle, now=T0, transport=rec.transport)
+    assert out["status"] == "ok" and out["observation"] == "new"
+    assert conn.status != IntegrationStatus.NEEDS_REAUTH and conn.last_error is None
+    obs = _rows(db, vehicle)[0]
+    assert obs.odometer_km == 1234 and obs.car_in_use is None
+
+
+@pytest.mark.parametrize("failure", [ApiResult("error", 500, message="x"), ApiResult("throttled", 429)])
+def test_a_transient_error_mid_drive_gives_no_extra_rows(db, user, vehicle, failure):
+    connect(db, user, vehicle)
+    car = InUseCar()
+    poll(db, vehicle, car, T0)
+    car.start(T0 + timedelta(minutes=1))
+    poll(db, vehicle, car, T0 + timedelta(minutes=2))
+    car.access_result = failure
+    poll(db, vehicle, car, T0 + timedelta(minutes=4))
+    car.access_result = None
+    poll(db, vehicle, car, T0 + timedelta(minutes=6))
+    poll(db, vehicle, car, T0 + timedelta(minutes=8))
+    rows = _rows(db, vehicle)
+    assert [(r.fetched_at - T0, r.seen_count, r.car_in_use) for r in rows] == [
+        (timedelta(0), 1, False), (timedelta(minutes=2), 4, True),
+    ]
+
+
+def test_a_transient_error_with_other_changes_stores_the_status_as_unknown(db, user, vehicle):
+    connect(db, user, vehicle)
+    car = InUseCar()
+    car.start(T0)
+    poll(db, vehicle, car, T0)
+    car.access_result = ApiResult("error", 500, message="x")
+    car.engine, car.engine_ts = "STOPPED", T0 + timedelta(minutes=1)
+    poll(db, vehicle, car, T0 + timedelta(minutes=2))
+    rows = _rows(db, vehicle)
+    assert len(rows) == 2
+    assert rows[1].accessibility_status is None and rows[1].car_in_use is None  # inte överförd
+
+
+def test_an_odd_timestamp_does_not_fail_the_poll(db, user, vehicle):
+    connect(db, user, vehicle)
+    car = InUseCar()
+    car.access_result = ApiResult("ok", 200, data=body("AVAILABLE", None, "0001-01-01T00:00:00+14:00"))
+    out = poll(db, vehicle, car, T0)
+    assert out["status"] == "ok"
+    obs = _rows(db, vehicle)[0]
+    assert obs.accessibility_status == "AVAILABLE" and obs.accessibility_reported_at is None
 
 
 def test_one_more_connected_vehicle_call_per_poll_is_counted(db, user, vehicle):

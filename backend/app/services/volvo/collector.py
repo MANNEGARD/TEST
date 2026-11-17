@@ -264,6 +264,18 @@ def content_hash(fields: dict[str, Any]) -> str:
     return hashlib.sha256(json.dumps(basis, sort_keys=True).encode()).hexdigest()
 
 
+def _access_failed_transiently(
+    results: dict[str, ApiResult], fields: dict[str, Any], last: VehicleObservation
+) -> bool:
+    r = results.get(C.ACCESSIBILITY_ENDPOINT)
+    return (
+        r is not None
+        and r.status in ("error", "throttled")
+        and fields.get("accessibility_status") is None
+        and last.accessibility_status is not None
+    )
+
+
 def latest_observation(db: Session, vehicle_id: uuid.UUID) -> VehicleObservation | None:
     return db.execute(
         select(VehicleObservation)
@@ -290,6 +302,13 @@ def store_observation(
     fields = parse_results(results)
     digest = content_hash(fields)
     last = latest_observation(db, vehicle.id)
+    if last is not None and last.content_hash != digest and _access_failed_transiently(results, fields, last):
+        # Ett tillfälligt fel i "bilen används" (fel eller 429) ska inte dela upp raden i två
+        # extra rader. Är allt annat oförändrat räknas hämtningen som en dubblett av förra
+        # raden. Statusen förs aldrig över till en ny rad: där står den som okänd.
+        carried = {**fields, **{k: getattr(last, k) for k in _ACCESS_FIELDS}}
+        if content_hash(carried) == last.content_hash:
+            digest = last.content_hash
     if last is not None and last.content_hash == digest:
         last.last_seen_at = max(last.last_seen_at, fetched_at)
         last.seen_count = (last.seen_count or 1) + 1
@@ -625,7 +644,15 @@ def poll_vehicle(
             if not _should_poll(vehicle, name, now):
                 stats["endpoints"][name] = "skipped_unsupported"
                 continue
-            result = api.fetch(name, vehicle.vin)
+            if name == C.ACCESSIBILITY_ENDPOINT:
+                # Ett 401 bara här (t.ex. saknad behörighet för ändpunkten) får inte slänga det
+                # som redan hämtats med samma token eller kräva ny inloggning.
+                try:
+                    result = api.fetch(name, vehicle.vin)
+                except VolvoAuthError as exc:
+                    result = ApiResult("error", exc.http_status or 401, message=exc.message)
+            else:
+                result = api.fetch(name, vehicle.vin)
             results[name] = result
             stats["endpoints"][name] = result.status
             if result.status == "throttled":

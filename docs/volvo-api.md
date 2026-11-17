@@ -158,8 +158,15 @@ avläsningen (`vehicle_observations`):
 * Kvoten: ett anrop till per hämtning mot Connected Vehicle (vid 120 s ca 3 600 anrop/dygn
   med de fem ändpunkterna, budget 9 000).
 * 403/404 gör att ändpunkten slutar hämtas på samma sätt som övriga (omprovning efter ett
-  dygn). Ett fel i just den här ändpunkten gör aldrig att hämtningen räknas som misslyckad,
-  och ett svar bara från den ger ingen avläsningsrad.
+  dygn). Ett fel i just den här ändpunkten (även 401) gör aldrig att hämtningen räknas som
+  misslyckad eller att anslutningen kräver ny inloggning, och ett svar bara från den ger
+  ingen avläsningsrad. Ett 429 här pausar dock hela insamlingen, eftersom gränsen gäller
+  hela API:t.
+* Ett tillfälligt fel (fel eller 429) i ändpunkten när allt annat är oförändrat räknas som
+  en dubblett av förra raden: ingen extra rad, men förra radens `last_seen_at` flyttas fram
+  även över den hämtning där statusen inte lästes. Ändrades något annat samtidigt blir det
+  en ny rad där statusen står som okänd (den förs aldrig över). En ändrad status syns
+  alltså med säkerhet först på den rad där den lästes.
 * Demobilen svarar `UNAVAILABLE`/`CAR_IN_USE` medan motorn går och `AVAILABLE` annars
   (påhittat förlopp).
 

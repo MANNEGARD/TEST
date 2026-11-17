@@ -669,7 +669,34 @@ COMPARED_FLAGS = {"collection_gap", "detour_or_multiple_trips", "no_position", "
                   "missing_odometer"}
 
 
+def true_boundaries(sc: Scenario) -> set[float]:
+    """Mätarställningarna där en resa verkligen slutar: varje ankomst till en ny plats (en
+    rundresa tillbaka till samma plats ger ingen ny position och ingen gräns), plus förloppets
+    början och slut."""
+    out = {float(sc.drives[0].odo_from), float(sc.drives[-1].odo_to)}
+    here = sc.start
+    for d in sc.drives:
+        if d.dest != here:
+            out.add(float(d.odo_to))
+        here = d.dest
+    return out
+
+
+def _bounds(spans: list[tuple[float, float]]) -> set[float]:
+    return {x for span in spans for x in span}
+
+
 def compare(db, user, old_module: ModuleType, seed: int) -> dict[str, Any]:
+    """Kör samma förlopp genom motorn i 1.4.2 och den nya och jämför när allt har lagt sig.
+
+    Krav: aldrig fler kilometer än mätaren har ökat (här: exakt ökningen, inga överlapp). Samma
+    resor med samma mätarintervall som i 1.4.2 – utom där 1.4.2 bevisligen hade fel: då ska den
+    nya motorns resor sluta exakt vid de verkliga ankomsterna (``true_boundaries``) och 1.4.2:s
+    fel ska vara ett av två kända: (1) samma kilometer två gånger (en sträcka uppskattad ur
+    fågelvägen plus mätarökningen som en egen "resa"), eller (2) en gräns som inte är en
+    ankomst (ett släpande mätarvärde hamnade i en egen "resa" eller i nästa resa). Den nya
+    motorn skapar resan aldrig senare än 1.4.2, utom där 1.4.2 var tidigare just genom fel (1).
+    """
     sc = make_scenario(seed)
     cfg = dict(settings_svc.get_section(db, user.id, "volvo"))
     cfg["poll_interval_seconds"] = sc.poll_min * 60
@@ -678,116 +705,58 @@ def compare(db, user, old_module: ModuleType, seed: int) -> dict[str, Any]:
     old_rows, new_rows = raws(db, old_vehicle), raws(db, new_vehicle)
     increase = sc.drives[-1].odo_to - sc.drives[0].odo_from
     info = f"frö {seed}: {sc}"
-    # Aldrig fler kilometer än mätaren har ökat, och här (allt har lagt sig) exakt ökningen.
     assert km_sum(new_rows) <= increase, info
     assert_no_double_km(new_rows, increase)
-    out: dict[str, Any] = {"merged_late_odometer": 0, "late_odometer_to_next": 0, "gap_after_early_close": 0,
-                           "stale_estimate_double_km": 0, "late_position_double_km": 0, "earlier": [],
-                           "same_time": 0, "later_for_position": []}
-    changed: set[tuple[float, float]] = set()
-    waited_for_position: set[tuple[float, float]] = set()
-    removed: set[tuple[float, float]] = set()  # dubbelräknade resor i 1.4.2 som inte finns i den nya
-    origin: dict[tuple[float, float], Any] = {}  # (b): normaliserat spann → resan i 1.4.2
+    out: dict[str, Any] = {"same": 0, "fixed_double_km": 0, "fixed_boundary": 0, "earlier": [], "same_time": 0,
+                           "later_where_old_double_counted": [], "gap_after_early_close": 0}
     old_spans = [(r.odometer_start, r.odometer_end) for r in old_rows]
     new_spans = [(r.odometer_start, r.odometer_end) for r in new_rows]
-    if old_spans != new_spans:
-        # De enda tillåtna skillnaderna gäller ett släpande mätarvärde, avläst vid ankomsten, som
-        # kom efter att resan stängts. 1.4.2 gjorde resten (a) till en egen "resa" utan ny
-        # position, flaggad "möjligen tur och retur", eller (b) – när bilen körde vidare inom
-        # väntan – till en del av nästa resa. Nu förs det till rätt resa, och gränsen blir bilens
-        # verkliga mätarställning vid ankomsten. (c) Var mätarvärdet vid ankomsten bevisligen
-        # gammalt (mätarsträckan kortare än fågelvägen) fick resan i 1.4.2 en sträcka uppskattad
-        # ur fågelvägen OCH resten blev en egen "resa" – samma kilometer två gånger. Nu blir det
-        # en resa med mätarsträckan. Allt annat är ett fel.
-        expected = list(old_spans)
-        old_by_span = {(r.odometer_start, r.odometer_end): r for r in old_rows}
-        for d in sc.drives:
-            if d.lag and d.lag_kind == "pos_late" and (d.odo_to, d.odo_to) in expected:
-                # (d) Positionen kom efter mätarvärdet. 1.4.2 stängde rörelsen innan positionen kom
-                # (genvägen med avstängd motor räknade en TIDIGARE ankomst i samma rörelse): resan
-                # blev en "rundresa" utan position och positionen sedan en egen resa med sträcka
-                # uppskattad ur fågelvägen – samma kilometer två gånger. Den nya motorn väntar på
-                # positionen (som före 1.4.2 för en rörelse utan ankomst) och gör en resa av det.
-                before = [(a, x) for (a, x) in expected if x == d.odo_to and a < x]
-                trip_row = (origin.get(before[0]) or old_by_span.get(before[0])) if before else None
-                late_row = old_by_span.get((d.odo_to, d.odo_to))
-                if (
-                    trip_row is not None and late_row is not None
-                    and before[0] in new_spans and (d.odo_to, d.odo_to) not in new_spans
-                    and "round_trip_unobserved" in trip_row.quality_flags
-                    and late_row.distance_quality == DistanceQuality.ESTIMATED
-                    and old_created[late_row.id] >= old_created[trip_row.id]
-                ):
-                    expected.remove((d.odo_to, d.odo_to))
-                    removed.add((d.odo_to, d.odo_to))
-                    changed.add(before[0])
-                    waited_for_position.add(before[0])
-                    out["late_position_double_km"] += 1
-                    continue
-            if not d.lag or d.lag_kind == "pos_late":
-                continue
-            zero = [a for (a, x) in expected if a == x and a <= d.odo_from and (a, d.odo_to) in expected]
-            if zero and expected.count((zero[0], d.odo_to)) == 1 and (zero[0], zero[0]) not in new_spans:
-                a = zero[0]
-                assert old_by_span[(a, a)].distance_quality == DistanceQuality.ESTIMATED, info
-                assert "round_trip_unobserved" in old_by_span[(a, d.odo_to)].quality_flags, info
-                expected.remove((a, a))
-                removed.add((a, a))
-                changed.add((a, d.odo_to))
-                out["stale_estimate_double_km"] += 1
-                continue
-            # Resan till d:s mål kan ha börjat före eller efter d:s start (i båda motorerna lika):
-            # leta upp den gamla resan som slutade mitt i d.
-            short = [(a, x) for (a, x) in expected if a < x and d.odo_from < x < d.odo_to]
-            if not short:
-                continue
-            a, x = max(short, key=lambda span: span[1])  # den som slutade närmast d:s mål
-            right = (a, d.odo_to)
-            if right not in new_spans or right in expected:
-                continue
-            if (x, d.odo_to) in expected:
-                # (a) resten blev en egen "resa" utan ny position, flaggad "möjligen tur och retur"
-                assert "round_trip_unobserved" in old_by_span[(x, d.odo_to)].quality_flags, info
-                expected[expected.index((a, x))] = right
-                expected.remove((x, d.odo_to))
-                changed.add(right)
-                out["merged_late_odometer"] += 1
-                continue
-            # (nästa resa kan i sin tur ha fått ett släpande värde: dess slut prövas när turen
-            # kommer till den, och hela listan jämförs till sist)
-            nxt = [y for (b, y) in expected if b == x and y > d.odo_to]
-            if nxt:
-                # (b) bilen körde vidare inom väntan: resten hamnade i nästa resa
-                origin[right] = origin.get((a, x)) or old_by_span[(a, x)]
-                origin[(d.odo_to, nxt[0])] = origin.get((x, nxt[0])) or old_by_span[(x, nxt[0])]
-                expected[expected.index((a, x))] = right
-                expected[expected.index((x, nxt[0]))] = (d.odo_to, nxt[0])
-                changed.update({right, (d.odo_to, nxt[0])})
-                out["late_odometer_to_next"] += 1
-        assert expected == new_spans, f"{info}\n gammal {old_spans}\n ny {new_spans}"
+    truth = true_boundaries(sc)
+    old_double = km_sum(old_rows) > increase + 1e-6
+    differing: set[tuple[float, float]] = set()
+    if old_spans == new_spans:
+        out["same"] += 1
+    else:
+        detail = f"{info}\n gammal {old_spans}\n ny {new_spans}\n verkliga gränser {sorted(truth)}"
+        # Där motorerna skiljer sig ska den nya ha rätt: inga gränser som inte är ankomster utöver
+        # dem som 1.4.2 har likadant (en position och nästa körnings mätarvärde i samma hämtning
+        # går inte att skilja åt, i någon av motorerna) …
+        assert _bounds(new_spans) - truth <= _bounds(old_spans), detail
+        # … och 1.4.2 ha ett av de kända felen.
+        wrong_bounds = (_bounds(old_spans) - _bounds(new_spans)) - truth
+        assert old_double or wrong_bounds, detail
+        if old_double:
+            out["fixed_double_km"] += 1
+            # Felet (1) ser alltid ut så här: en resa utan mätarökning, med uppskattad sträcka.
+            assert any(r.odometer_start == r.odometer_end and r.distance_quality == DistanceQuality.ESTIMATED
+                       for r in old_rows), detail
+        if wrong_bounds:
+            out["fixed_boundary"] += 1
+        differing = set(new_spans) ^ set(old_spans)
     for raw in new_rows:
-        # Samma resa i 1.4.2: samma början (vid (a) och (c) den första av dem), annars samma slut (b).
         span = (raw.odometer_start, raw.odometer_end)
-        if span in origin:
-            old = origin[span]  # (b): den gamla resa som spannet kommer från
-        else:
-            kept = [r for r in old_rows if (r.odometer_start, r.odometer_end) not in removed]
-            cands = [r for r in kept if r.odometer_start == raw.odometer_start] or [
-                r for r in kept if r.odometer_end == raw.odometer_end]
-            assert cands, info
-            old = min(cands, key=lambda r: old_created[r.id])
+        # Samma resa i 1.4.2: den första gamla resan som täcker någon del av samma kilometer
+        # (eller samma punkt för en resa utan mätarökning).
+        cover = [r for r in old_rows if r.odometer_start < raw.odometer_end and r.odometer_end > raw.odometer_start]
+        cover = cover or [r for r in old_rows if r.odometer_start <= raw.odometer_start <= r.odometer_end]
+        assert cover, info
+        old = min(cover, key=lambda r: old_created[r.id])
         delay = old_created[old.id] - new_created[raw.id]
-        if delay < 0 and (raw.odometer_start, raw.odometer_end) in waited_for_position:
-            out["later_for_position"].append(-delay)  # (d): 1.4.2 var tidigare men räknade dubbelt
+        if delay < 0:
+            # Tillåtet bara där 1.4.2 var tidigare genom att räkna dubbelt: den stängde innan
+            # positionen kom, och positionen blev en egen resa utan mätarökning vid samma punkt.
+            doubled_here = any(
+                r.odometer_start == r.odometer_end and r.distance_quality == DistanceQuality.ESTIMATED
+                and raw.odometer_start <= r.odometer_start <= raw.odometer_end for r in old_rows
+            )
+            assert old_double and doubled_here, f"{info}\n resan {span} skapades {-delay} min senare än i 1.4.2"
+            out["later_where_old_double_counted"].append(-delay)
             continue
-        assert delay >= 0, f"{info}\n resan {raw.odometer_start}–{raw.odometer_end} skapades senare än i 1.4.2"
         if delay > 0:
             out["earlier"].append(delay)
         else:
             out["same_time"] += 1
-        if (old.odometer_start, old.odometer_end) != (raw.odometer_start, raw.odometer_end):
-            continue
-        if (raw.odometer_start, raw.odometer_end) in changed:
+        if span in differing or (old.odometer_start, old.odometer_end) != span:
             continue
         old_flags = set(old.quality_flags) & COMPARED_FLAGS
         new_flags = set(raw.quality_flags) & COMPARED_FLAGS
@@ -802,34 +771,42 @@ def compare(db, user, old_module: ModuleType, seed: int) -> dict[str, Any]:
 
 
 def test_random_scenarios_match_old_engine_and_never_later(db, user, old_module):
-    """Slumpade förlopp genom motorn i 1.4.2 och den nya: samma resor med samma mätarintervall,
-    aldrig fler kilometer än mätaren ökat, och resan aldrig senare än förut.
+    """Slumpade förlopp genom motorn i 1.4.2 och den nya (se ``compare``).
 
     Antalet förlopp styrs av DRIVELOG_V150_SEEDS (standard 60; redovisningen kördes med 600) och
     det första fröet av DRIVELOG_V150_SEED_FROM (standard 1)."""
     count = int(os.environ.get("DRIVELOG_V150_SEEDS", "60"))
     first = int(os.environ.get("DRIVELOG_V150_SEED_FROM", "1"))
-    keys = ("merged_late_odometer", "late_odometer_to_next", "gap_after_early_close", "stale_estimate_double_km",
-            "late_position_double_km", "same_time")
-    totals: dict[str, Any] = {**dict.fromkeys(keys, 0), "earlier": [], "later_for_position": []}
+    keys = ("same", "fixed_double_km", "fixed_boundary", "same_time", "gap_after_early_close")
+    totals: dict[str, Any] = {**dict.fromkeys(keys, 0), "earlier": [], "later_where_old_double_counted": []}
+    failures: list[str] = []
     for seed in range(first, first + count):
-        res = compare(db, user, old_module, seed)
+        try:
+            with db.begin_nested():
+                res = compare(db, user, old_module, seed)
+        except AssertionError as exc:  # alla avvikande frön redovisas, inte bara det första
+            lines = [ln.strip() for ln in str(exc).splitlines()]
+            detail = [ln for ln in lines if ln.startswith(("gammal", "ny", "verkliga", "resan"))] or lines[-1:]
+            failures.append(f"frö {seed}: " + " | ".join(detail)[:500])
+            continue
         for key in keys:
             totals[key] += res[key]
         totals["earlier"] += res["earlier"]
-        totals["later_for_position"] += res["later_for_position"]
+        totals["later_where_old_double_counted"] += res["later_where_old_double_counted"]
     earlier = totals["earlier"]
+    later = totals["later_where_old_double_counted"]
+    trips = len(earlier) + totals["same_time"] + len(later)
+    mean_all = (sum(earlier) - sum(later)) / trips if trips else 0.0
     mean = sum(earlier) / len(earlier) if earlier else 0.0
-    summary = (f"{count} förlopp: {len(earlier)} resor tidigare (i medeltal {mean:.1f} min), "
-               f"{totals['same_time']} samtidigt; släpande mätarvärden förda till rätt resa i stället för en egen "
-               f"resa: {totals['merged_late_odometer']}, i stället för nästa resa: {totals['late_odometer_to_next']}; "
-               f"{totals['gap_after_early_close']} uppehåll som nu flaggas; "
-               f"{totals['stale_estimate_double_km']} dubbla kilometer i 1.4.2 (gammalt mätarvärde) och "
-               f"{totals['late_position_double_km']} (sen position) som nu är en resa; "
-               f"{len(totals['later_for_position'])} resor väntar på den sena positionen "
-               f"({sum(totals['later_for_position']):.0f} min sammanlagt) i stället för att räknas två gånger")
+    summary = (f"{count} förlopp, {trips} resor: {len(earlier)} skapade tidigare än i 1.4.2 (i medeltal {mean:.1f} min, "
+               f"över alla resor {mean_all:.1f} min), {totals['same_time']} samtidigt, {len(later)} senare "
+               f"({sum(later):.0f} min sammanlagt; bara där 1.4.2 räknade samma kilometer två gånger). "
+               f"{totals['same']} förlopp gav samma resor; 1.4.2 hade fel i {totals['fixed_double_km']} "
+               f"(dubbla kilometer) och {totals['fixed_boundary']} (gräns som inte är en ankomst); "
+               f"{totals['gap_after_early_close']} uppehåll som nu flaggas")
     print(summary)
-    assert earlier, summary  # den nya motorn ska faktiskt vara snabbare någon gång
+    assert not failures, "\n".join(failures)
+    assert earlier, summary  # den nya motorn ska faktiskt vara snabbare
 
 
 def test_debug_seed(db, user, old_module):

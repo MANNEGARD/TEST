@@ -383,3 +383,227 @@ def test_merge_keeps_the_fixed_start(db, user, vehicle, actor):
     trip.review_status = ReviewStatus.APPROVED
     seg.refresh_logical(db, trip)
     assert trip.started_at == fixed and raw.start_time_quality == TimeQuality.REPORTED
+
+
+# ----------------------------------------------------------------------------- "bilen används" (command-accessibility)
+# Det är inte prövat att den riktiga bilen svarar CAR_IN_USE under färd: förloppen nedan är
+# påhittade och prövar att koden ger rätt resultat både med och utan statusen.
+
+IN_USE = ("UNAVAILABLE", "CAR_IN_USE")
+FREE = ("AVAILABLE", None)
+
+
+def srow(fetched: float, last_seen: float | None = None, *, engine: bool | None, engine_ts: float | None = None,
+         status: tuple[str, str | None] | None = None, status_ts: float | None = None, base: datetime = ARR):
+    """Som ``row`` men med statusen ur command-accessibility (``None`` = ingen status lästes)."""
+    r = row(fetched, last_seen, engine=engine, engine_ts=engine_ts, base=base)
+    r.accessibility_status, r.accessibility_reason = status if status is not None else (None, None)
+    r.accessibility_reported_at = base + timedelta(minutes=status_ts) if status_ts is not None else None
+    r.car_in_use = None if status is None else status == IN_USE
+    return r
+
+
+def sobs(db, vehicle, fetched: float, last_seen: float | None = None, *, engine: bool | None,
+         engine_ts: float | None = None, status: tuple[str, str | None] | None = None,
+         status_ts: float | None = None, base: datetime = ARR) -> M.VehicleObservation:
+    o = obs(db, vehicle, fetched, last_seen, engine=engine, engine_ts=engine_ts, base=base)
+    r = srow(fetched, last_seen, engine=engine, status=status, status_ts=status_ts, base=base)
+    o.accessibility_status, o.accessibility_reason = r.accessibility_status, r.accessibility_reason
+    o.accessibility_reported_at, o.car_in_use = r.accessibility_reported_at, r.car_in_use
+    db.flush()
+    return o
+
+
+def electric_start(status: tuple[str, str | None] | None = IN_USE) -> list:
+    """Start på el 20 min före ankomsten: statusen slår om direkt, bensinmotorn går igång 10 min senare.
+
+    Hämtning var 2:a minut (identiska avläsningar slås ihop till en rad med ``last_seen_at``).
+    """
+    seen = None if status is None else FREE
+    used = status
+    return [
+        srow(-60, -21.5, engine=False, engine_ts=-300, status=seen, status_ts=-300),
+        srow(-19.5, -11.5, engine=False, engine_ts=-300, status=used, status_ts=-20.2),
+        srow(-9.5, -0.5, engine=True, engine_ts=-10.1, status=used, status_ts=-20.2),
+        srow(1.5, engine=False, engine_ts=0.5, status=seen, status_ts=0.6),
+    ]
+
+
+def test_electric_start_the_status_is_the_start_not_the_engine():
+    kind, when, _, basis = estimate(electric_start(), km=12.0)
+    assert kind == "set" and when == at(-20)
+    assert basis["method"] == "engine_start" and basis["start_signal"] == "car_in_use"
+    assert basis["in_use_reported_at"] == at(-20.2).isoformat()
+    # Avläsningen vid övergången visar motorn av: dess tidsstämpel (förra avstängningen) används inte.
+    assert basis["engine_reported_at"] is None
+    assert basis["avg_speed_kmh"] == pytest.approx(35.6, abs=0.1)
+    # Utan statusen blir motorstarten tio minuter in i resan starttiden – det som statusen rättar.
+    kind, when, _, basis = estimate(electric_start(status=None), km=12.0)
+    assert kind == "set" and when == at(-10) and "start_signal" not in basis
+
+
+def test_electric_start_through_the_pipeline_is_fixed(db, user, vehicle, actor):
+    for r in electric_start():
+        sobs(db, vehicle, (r.fetched_at - ARR).total_seconds() / 60, (r.last_seen_at - ARR).total_seconds() / 60,
+             engine=r.engine_running,
+             engine_ts=(r.engine_reported_at - ARR).total_seconds() / 60 if r.engine_reported_at else None,
+             status=(r.accessibility_status, r.accessibility_reason) if r.accessibility_status else None,
+             status_ts=(r.accessibility_reported_at - ARR).total_seconds() / 60 if r.accessibility_reported_at else None)
+    trip = live_trip(db, vehicle, user, km=12.0, ended=ARR, earliest=ARR - timedelta(hours=3))
+    out = run_pipeline(db, user, vehicle, actor)
+    assert out["start_from_engine"] == 1
+    trip = reload_trip(db, trip.id)
+    assert trip.start_time_quality == TimeQuality.REPORTED and local(trip.started_at) == local(at(-20))
+    raw = seg.ordered_raws(trip)[0]
+    assert raw.start_estimate_basis["start_signal"] == "car_in_use"
+    assert start_time.display(trip, TZ) == local(at(-20))
+    # Ligger fast och idempotent.
+    assert start_time.engine_plan(db, vehicle.id) == []
+    assert run_pipeline(db, user, vehicle, actor)["start_from_engine"] == 0
+    assert reload_trip(db, trip.id).started_at == trip.started_at
+
+
+def test_status_and_engine_at_the_same_time():
+    rows = [
+        srow(-40, -14.1, engine=False, engine_ts=-300, status=FREE, status_ts=-300),
+        srow(-12.1, -0.4, engine=True, engine_ts=-12.3, status=IN_USE, status_ts=-12.3),
+        srow(1.7, engine=False, engine_ts=0.5, status=FREE, status_ts=0.5),
+    ]
+    kind, when, _, basis = estimate(rows, km=8.0)
+    assert kind == "set" and when == at(-12) and basis["start_signal"] == "engine_and_car_in_use"
+    # Statusen en halv minut före motorstarten: den tidigaste vinner.
+    rows[1].accessibility_reported_at = at(-12.8)
+    kind, when, _, basis = estimate(rows, km=8.0)
+    assert kind == "set" and when == at(-13) and basis["start_signal"] == "car_in_use"
+    assert basis["engine_reported_at"] == at(-12.3).isoformat()
+
+
+def test_only_the_status():
+    """Hela resan på el: motorn går aldrig, bara statusen slår om."""
+    rows = [
+        srow(-40, -15.5, engine=False, engine_ts=-300, status=FREE, status_ts=-300),
+        srow(-13.5, -6, engine=False, engine_ts=-300, status=IN_USE, status_ts=-14.6),
+        srow(-4, -0.5, engine=None, status=IN_USE, status_ts=-14.6),  # motorstatusen kunde inte läsas
+        srow(1.5, engine=False, engine_ts=0.4, status=FREE, status_ts=0.5),
+    ]
+    kind, when, _, basis = estimate(rows, km=6.0)
+    assert kind == "set" and when == at(-15) and basis["start_signal"] == "car_in_use"
+    # Utan tidsstämpel för statusen: minuten mitt emellan hämtningarna, uträknad.
+    for r in rows:
+        r.accessibility_reported_at = None
+    kind, when, _, basis = estimate(rows, km=6.0)
+    assert kind == "set" and when == at(-14)  # mitt emellan −15,5 och −13,5, avrundat
+    assert basis["method"] == "poll_midpoint" and basis["start_signal"] == "car_in_use"
+    # Statusens tidsstämpel långt utanför fönstret (en gammal status) räknas som saknad.
+    for r in rows[1:3]:
+        r.accessibility_reported_at = at(-300)
+    assert estimate(rows, km=6.0)[3]["method"] == "poll_midpoint"
+
+
+def test_status_missing_entirely_gives_exactly_todays_result():
+    """Kolumnerna tomma (äldre avläsningar, en bil utan stöd): samma resultat och samma grund."""
+    cases = [
+        ([(-483.2, -122.4, False, -1169.1), (-120.4, -0.3, True, -120.6)], 194.0, -1169.6, None),
+        ([(-40, -20.5, False, None), (-18.5, -1, True, None)], 12.0, -600.0, None),
+        ([(-200, -56, False, None), (-54.5, -28, True, -55), (-26, None, None, None), (-24, -0.4, True, -55),
+          (1.7, None, False, 0.5)], 40.0, -600.0, None),
+        ([(-90, -60, False, None), (-20, -1, True, None)], 10.0, -600.0, None),
+        ([(-30, -6, False, None), (-4, -1, True, -4.2)], 9.0, -600.0, None),
+        ([(-30, -16, False, None), (-14, None, True, -15.2), (-9, None, True, -15.2), (1, None, False, 0.3)],
+         11.0, -600.0, -9),
+    ]
+    for spec, km, earliest, latest in cases:
+        plain = [row(f, s, engine=e, engine_ts=t) for f, s, e, t in spec]
+        empty = [srow(f, s, engine=e, engine_ts=t) for f, s, e, t in spec]
+        assert estimate(empty, km=km, earliest=earliest, latest=latest) == estimate(
+            plain, km=km, earliest=earliest, latest=latest)
+
+
+def test_unavailable_for_another_reason_does_not_count():
+    other = ("UNAVAILABLE", "POWER_SAVING_MODE")
+    rows = electric_start(status=other)
+    kind, when, _, basis = estimate(rows, km=12.0)
+    assert kind == "set" and when == at(-10) and "start_signal" not in basis
+    # Inte heller som "används" när motorstatusen saknas.
+    assert estimate([srow(-60, -1, engine=None, status=other, status_ts=-30)], km=5.0)[0] == "none"
+
+
+def test_available_with_unreadable_engine_midtrip_is_no_standstill():
+    """AVAILABLE mitt i resan när motorstatusen inte kunde läsas: ingen ny start (bilen kanske
+    inte svarar CAR_IN_USE under färd)."""
+    rows = [
+        srow(-60, -21.5, engine=False, engine_ts=-300, status=FREE, status_ts=-300),
+        srow(-19.5, -12, engine=True, engine_ts=-20.1, status=FREE, status_ts=-300),
+        srow(-10, engine=None, status=FREE, status_ts=-300),
+        srow(-8, -0.5, engine=True, engine_ts=-20.1, status=FREE, status_ts=-300),
+    ]
+    kind, when, _, basis = estimate(rows, km=12.0)
+    assert kind == "set" and when == at(-20) and "start_signal" not in basis
+
+
+def test_status_that_flips_without_driving_changes_nothing(db, user, vehicle, actor):
+    """Statusen slår om (t.ex. bilen låses upp och stängs igen) utan att bilen rör sig: ingen resa."""
+    sobs(db, vehicle, -60, -30.5, engine=False, engine_ts=-300, status=FREE, status_ts=-300)
+    sobs(db, vehicle, -28.5, -20.5, engine=False, engine_ts=-300, status=IN_USE, status_ts=-29)
+    sobs(db, vehicle, -18.5, -0.5, engine=False, engine_ts=-300, status=FREE, status_ts=-19)
+    assert seg.active_trips(db, vehicle.id) == []
+    assert start_time.engine_plan(db, vehicle.id) == []
+    assert run_pipeline(db, user, vehicle, actor)["start_from_engine"] == 0
+    assert seg.active_trips(db, vehicle.id) == []
+    # Som ren funktion: bilen sågs stå still efter omslaget, så ingen pågående körning vid "ankomsten".
+    rows = [srow(-60, -30.5, engine=False, status=FREE, status_ts=-300),
+            srow(-28.5, -20.5, engine=False, status=IN_USE, status_ts=-29),
+            srow(-18.5, -0.5, engine=False, engine_ts=-19, status=FREE, status_ts=-19)]
+    assert estimate(rows, km=5.0)[0] == "none"
+
+
+def test_status_flip_before_a_real_trip_is_not_the_start():
+    """Statusen slår om och tillbaka en stund före den riktiga starten: den sista övergången räknas."""
+    rows = [
+        srow(-60, -40.5, engine=False, engine_ts=-300, status=FREE, status_ts=-300),
+        srow(-38.5, -32.5, engine=False, engine_ts=-300, status=IN_USE, status_ts=-39),
+        srow(-30.5, -14.1, engine=False, engine_ts=-300, status=FREE, status_ts=-31),
+        srow(-12.1, -0.4, engine=True, engine_ts=-12.3, status=IN_USE, status_ts=-12.6),
+    ]
+    kind, when, _, basis = estimate(rows, km=8.0)
+    assert kind == "set" and when == at(-13) and basis["start_signal"] == "car_in_use"
+
+
+def test_fixed_engine_start_is_not_changed_when_the_status_appears_later(db, user, vehicle, actor):
+    trip = engine_trip(db, vehicle, user)
+    assert start_time.fill_from_engine(db, vehicle.id) == 1
+    fixed = reload_trip(db, trip.id).started_at
+    assert local(fixed) == local(at(-12))
+    # Statusen kommer i efterhand och skulle ha gett en tidigare tid (inom fönstret).
+    db.execute(M.VehicleObservation.__table__.update().where(M.VehicleObservation.engine_running.is_(True))
+               .values(accessibility_status="UNAVAILABLE", accessibility_reason="CAR_IN_USE",
+                       accessibility_reported_at=at(-15.5), car_in_use=True))
+    assert start_time.engine_plan(db, vehicle.id) == []
+    assert run_pipeline(db, user, vehicle, actor)["start_from_engine"] == 0
+    trip = reload_trip(db, trip.id)
+    assert trip.started_at == fixed and trip.start_time_quality == TimeQuality.REPORTED
+    assert "start_signal" not in seg.ordered_raws(trip)[0].start_estimate_basis
+
+
+def test_status_does_not_pass_the_locks(db, user, vehicle, actor):
+    """Ägarens angivna tid, importerade resor och stängda månader gäller även med statusen."""
+    owned = engine_trip(db, vehicle, user)
+    db.execute(M.VehicleObservation.__table__.update().where(M.VehicleObservation.engine_running.is_(True))
+               .values(car_in_use=True, accessibility_status="UNAVAILABLE", accessibility_reason="CAR_IN_USE",
+                       accessibility_reported_at=at(-13.5)))
+    start_time.set_override(db, owned, at(-20), actor=actor)
+    assert start_time.engine_plan(db, vehicle.id) == []
+    other = ARR - timedelta(days=1)
+    imported = engine_trip(db, vehicle, user, ended=other, source=TripSource.VOLVO_IMPORT, odo_start=60000)
+    db.execute(M.VehicleObservation.__table__.update().where(M.VehicleObservation.engine_running.is_(True))
+               .values(car_in_use=True, accessibility_reported_at=M.VehicleObservation.fetched_at))
+    assert start_time.engine_plan(db, vehicle.id) == []
+    assert reload_trip(db, imported.id).started_at is None
+    oct_end = datetime(2026, 10, 31, 23, 5, tzinfo=UTC)
+    db.add(M.MonthClose(user_id=user.id, vehicle_id=vehicle.id, month="2026-10", state="exported"))
+    db.flush()
+    in_closed = engine_trip(db, vehicle, user, ended=oct_end, odo_start=70000)
+    db.execute(M.VehicleObservation.__table__.update().where(M.VehicleObservation.engine_running.is_(True))
+               .values(car_in_use=True, accessibility_reported_at=M.VehicleObservation.fetched_at))
+    assert start_time.engine_plan(db, vehicle.id) == []
+    assert reload_trip(db, in_closed.id).started_at is None
