@@ -457,10 +457,6 @@ def enqueue_for_changes(
             # Lunchregeln väntar på återresan: ingen fråga om utresan medan ägaren äter
             # (även i manuellt läge). Frågan skickas först när väntan är över.
             trip_send_after = lunch_until
-        arrival_until = None if demo else _arrival_hold_until(db, trip, user_id)
-        if arrival_until is not None and arrival_until > trip_send_after:
-            # 1.5.0: resan stängs direkt vid ankomsten, men frågan kommer inte tidigare än förut.
-            trip_send_after = arrival_until
         asked = False
         if kinds.get("classify", True) and (ReviewKind.CATEGORY in new_kinds or ReviewKind.TAX_UNCERTAIN in new_kinds):
             req = create_classify_question(db, user_id=user_id, trip=trip, cfg=cfg, now=now, send_after=trip_send_after)
@@ -1206,27 +1202,6 @@ def _lunch_wait_until(db: Session, trip: LogicalTrip, user_id: uuid.UUID, now: d
         return None
 
 
-def _arrival_hold_until(db: Session, trip: LogicalTrip, user_id: uuid.UUID) -> datetime | None:
-    """1.5.0: tidigast när frågan om en resa från bilen får skickas.
-
-    Resan stängs direkt vid ankomsten, men frågan väntar som förut tills ankomsten setts i
-    ``settle_minutes`` (``detection.question_hold_until``), så att en fortsatt körning efter
-    ett kort stopp hinner slås ihop med resan först. Påverkar bara NÄR frågan skickas.
-    """
-    from app.services.volvo import detection
-
-    try:
-        return detection.question_hold_until(db, trip, user_id)
-    except Exception:  # väntan får aldrig stoppa frågorna
-        logger.exception("Kunde inte räkna fram väntan efter ankomsten")
-        return None
-
-
-def _waiting_after_arrival(db: Session, trip: LogicalTrip, user_id: uuid.UUID, now: datetime) -> bool:
-    until = _arrival_hold_until(db, trip, user_id)
-    return until is not None and until > now
-
-
 def _waiting_for_lunch(db: Session, trip: LogicalTrip, user_id: uuid.UUID, now: datetime) -> bool:
     from app.services.classify import lunch
 
@@ -1320,10 +1295,6 @@ def ensure_open_questions(
                 continue
             if _waiting_for_address(db, trip, now):
                 stats["waiting"] += 1
-                continue
-            if state.channel != CHANNEL_DEMO and _waiting_after_arrival(db, trip, user_id, now):
-                # 1.5.0: resan stängs direkt vid ankomsten, men frågan kommer inte tidigare än förut.
-                stats["waiting_arrival"] += 1
                 continue
             if _waiting_for_lunch(db, trip, user_id, now):
                 # Lunchregeln väntar på återresan: ingen fråga om utresan medan ägaren äter.
