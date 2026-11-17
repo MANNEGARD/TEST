@@ -25,7 +25,7 @@ from app.config import get_config
 from app.db import utcnow
 from app.models import IntegrationConnection, IntegrationSyncRun, Vehicle, VehicleObservation
 from app.models.enums import IntegrationProvider, IntegrationStatus
-from app.services import audit, integrations, vehicles
+from app.services import audit, integrations, internal_errors, vehicles
 from app.services.volvo import collector, demo, oauth
 from app.services.volvo import constants as C
 from app.services.volvo.client import VolvoError, VolvoThrottled
@@ -400,8 +400,24 @@ def sync_now(principal: WebPrincipalDep, db: DbDep, body: SyncIn | None = None) 
     except VolvoError as exc:
         db.commit()
         raise _api_error(exc) from exc
+    except Exception as exc:
+        # Ett fel utanför de skyddade stegen: svaret blir fortfarande 500, men felet antecknas och
+        # syns under "Senaste fel" och i felsökningsfilen (1.4.1).
+        db.rollback()
+        internal_errors.record_after_rollback(
+            db, principal.user.id, "volvo.poll", exc, origin="sync", connection_id=conn.id
+        )
+        raise
     db.commit()
     result.pop("freshness", None)
+    processing = result.get("processing_error")
+    if processing:
+        # Hämtningen lyckades men bearbetningen gjorde det inte (1.4.1). Svaret är detsamma som vid
+        # en lyckad hämtning, men med status "error" och raden som meddelande – så som webben redan
+        # visar ett misslyckat "Synka nu". Hämtningens eget utfall finns kvar i fetch_status.
+        result["fetch_status"] = result.get("status")
+        result["status"] = "error"
+        result["message"] = processing["message"]
     obs = db.execute(
         select(VehicleObservation.last_seen_at)
         .where(VehicleObservation.vehicle_id == vehicle.id)
@@ -516,7 +532,8 @@ def _diag_vehicle(db: DbDep, principal: Principal, vehicle_id: uuid.UUID | None)
 def build_diagnostics(db: DbDep, vehicle: Vehicle, *, days: int, now: Any) -> dict[str, Any]:
     """Bilens avläsningar, hämtningarna och resorna som byggdes av dem – utan VIN,
     registreringsnummer, positioner, adresser, platsnamn, rådata, feltexter och nycklar.
-    Databasens id ersätts av löpnummer (obs-1, trip-1)."""
+    Databasens id ersätts av löpnummer (obs-1, trip-1). ``internal_errors`` är de senaste
+    interna felen (services/internal_errors.py), med meddelandet tvättat."""
     from app import __version__
     from app.models import RawTrip
     from app.models.enums import TripSource
@@ -581,6 +598,11 @@ def build_diagnostics(db: DbDep, vehicle: Vehicle, *, days: int, now: Any) -> di
         "observations": obs_out,
         "sync_runs": runs,
         "trips": trips_out,
+        # De senaste interna felen (1.4.1): steg, typ, kodställen och ett tvättat meddelande. Bilens
+        # VIN och registreringsnummer tvättas bort en gång till här.
+        "internal_errors": internal_errors.public_entries(
+            db, vehicle.owner_user_id, scrub=(vehicle.vin, vehicle.registration_number)
+        ),
     }
 
 

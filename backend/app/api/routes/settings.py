@@ -82,6 +82,14 @@ def _without_logo_file(section: dict[str, Any]) -> dict[str, Any]:
     return section
 
 
+def _without_internal_errors(sections: dict[str, Any]) -> dict[str, Any]:
+    """De interna felen (1.4.1) visas i Volvos felsökningsfil, inte bland inställningarna."""
+    system = sections.get("system")
+    if isinstance(system, dict) and "internal_errors" in system:
+        return {**sections, "system": {k: v for k, v in system.items() if k != "internal_errors"}}
+    return sections
+
+
 @router.get("/settings", summary="Alla inställningar (med standardvärden)")
 def get_settings(principal: PrincipalDep, db: DbDep) -> dict[str, Any]:
     from app.services.classify import lunch
@@ -90,8 +98,8 @@ def get_settings(principal: PrincipalDep, db: DbDep) -> dict[str, Any]:
     if isinstance(all_settings.get("export"), dict):
         all_settings = {**all_settings, "export": _without_logo_file(all_settings["export"])}
     return {
-        "settings": all_settings,
-        "defaults": settings_svc.defaults(),
+        "settings": _without_internal_errors(all_settings),
+        "defaults": _without_internal_errors(settings_svc.defaults()),
         # Lunchregeln kräver att minst ett av arbetsgivarens kontor finns som bekräftad plats.
         "status": {"lunch_office_ready": lunch.office_ready(db, principal.user.id)},
     }
@@ -118,6 +126,8 @@ def update_settings(section: str, body: dict[str, Any], principal: WebPrincipalD
         autopilot.ensure_active_since(db, principal.user.id)
         updated = settings_svc.get_section(db, principal.user.id, section)
     db.commit()
+    if section == "system":
+        return _without_internal_errors({"system": updated})["system"]
     return _without_logo_file(updated) if section == "export" else updated
 
 

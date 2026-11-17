@@ -565,8 +565,11 @@ def process_vehicle(
     if run_pipeline:
         from app.services.trips import pipeline
 
+        # Resan är skapad: varje delsteg efter det körs för sig, så att ett fel i ett av dem
+        # aldrig tar resan med sig (1.4.1, internal_errors.run_step).
         pipeline.after_trips_changed(
-            db, user_id=user_id, vehicle=vehicle, actor=audit.SYSTEM, apply_merge_rules=True, notify=True, origin="live"
+            db, user_id=user_id, vehicle=vehicle, actor=audit.SYSTEM, apply_merge_rules=True, notify=True,
+            origin="live", isolate_steps=True,
         )
     db.flush()
     return created
@@ -581,7 +584,8 @@ def _estimate_existing(db: Session, vehicle: Vehicle, user_id: uuid.UUID, run_pi
     from app.services.trips import pipeline
 
     pipeline.after_trips_changed(
-        db, user_id=user_id, vehicle=vehicle, actor=audit.SYSTEM, apply_merge_rules=True, notify=True, origin="live"
+        db, user_id=user_id, vehicle=vehicle, actor=audit.SYSTEM, apply_merge_rules=True, notify=True, origin="live",
+        isolate_steps=True,
     )
     db.flush()
 

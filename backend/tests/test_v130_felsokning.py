@@ -85,7 +85,9 @@ def test_file_has_readings_runs_and_trips_without_identifying_data(client, db, u
     assert not COORD_RE.search(text)
 
     data = json.loads(text)
-    assert set(data) == {"generated_at", "app_version", "days", "vehicle", "observations", "sync_runs", "trips"}
+    assert set(data) == {"generated_at", "app_version", "days", "vehicle", "observations", "sync_runs", "trips",
+                         "internal_errors"}  # 1.4.1
+    assert data["internal_errors"] == []
     assert data["days"] == 14 and data["vehicle"] == {"model": "XC60 Recharge", "fuel_type": "PETROL/ELECTRIC",
                                                        "demo": False}
     assert [o["id"] for o in data["observations"]] == ["obs-1", "obs-2", "obs-3"]

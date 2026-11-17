@@ -664,12 +664,13 @@ def poll_vehicle(
 
     freshness = check_freshness(db, conn, vehicle, obs, settings, now) if obs is not None else None
     new_trips: list[Any] = []
+    processing_error: dict[str, Any] | None = None
     if detect and obs is not None:
-        from app.services.volvo import detection
-
-        new_trips = detection.process_vehicle(db, vehicle, user_id=user_id, settings=settings, now=now)
+        new_trips, processing_error = _process(db, conn, vehicle, user_id, settings, now, origin=run.kind)
     stats["new_trips"] = len(new_trips)
     stats["calls"] = sum(r.attempts for r in results.values())
+    if processing_error is not None:
+        stats["processing_error"] = processing_error["step"]
     integrations.finish_run(
         run,
         status,
@@ -678,7 +679,53 @@ def poll_vehicle(
         http_status=429 if status == "throttled" else None,
     )
     db.flush()
-    return {"status": status, "freshness": freshness, "new_trip_ids": [str(t.id) for t in new_trips], **stats}
+    out = {"status": status, "freshness": freshness, "new_trip_ids": [str(t.id) for t in new_trips], **stats}
+    if processing_error is not None:
+        out["processing_error"] = processing_error
+    return out
+
+
+def _process(
+    db: Session,
+    conn: IntegrationConnection,
+    vehicle: Vehicle,
+    user_id: uuid.UUID,
+    settings: dict[str, Any],
+    now: datetime,
+    *,
+    origin: str,
+) -> tuple[list[Any], dict[str, Any] | None]:
+    """Resedetekteringen och efterbearbetningen efter en hämtning (1.4.1).
+
+    Avläsningen är redan sparad i den yttre transaktionen. I det toleranta läget körs
+    detekteringen i en egen sparpunkt: kraschar den rullas bara den tillbaka – avläsningarna
+    förblir obearbetade och prövas igen vid nästa hämtning – och avläsningen, hämtningens
+    utfall och kvoten sparas ändå. Delstegen efter att resan skapats har egna sparpunkter
+    (``pipeline.after_trips_changed(isolate_steps=True)``). Misslyckade steg antecknas
+    (``system.internal_errors``) och visas under "Senaste fel". I testmiljön (strängt läge)
+    kastas undantagen vidare som förut.
+    """
+    from app.services import internal_errors
+    from app.services.volvo import detection
+
+    internal_errors.take_failures(db)  # inget gammalt från en tidigare hämtning i sessionen
+    created = internal_errors.run_step(
+        db, "detection", detection.process_vehicle, db, vehicle, user_id=user_id, settings=settings, now=now,
+        default=None,
+    )
+    failures = internal_errors.take_failures(db)
+    if not failures:
+        return list(created or []), None
+    internal_errors.save_failures(db, user_id, failures, origin=origin)
+    message = internal_errors.processing_message(failures)
+    steps = list(dict.fromkeys(f["step"] for f in failures))
+    if not vehicle.is_demo:
+        # Hämtningen lyckades (mark_success har tömt raden); bearbetningen gjorde det inte.
+        # Raden försvinner av sig själv vid nästa hämtning där bearbetningen lyckas.
+        conn.last_error = message
+        conn.last_error_at = now
+    step = "detection" if "detection" in steps else steps[0]
+    return list(created or []), {"step": step, "steps": steps, "message": message}
 
 
 def _due(conn: IntegrationConnection, interval: float, now: datetime) -> bool:
@@ -731,9 +778,15 @@ def poll_due(
             try:
                 result = poll_vehicle(db, vehicle, now=now, transport=transport)
                 db.commit()
-            except Exception:
+            except Exception as exc:
                 db.rollback()
                 logger.exception("Insamlingen misslyckades för fordon %s", vc.mask_vin(vehicle.vin))
+                # Felet antecknas och visas under "Senaste fel" (1.4.1), i en egen kort transaktion.
+                from app.services import internal_errors
+
+                internal_errors.record_after_rollback(
+                    db, conn.user_id, "volvo.poll", exc, origin="poll", connection_id=conn.id
+                )
                 out["errors"] += 1
                 continue
             out["polled"] += 1

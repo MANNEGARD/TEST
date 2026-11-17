@@ -46,7 +46,8 @@ DEFAULT_OFFICE_HOURS: dict[str, Any] = {"days": [0, 1, 2, 3, 4], "start": "07:00
 # Inställningar som bara appen själv sätter (inte via API:t).
 READ_ONLY: frozenset[tuple[str, str]] = frozenset(
     {
-        ("automation", "active_since"), ("system", "last_version"), ("merge", "category_rules_since"),
+        ("automation", "active_since"), ("system", "last_version"), ("system", "internal_errors"),
+        ("merge", "category_rules_since"),
         ("calendar", "work_domain_source"), ("export", "logo"),
     }
 )
@@ -212,6 +213,9 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         # Versionen som DriveLog senast startade med för användaren (services/release.py).
         # Sätts bara av appen; tom = ny användare eller installation (ingen notis).
         "last_version": "",
+        # De senaste interna felen (1.4.1, services/internal_errors.py): tid, steg, typ, kodställen
+        # och ett tvättat meddelande. Visas i felsökningsfilen, inte i inställningarna.
+        "internal_errors": [],
     },
     "abbreviations": {
         # Egna förkortningar som förekommer i kommentarer → fullständig ort/plats.

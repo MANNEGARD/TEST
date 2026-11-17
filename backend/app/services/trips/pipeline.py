@@ -173,80 +173,123 @@ def after_trips_changed(
     origin: str = "live",
     classify: bool = True,
     use_llm: bool = True,
+    isolate_steps: bool = False,
 ) -> dict[str, Any]:
-    """Kör hela efterbearbetningen för ett fordon."""
+    """Kör hela efterbearbetningen för ett fordon.
+
+    ``isolate_steps`` (1.4.1, resor från bilen): varje delsteg körs för sig
+    (``internal_errors.run_step``). Kraschar ett steg rullas bara dess egna ändringar tillbaka,
+    felet loggas och antecknas, och resten fortsätter med stegets neutrala utfall. I testmiljön
+    (strängt läge) och utan ``isolate_steps`` är allt som förut: samma ordning, samma frågor,
+    och undantagen kastas vidare. Följden av ett överhoppat steg är ofarlig – se
+    ``internal_errors`` och testerna i test_v141_skyddsnat.py.
+    """
+    from app.services import internal_errors
     from app.services.classify import engine as classify_engine
     from app.services.learning import patterns
+
+    def step(name: str, fn: Any, *args: Any, default: Any = None, **kwargs: Any) -> Any:
+        if not isolate_steps:
+            return fn(*args, **kwargs)
+        return internal_errors.run_step(db, f"pipeline.{name}", fn, *args, default=default, **kwargs)
 
     merge_cfg = settings_svc.get_section(db, user_id, "merge")
     scope = settings_svc.journal_scope(db, user_id)
     out: dict[str, Any] = {"origin": origin}
+    no_merge: dict[str, Any] = {"auto_merged": 0, "questions": []}
 
     # Resor från bilen med okänd starttid får en uppskattning ur sträckan före allt annat,
     # så att flaggor, klassning och frågor ser den (start_time.fill_from_distance).
-    out["start_estimated"] = start_time.fill_from_distance(db, vehicle.id)
+    out["start_estimated"] = step("start_time", start_time.fill_from_distance, db, vehicle.id, default=0)
     # Förbrukningen för nya resor från bilen ur bilens egna avläsningar (1.3.0, märkt uppskattad).
     from app.services.volvo import consumption
 
-    out["consumption_estimated"] = consumption.fill_vehicle(db, vehicle.id)
+    out["consumption_estimated"] = step("consumption", consumption.fill_vehicle, db, vehicle.id, default=0)
 
     by_category = merge.uses_category_rules(merge_cfg)
-    merge_result: dict[str, Any] = {"auto_merged": 0, "questions": []}
+    merge_result: dict[str, Any] = no_merge
     if not by_category:
-        merge_result = merge.evaluate_vehicle(
-            db, vehicle_id=vehicle.id, merge_settings=merge_cfg, actor=actor, apply_auto=apply_merge_rules
+        merge_result = step(
+            "merge", merge.evaluate_vehicle, db, vehicle_id=vehicle.id, merge_settings=merge_cfg, actor=actor,
+            apply_auto=apply_merge_rules, default=no_merge,
         )
 
-    out.update(gaps.recompute(db, vehicle.id, float(merge_cfg["odometer_tolerance_km"]), scope=scope))
-    places.recount_visits(db, user_id)
-    patterns.rebuild(db, user_id)
+    out.update(step("gaps", gaps.recompute, db, vehicle.id, float(merge_cfg["odometer_tolerance_km"]), scope=scope,
+                    default={}))
+    step("places", places.recount_visits, db, user_id)
+    step("patterns", patterns.rebuild, db, user_id)
     if origin in ("import", "import_undo"):
         from app.services.places import suggest
 
-        out["location_suggestions"] = suggest.refresh(db, user_id)
+        out["location_suggestions"] = step("suggestions", suggest.refresh, db, user_id)
 
     from app.services.calendar import matching as calendar_matching
     from app.services.trips import journeys
 
-    out["calendar_matched"] = calendar_matching.match_vehicle(db, user_id=user_id, vehicle=vehicle)
+    out["calendar_matched"] = step("calendar", calendar_matching.match_vehicle, db, user_id=user_id, vehicle=vehicle,
+                                   default=0)
 
     classified = 0
     if classify:
-        classified = classify_engine.classify_pending(
-            db, user_id=user_id, vehicle=vehicle, actor=actor, use_llm=use_llm
+        classified = step(
+            "classify", classify_engine.classify_pending, db, user_id=user_id, vehicle=vehicle, actor=actor,
+            use_llm=use_llm, default=0,
         )
     out["classified"] = classified
-    out["journeys"] = journeys.detect(db, user_id=user_id, vehicle=vehicle)
+    out["journeys"] = step("journeys", journeys.detect, db, user_id=user_id, vehicle=vehicle, default=0)
 
     # Självgående läge: autopiloten avgör live-resorna efter resekedjorna (så att T ser
     # utresan) och före granskningsärendena (byggkontraktet C.3).
     from app.services.classify import autopilot
 
-    self_driving = autopilot.is_active(db, user_id)
-    if self_driving:
-        out["autopilot"] = autopilot.run_vehicle(db, user_id=user_id, vehicle=vehicle, actor=actor)
-        if out["autopilot"].get("approved"):
-            out["journeys"] += journeys.detect(db, user_id=user_id, vehicle=vehicle)
+    def _autopilot() -> bool:
+        active = autopilot.is_active(db, user_id)
+        if active:
+            out["autopilot"] = autopilot.run_vehicle(db, user_id=user_id, vehicle=vehicle, actor=actor)
+            if out["autopilot"].get("approved"):
+                out["journeys"] += journeys.detect(db, user_id=user_id, vehicle=vehicle)
+        return active
+
+    journeys_before = out["journeys"]
+    self_driving = step("autopilot", _autopilot, default=None)
+    if self_driving is None:
+        # Autopiloten hoppades över: resorna förblir oavgjorda. Läget behövs ändå för notiserna.
+        out.pop("autopilot", None)
+        out["journeys"] = journeys_before
+        self_driving = bool(step("autopilot", autopilot.is_active, db, user_id, default=False))
 
     if by_category:
         # Kategoriregler: först nu är resorna avgjorda (av ägaren, en regel eller importen).
-        merge_result = merge.evaluate_vehicle(
-            db, vehicle_id=vehicle.id, merge_settings=merge_cfg, actor=actor, apply_auto=apply_merge_rules
+        merge_result = step(
+            "merge", merge.evaluate_vehicle, db, vehicle_id=vehicle.id, merge_settings=merge_cfg, actor=actor,
+            apply_auto=apply_merge_rules, default=no_merge,
         )
     out["auto_merged"] = merge_result["auto_merged"]
     out["merge_questions"] = len(merge_result["questions"])
 
-    new_trip_items: list[tuple[LogicalTrip, list[str]]] = []
-    for trip in seg.active_trips(db, vehicle.id):
-        created = sync_trip_review_items(db, trip, scope=scope)
-        if created:
-            new_trip_items.append((trip, created))
+    def _review_items(trips: list[LogicalTrip]) -> list[tuple[LogicalTrip, list[str]]]:
+        found: list[tuple[LogicalTrip, list[str]]] = []
+        for trip in trips:
+            created = sync_trip_review_items(db, trip, scope=scope)
+            if created:
+                found.append((trip, created))
+        return found
+
+    active = list(seg.active_trips(db, vehicle.id))
+    new_trip_items = step("review_items", _review_items, active, default=None)
+    if new_trip_items is None:
+        # En resa fällde steget: varje resa för sig, så att bara den resan blir utan ärenden.
+        new_trip_items = []
+        for trip in active:
+            new_trip_items += step("review_items", _review_items, [trip], default=[])
     out["new_review_trips"] = len(new_trip_items)
-    out["closed_orphaned_items"] = review.close_orphaned(db, vehicle.id)
+    out["closed_orphaned_items"] = step("close_orphaned", review.close_orphaned, db, vehicle.id, default=0)
     # Avvikelser för borttagna eller (när bara tjänst redovisas) privata resor stängs direkt.
     from app.services.stats import anomalies
 
-    out["closed_anomalies"] = sum(anomalies.close_noise(db, vehicle.id, scope=scope).values())
+    out["closed_anomalies"] = sum(
+        step("anomalies", anomalies.close_noise, db, vehicle.id, scope=scope, default={}).values()
+    )
 
     if notify:
         from app.services.ha import notifier
@@ -254,12 +297,9 @@ def after_trips_changed(
         if self_driving:
             # Live-resornas frågor ställs en i taget av notifier.ensure_open_questions.
             new_trip_items = [(t, kinds) for t, kinds in new_trip_items if not autopilot.is_live(t)]
-        notifier.enqueue_for_changes(
-            db,
-            user_id=user_id,
-            vehicle=vehicle,
-            merge_items=merge_result["questions"],
-            trip_items=new_trip_items,
+        step(
+            "notify", notifier.enqueue_for_changes, db, user_id=user_id, vehicle=vehicle,
+            merge_items=merge_result["questions"], trip_items=new_trip_items,
         )
     db.flush()
     return out
