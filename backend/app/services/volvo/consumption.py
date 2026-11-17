@@ -136,6 +136,23 @@ class Estimate:
     energy_method: str | None = None
     fuel_basis: dict[str, Any] | None = None
     energy_basis: dict[str, Any] | None = None
+    # Varför värdet saknas (1.5.0, felsökningsfilen): en kort kod ur REASONS, None när värdet finns.
+    fuel_reason: str | None = None
+    energy_reason: str | None = None
+
+
+# Skälen när ett värde inte går att räkna fram (felsökningsfilen). Nycklarna är beräkningens egna.
+REASONS = {
+    "no_after": "no_after_level",  # ingen nivå vid ankomsten som hör till resan
+    "no_before": "no_before_level",  # ingen nivå rapporterad medan bilen stod still före resan
+    "driven_between": "driven_between",  # bilen körde mellan rapporten och resan
+    "refuel": "refuel",  # tankning: nettot går inte att avgöra
+    "charged": "charging",  # laddning: nettot går inte att avgöra
+    "unchanged": "unchanged_level",  # oförändrad nivå ger inget värde (aldrig 0)
+    "too_little": "too_little",  # bil utan batteri: under 5 l/100 km med bara läget före och efter
+    "implausible": "implausible",  # orimligt värde, kastat
+    "no_capacity": "no_capacity",  # batteriets användbara kapacitet är okänd
+}
 
 
 @dataclass
@@ -411,7 +428,9 @@ def estimate_for_raw(
                 events["fuel"] = "too_little"  # bil utan batteri: en tankning under resan syns inte
             else:
                 ok = _plausible(net, distance, cap=cap)
-                if ok is not None:
+                if ok is None:
+                    events["fuel"] = "implausible"
+                else:
                     fuel_c.append(_Candidate(ok, round(res, 3), "level", {
                         "unit": "l", "resolution": res, "readings": len(values),
                         "before": {"value": fb.fuel_liters, "unit": "l", "at": _reported(fb, "fuel_liters").isoformat()},
@@ -440,7 +459,9 @@ def estimate_for_raw(
                 events["energy"] = "unchanged"
             else:
                 ok = _plausible(net / 100 * battery_kwh, distance, cap=battery_kwh)
-                if ok is not None:
+                if ok is None:
+                    events["energy"] = "implausible"
+                else:
                     energy_c.append(_Candidate(ok, round(res / 100 * battery_kwh, 3), "battery_level", {
                         "unit": "kWh", "resolution": res, "net": True,
                         "capacity_kwh": battery_kwh, "capacity_source": capacity_source,

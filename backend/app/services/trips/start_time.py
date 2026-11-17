@@ -21,8 +21,10 @@ Körtiden räknas ur sträckan och en snittfart – ägarens egna resor med kän
 rutt, annars liknande sträcka) när de är tillräckligt många, annars en enkel tabell – och
 starttiden blir ankomsten minus körtiden, hållen inom ``[E, L]``. Den märks ``estimated``
 precis som K2/K3, och grunden (fart, varifrån farten kommer, körtid) sparas. Felmarginalen
-växer med spridningen i ägarens egna resor. Resor i månader vars underlag redan har skapats
-av månadsskiftet lämnas orörda, så att ett inlämnat underlag inte ändras i efterhand.
+växer med spridningen i ägarens egna resor. En resa som FINNS I ett underlag som månadsskiftet
+redan har skapat lämnas orörd, så att ett inlämnat underlag inte ändras i efterhand; en resa som
+tillkommit efter att filen skapades (t.ex. när månadens fil skapats i förväg) får starttid som
+vanligt (``month_close.protection``, samma regel för steget ur motorstarten och förbrukningen).
 
 Bilens egen rapport om motorstarten (1.5.0, ``fill_from_engine``, körs före K4): bilen
 rapporterar "motorn igång" direkt med egen tidsstämpel, även när mätarställning och position
@@ -428,31 +430,25 @@ def _distance_candidates_query(vehicle_id: uuid.UUID):
     )
 
 
-def _closed_months(db: Session, vehicle_id: uuid.UUID) -> tuple[set[str], tzinfo | None]:
-    """Månader vars underlag månadsskiftet redan har skapat ("2026-10"), och ägarens tidszon."""
-    months = set(db.execute(select(MonthClose.month).where(
-        MonthClose.vehicle_id == vehicle_id,
-        MonthClose.state.in_((MonthCloseState.EXPORTED, MonthCloseState.STALE)),
-    )).scalars())
-    if not months:
-        return months, None
-    from app.services import settings as settings_svc
+def _protection(db: Session, vehicle_id: uuid.UUID) -> Any:
+    """Resorna som finns i ett redan skapat underlag (``month_close.protection``)."""
+    from app.services.export import month_close
 
-    owner = db.execute(select(Vehicle.owner_user_id).where(Vehicle.id == vehicle_id)).scalar_one_or_none()
-    return months, settings_svc.user_timezone(db, owner) if owner is not None else None
+    return month_close.protection(db, vehicle_id)
 
 
 def _distance_plan(db: Session, vehicle_id: uuid.UUID) -> list[tuple[RawTrip, StartEstimate]]:
     """Resorna som ska få en uppskattning ur sträckan, med uppskattningen.
 
-    En resa i en månad vars underlag redan har skapats av månadsskiftet (eller som skulle
-    flytta dit) lämnas orörd: ett underlag som kanske redan är inlämnat ändras inte i efterhand.
+    En resa som finns i ett underlag som månadsskiftet redan har skapat (eller som skulle
+    flytta till en annan månad med ett skapat underlag) lämnas orörd: ett underlag som kanske
+    redan är inlämnat ändras inte i efterhand. En resa som tillkommit efter filen finns inte i den.
     """
     raws = list(db.execute(_distance_candidates_query(vehicle_id).order_by(RawTrip.ended_at)).scalars())
     if not raws:
         return []
     history = _known_speeds(db, vehicle_id)
-    closed, tz = _closed_months(db, vehicle_id)
+    locks = _protection(db, vehicle_id)
     plan: list[tuple[RawTrip, StartEstimate]] = []
     for raw in raws:
         est = estimate_from_distance(
@@ -461,9 +457,7 @@ def _distance_plan(db: Session, vehicle_id: uuid.UUID) -> list[tuple[RawTrip, St
         )
         if est.at is None:
             continue
-        if tz is not None and any(
-            when is not None and when.astimezone(tz).strftime("%Y-%m") in closed for when in (raw.sort_time, est.at)
-        ):
+        if locks.blocks(raw, est.at):
             continue
         plan.append((raw, est))
     return plan
@@ -675,7 +669,8 @@ def engine_plan(db: Session, vehicle_id: uuid.UUID) -> list[EngineChange]:
 
     Bara ändringar som verkligen ändrar något kommer med, så att planen blir tom när steget
     redan har körts (insamlingen kör efterbearbetningen bara när planen inte är tom).
-    Resor i månader vars underlag redan är skapat (eller som skulle flytta dit) lämnas.
+    En resa som finns i ett redan skapat underlag (eller som skulle flytta till en annan månad
+    med ett skapat underlag) lämnas; en resa som tillkommit efter filen finns inte i den.
     """
     from app.models import VehicleObservation
 
@@ -690,7 +685,7 @@ def engine_plan(db: Session, vehicle_id: uuid.UUID) -> list[EngineChange]:
     ).scalars())
     if not raws:
         return []
-    closed, tz = _closed_months(db, vehicle_id)
+    locks = _protection(db, vehicle_id)
     plan: list[EngineChange] = []
     for raw in raws:
         if isinstance(raw.start_estimate_basis, dict) and raw.start_estimate_basis.get("method") in ENGINE_METHODS:
@@ -718,9 +713,7 @@ def engine_plan(db: Session, vehicle_id: uuid.UUID) -> list[EngineChange]:
                 continue
             if raw.start_earliest is not None and new_latest < raw.start_earliest:
                 continue
-        if tz is not None and any(
-            when is not None and when.astimezone(tz).strftime("%Y-%m") in closed for when in (raw.sort_time, at)
-        ):
+        if locks.blocks(raw, at):
             continue
         plan.append(EngineChange(raw=raw, kind=kind, at=at, latest=new_latest, basis=basis))
     return plan
@@ -778,6 +771,79 @@ def fill_from_engine(db: Session, vehicle_id: uuid.UUID) -> int:
             )
     db.flush()
     return filled
+
+
+def unknown_start_reasons(db: Session, raw: RawTrip, locks: Any, history: Any = None) -> list[str]:
+    """Varför delresans starttid är okänd, som korta koder i stegens ordning (felsökningsfilen).
+
+    Tom lista när starttiden är känd. Skriver ingenting. Koderna: ``imported``, ``voided``,
+    ``owner_set`` (ägaren har angett starttiden på journalresan), ``closed_month`` (resan finns i
+    ett skapat underlag, eller tiden skulle flytta den till en annan månad med ett skapat
+    underlag), ``no_arrival``; steget ur motorstarten: ``too_old``, ``no_engine_start``,
+    ``engine_window`` (för långt mellan hämtningarna), ``engine_late`` (orimligt sen motorstart);
+    K4: ``no_odometer``, ``no_distance``, ``no_latest_start``, ``contradictory_bounds``,
+    ``no_distance_estimate``; ``pending`` när steget skulle ge en tid vid nästa efterbearbetning.
+    """
+    from app.models import VehicleObservation
+
+    if raw.started_at is not None and raw.start_time_quality not in (TimeQuality.BOUNDED, TimeQuality.UNKNOWN):
+        return []
+    if raw.source not in _LIVE:
+        return ["imported"]
+    if raw.voided_at is not None:
+        return ["voided"]
+    overridden = db.execute(
+        select(LogicalTrip.id).join(TripSegment, TripSegment.logical_trip_id == LogicalTrip.id)
+        .where(TripSegment.raw_trip_id == raw.id, LogicalTrip.start_time_override.is_not(None)).limit(1)
+    ).first()
+    if overridden is not None:
+        return ["owner_set"]
+    if locks.in_file(raw):
+        return ["closed_month"]
+    ended = raw.ended_at
+    if ended is None or raw.end_time_quality not in _ARRIVAL_KNOWN:
+        return ["no_arrival"]
+    reasons: list[str] = []
+    newest = db.execute(
+        select(VehicleObservation.fetched_at).where(VehicleObservation.vehicle_id == raw.vehicle_id)
+        .order_by(VehicleObservation.fetched_at.desc()).limit(1)
+    ).scalar_one_or_none()
+    if newest is None or ended < newest - ENGINE_LOOKBACK:
+        reasons.append("too_old")
+    else:
+        lower = (raw.start_earliest or ended - ENGINE_NO_EARLIEST) - ENGINE_CLOCK_SKEW
+        rows = list(db.execute(
+            select(VehicleObservation).where(
+                VehicleObservation.vehicle_id == raw.vehicle_id,
+                VehicleObservation.last_seen_at >= lower,
+                VehicleObservation.fetched_at <= ended,
+            ).order_by(VehicleObservation.fetched_at)
+        ).scalars())
+        kind, at, _, basis = engine_estimate(
+            rows, earliest=raw.start_earliest, latest=raw.start_latest, ended_at=ended, distance_km=raw.distance_km,
+        )
+        if kind == "set":
+            return ["closed_month" if locks.blocks(raw, at) else "pending"]
+        reasons.append("no_engine_start" if kind == "none" else str(basis.get("method") or "engine_window"))
+    if raw.odometer_start is None or raw.odometer_end is None:
+        reasons.append("no_odometer")
+    elif not raw.distance_km or raw.distance_km <= 0:
+        reasons.append("no_distance")
+    elif raw.start_latest is None:
+        reasons.append("no_latest_start")
+    elif raw.start_earliest is not None and raw.start_earliest > raw.start_latest:
+        reasons.append("contradictory_bounds")
+    else:
+        speeds = history if history is not None else _known_speeds(db, raw.vehicle_id)
+        est = estimate_from_distance(
+            ended_at=ended, distance_km=raw.distance_km, earliest=raw.start_earliest, latest=raw.start_latest,
+            speed=typical_speed(raw, speeds),
+        )
+        if est.at is None:
+            reasons.append("no_distance_estimate")
+        else:
+            reasons.append("closed_month" if locks.blocks(raw, est.at) else "pending")
+    return reasons
 
 
 def set_override(db: Session, trip: LogicalTrip, value: datetime | None, *, actor: audit.Actor) -> LogicalTrip:

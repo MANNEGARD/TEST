@@ -799,6 +799,93 @@ def run_due(db: Session, now: datetime | None = None) -> dict[str, Any]:
     return dict(counts)
 
 
+# ----------------------------------------------------------------------------- skyddade resor (1.5.0)
+
+
+@dataclass(frozen=True)
+class Protection:
+    """Vilka resor som finns i ett redan skapat underlag (en regel för starttiden och förbrukningen).
+
+    ``files`` är månaderna med ett skapat underlag (läge ``exported`` eller ``stale``) och när
+    den gällande filen skapades (``None`` när det inte går att se). En delresa är skyddad bara
+    om den FINNS I filen: månaden har ett skapat underlag OCH delresan skapades senast när filen
+    skapades. En delresa som tillkommit efter filen finns inte i den och får starttid och
+    förbrukning som vanligt (månaden blir då ``stale`` och nästa kontroll skapar en ny fil).
+    Saknas filens tid räknas delresan som skyddad, som före 1.5.0.
+    """
+
+    tz: Any = None
+    files: dict[str, datetime | None] = field(default_factory=dict)
+
+    def month_of(self, when: datetime | None) -> str | None:
+        if when is None or self.tz is None:
+            return None
+        return when.astimezone(self.tz).strftime("%Y-%m")
+
+    def in_file(self, raw: Any) -> bool:
+        """Finns delresan i sin månads skapade fil? Då ändras den inte av sig själv."""
+        key = self.month_of(getattr(raw, "sort_time", None))
+        if key is None or key not in self.files:
+            return False
+        made, created = self.files[key], getattr(raw, "created_at", None)
+        if made is None or created is None:
+            return True  # okänt när filen eller resan skapades: skyddad, som förut
+        return created <= made
+
+    def blocks(self, raw: Any, *new_times: datetime | None) -> bool:
+        """Får delresan inte ändras? Den finns i filen, eller en ny tid skulle flytta den till en
+        ANNAN månad som har ett skapat underlag (regeln "eller som skulle flytta dit")."""
+        if self.in_file(raw):
+            return True
+        own = self.month_of(getattr(raw, "sort_time", None))
+        for when in new_times:
+            key = self.month_of(when)
+            if key is not None and key != own and key in self.files:
+                return True
+        return False
+
+
+def protection(db: Session, vehicle_id: uuid.UUID) -> Protection:
+    """Fordonets månader med ett skapat underlag och när filen skapades, i ägarens tidszon."""
+    rows = db.execute(
+        select(MonthClose.month, ExportJob.created_at)
+        .outerjoin(ExportJob, ExportJob.id == MonthClose.export_id)
+        .where(
+            MonthClose.vehicle_id == vehicle_id,
+            MonthClose.state.in_((MonthCloseState.EXPORTED, MonthCloseState.STALE)),
+        )
+    ).all()
+    if not rows:
+        return Protection()
+    owner = db.execute(select(Vehicle.owner_user_id).where(Vehicle.id == vehicle_id)).scalar_one_or_none()
+    if owner is None:
+        return Protection()
+    return Protection(tz=settings_svc.user_timezone(db, owner), files={month: made for month, made in rows})
+
+
+def month_overview(db: Session, vehicle: Vehicle) -> list[dict[str, Any]]:
+    """Fordonets månader med en rad i månadsskiftet: månad, läge, om filen skapades i förväg och
+    när (felsökningsfilen). Inga resor, platser eller belopp."""
+    tz = settings_svc.user_timezone(db, vehicle.owner_user_id)
+    out: list[dict[str, Any]] = []
+    for month, state, made in db.execute(
+        select(MonthClose.month, MonthClose.state, ExportJob.created_at)
+        .outerjoin(ExportJob, ExportJob.id == MonthClose.export_id)
+        .where(MonthClose.vehicle_id == vehicle.id)
+        .order_by(MonthClose.month)
+    ).all():
+        parsed = _parse_month(month)
+        end = _bounds(parsed, tz)[1] if parsed is not None else None
+        out.append({
+            "month": month if parsed is not None else None,
+            "state": str(state),
+            "closed_early": made is not None and end is not None and made < end,
+            "export_created_at": made.isoformat(timespec="seconds") if made is not None else None,
+        })
+    return out
+
+
 __all__ = [
-    "MONTH_GRACE", "Blocker", "MonthStatus", "evaluate", "month_key", "rows_fingerprint", "run_due", "run_for",
+    "MONTH_GRACE", "Blocker", "MonthStatus", "Protection", "evaluate", "month_key", "month_overview", "protection",
+    "rows_fingerprint", "run_due", "run_for",
 ]
