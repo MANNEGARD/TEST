@@ -113,7 +113,7 @@ ut = {"standard": validera(config["options"])}
 ut["ifyllt"] = validera({**config["options"], "admin_email": "agare@example.se", "admin_password": "x" * 12,
                          "strato_dyndns": True, "strato_dyndns_user": "example.se",
                          "strato_dyndns_password": "hemligt",
-                         "extra_domains": ["transcribe.smgd.se=transcribe:8080", "b.example.se=127.0.0.1:9000"]})
+                         "extra_domains": ["transcribe.smgd.se=transcribe:8080", "b.example.se=annan-tjanst:9000"]})
 # Äldre options.json (från före 1.4.0) saknar extra_domains: ska fortfarande godtas.
 ut["utan_extra"] = validera({k: v for k, v in config["options"].items() if k != "extra_domains"})
 print(json.dumps(ut))
@@ -148,7 +148,7 @@ def test_supervisors_egen_validering_godkanner_config_och_standardvarden(tmp_pat
     config = _las(ADDON / "config.yaml")
     assert ut["standard"] == config["options"]
     assert ut["ifyllt"]["admin_email"] == "agare@example.se"
-    assert ut["ifyllt"]["extra_domains"] == ["transcribe.smgd.se=transcribe:8080", "b.example.se=127.0.0.1:9000"]
+    assert ut["ifyllt"]["extra_domains"] == ["transcribe.smgd.se=transcribe:8080", "b.example.se=annan-tjanst:9000"]
     assert "domain" in ut["utan_extra"]
 
 

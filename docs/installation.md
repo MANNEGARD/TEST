@@ -102,7 +102,8 @@ curl -fsSL https://raw.githubusercontent.com/SMGD-MP/TEST/HEAD/deploy/server.sh 
 
 - Formen är `<domän>=<värd>:<port>`: domänen som ska nås utifrån, och namnet på den andra
   tjänstens container och porten den lyssnar på (vanlig HTTP; WebSockets fungerar). Flera
-  domäner: upprepa valet eller skriv dem med komma emellan.
+  domäner: upprepa valet eller skriv dem med komma emellan. `localhost`, `127.0.0.1` och andra
+  IP-adresser går inte som värd: inne i DriveLogs container är `127.0.0.1` DriveLog självt.
 - **Domänen måste peka på servern**, precis som DriveLogs egen (A-post, och ingen AAAA-post som
   pekar någon annanstans) – annars kan certifikatet inte hämtas.
 - Valet sparas i `/opt/drivelog/data/options.json` och gäller tills du ändrar det, även när
@@ -127,6 +128,15 @@ curl -fsSL https://raw.githubusercontent.com/SMGD-MP/TEST/HEAD/deploy/server.sh 
 - Den extra domänen får bara de allmänna säkerhetshuvudena (HSTS, `nosniff`, `Referrer-Policy`)
   – inte DriveLogs spärr för mikrofon och kamera eller förbudet mot inramning. Det bestämmer
   tjänsten själv.
+- **Den extra tjänsten nås direkt från internet.** DriveLogs inloggning skyddar den inte, och
+  den ligger på samma domän som DriveLog. Tjänsten måste själv ha inloggning och vara säker –
+  lägg inte till en tjänst du inte litar på. Proxyn släpper igenom högst 50 MB per förfrågan.
+- Ändrar du de extra domänerna (`--extra-doman` eller `--utan-extra-doman`) med automatisk
+  uppdatering påslagen, förnyas först automatikens kopia av skriptet, så att den känner till
+  dem. Går det inte avbryts raden innan något ändras – kör den igen om en stund.
+- Kan skriptet inte koppla DriveLog till nätet `smgd` (eller inte läsa inställningsfilen) startar
+  DriveLog ändå, med en varning; sammanfattningen säger då att den extra domänen inte når sin
+  tjänst. Kör raden igen när felet är åtgärdat.
 
 Resten av den här sidan beskriver den större uppsättningen med Docker Compose (PostgreSQL,
 Redis och separata tjänster), som bygger avbilderna på servern.

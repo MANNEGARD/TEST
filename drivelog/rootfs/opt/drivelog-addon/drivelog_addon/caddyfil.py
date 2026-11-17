@@ -14,12 +14,14 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 
+from .installningar import ar_forbjuden_vard
 from .kontroll import SOKVAG as DYNDNS_KONTROLLSOKVAG
 
 _UPPSTROM = re.compile(r"^127\.0\.0\.1:[0-9]{1,5}$")
 # Extra domäner (installningar.ExtraDoman) skickas till en annan container på Dockers nät, så
 # värden får vara ett namn – men samma strikta tecken som i installningar, så att ingenting kan
-# skjutas in i Caddyfilen (mellanslag, klamrar, radbrytningar, citattecken).
+# skjutas in i Caddyfilen (mellanslag, klamrar, radbrytningar, citattecken). Värdar som är DriveLog
+# självt, IP-adresser och värdmaskinen avvisas också här (installningar.ar_forbjuden_vard).
 _EXTRA_DOMAN = re.compile(r"^(?=.{1,253}$)[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$")
 _EXTRA_UPPSTROM = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,62}:([0-9]{1,5})$")
 
@@ -33,6 +35,8 @@ def _extra_block(doman: str, uppstrom: str) -> str:
         raise ValueError("Ogiltig extra domän")
     if port is None or not 1 <= int(port.group(1)) <= 65535:
         raise ValueError("Ogiltig adress till tjänsten bakom en extra domän")
+    if ar_forbjuden_vard(uppstrom.rpartition(":")[0]):
+        raise ValueError("Tjänsten bakom en extra domän får inte vara DriveLog självt, en IP-adress eller värden")
     return f"""
 {doman} {{
 	encode zstd gzip

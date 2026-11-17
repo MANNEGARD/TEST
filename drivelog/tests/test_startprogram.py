@@ -527,3 +527,22 @@ def test_forbered_data_som_root_ger_ny_layout(tmp_path, monkeypatch):
     assert info(sok.app_data) == (10001, 0o700)
     assert info(sok.databas)[0] == 10001
     assert info(sok.caddy_data) == (10003, 0o700)
+
+
+def test_gammal_rad_mot_127_0_0_1_stoppar_inte_starten(tmp_path, caplog):
+    """En installation från 1.4 kan ha en rad mot 127.0.0.1 (texterna föreslog det). Efter en
+    automatisk uppdatering ska DriveLog ändå starta: raden hoppas över och loggen säger varför."""
+    caplog.set_level(logging.INFO)
+    varld = Varld(behover_konto=False)
+    program = _program(
+        tmp_path, varld,
+        extra_domains=["gammal.example.se=127.0.0.1:8000", "transcribe.example.se=transcribe:8080"],
+    )
+    stopp, trad, _ = _kor_i_bakgrunden(program)
+    assert _vanta_tills(lambda: program.lage == "igang")
+    stopp.set()
+    trad.join(5)
+    caddyfil = (tmp_path / "run" / "Caddyfile").read_text()
+    assert "gammal.example.se" not in caddyfil
+    assert "reverse_proxy transcribe:8080 {" in caddyfil
+    assert "'gammal.example.se=127.0.0.1:8000' används inte" in caplog.text

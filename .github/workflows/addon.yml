@@ -409,8 +409,9 @@ jobs:
             echo "Det nya lösenordet finns i klartext i datakatalogen" >&2; exit 1
           fi
           # 3b) Extra domäner: sparas i inställningsfilen, Caddy får ett block för domänen och
-          #     DriveLog ansluts till Docker-nätet smgd. Valet behålls när raden körs igen utan det
-          #     och tas bort med --utan-extra-doman.
+          #     DriveLog ansluts till Docker-nätet smgd, där trafiken når en tjänst med namnet
+          #     transcribe. Valet behålls när raden körs igen utan det och tas bort med
+          #     --utan-extra-doman. DriveLog självt (127.0.0.1, localhost) avvisas som mål.
           extra() { sudo python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["extra_domains"])' "$DATA/options.json"; }
           natverk() { docker inspect -f '{{range $n, $_ := .NetworkSettings.Networks}}{{$n}} {{end}}' drivelog-server; }
           server -- localhost --extra-doman extra.localhost=transcribe:8080 </dev/null
@@ -418,6 +419,29 @@ jobs:
           natverk | grep -qw smgd
           docker exec drivelog-server cat /run/drivelog/Caddyfile | grep -F "reverse_proxy transcribe:8080 {"
           test "$(logga_in "$CI_NYTT_PASSWORD")" = 200
+          docker run -d --name transcribe --network smgd --entrypoint python3 drivelog-addon:test -m http.server 8080 >/dev/null
+          for _ in $(seq 1 30); do
+            curl -ksSI --resolve extra.localhost:443:127.0.0.1 https://extra.localhost/ > "$RUNNER_TEMP/extra.txt" 2>/dev/null \
+              && grep -q '^HTTP/[0-9.]* 200' "$RUNNER_TEMP/extra.txt" && break
+            sleep 2
+          done
+          cat "$RUNNER_TEMP/extra.txt"
+          grep -q '^HTTP/[0-9.]* 200' "$RUNNER_TEMP/extra.txt"
+          if grep -qi '^x-frame-options' "$RUNNER_TEMP/extra.txt"; then echo "DriveLogs huvuden i den extra domänen" >&2; exit 1; fi
+          for mal in 127.0.0.1:8000 localhost:3000 172.17.0.1:22 host.docker.internal:80 drivelog:8000; do
+            if server -- localhost --extra-doman "extra.localhost=$mal" </dev/null; then
+              echo "Målet $mal godtogs" >&2; exit 1
+            fi
+          done
+          test "$(extra)" = "['extra.localhost=transcribe:8080']"
+          # En rad mot 127.0.0.1 som redan står i inställningarna (1.4 föreslog det) hoppas över med
+          # en varning – DriveLog startar ändå, med de andra raderna.
+          sudo python3 -c 'import json, sys; p = sys.argv[1]; d = json.load(open(p)); d["extra_domains"].insert(0, "gammal.localhost=127.0.0.1:8000"); json.dump(d, open(p, "w"))' "$DATA/options.json"
+          server -- localhost </dev/null
+          test "$(logga_in "$CI_NYTT_PASSWORD")" = 200
+          docker logs drivelog-server 2>&1 | grep -F "'gammal.localhost=127.0.0.1:8000' används inte"
+          if docker exec drivelog-server cat /run/drivelog/Caddyfile | grep -F gammal.localhost; then exit 1; fi
+          server -- localhost --extra-doman extra.localhost=transcribe:8080 </dev/null
           server -- localhost </dev/null
           test "$(extra)" = "['extra.localhost=transcribe:8080']"
           natverk | grep -qw smgd
@@ -426,6 +450,7 @@ jobs:
           if natverk | grep -qw smgd; then echo "DriveLog är kvar i nätet smgd" >&2; exit 1; fi
           if docker exec drivelog-server cat /run/drivelog/Caddyfile | grep -F transcribe; then exit 1; fi
           test "$(logga_in "$CI_NYTT_PASSWORD")" = 200
+          docker rm -f transcribe >/dev/null
           # 4) Ny server utan uppgifter och utan terminal: tydligt fel i stället för en halv installation.
           docker rm -f drivelog-server >/dev/null
           if server DRIVELOG_DATA="$RUNNER_TEMP/server-tom" DRIVELOG_CONTAINER=drivelog-server-tom -- localhost \
@@ -652,9 +677,10 @@ jobs:
       - name: Städa
         if: always()
         run: |
-          docker rm -f drivelog drivelog-tom drivelog-server drivelog-server-tom >/dev/null 2>&1 || true
+          docker rm -f drivelog drivelog-tom drivelog-server drivelog-server-tom transcribe >/dev/null 2>&1 || true
+          docker network rm smgd >/dev/null 2>&1 || true
           docker volume rm drivelog-data drivelog-tom >/dev/null 2>&1 || true
-          sudo rm -rf "$RUNNER_TEMP/server-data" "$RUNNER_TEMP/server-tom" "$RUNNER_TEMP/server-fel.txt"
+          sudo rm -rf "$RUNNER_TEMP/server-data" "$RUNNER_TEMP/server-tom" "$RUNNER_TEMP/server-fel.txt" "$RUNNER_TEMP/extra.txt"
           rm -f "$RUNNER_TEMP/options.json" "$RUNNER_TEMP"/nycklar-* "$RUNNER_TEMP"/kaka* "$RUNNER_TEMP/inloggning.json"
 
   aarch64:

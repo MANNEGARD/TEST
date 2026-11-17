@@ -230,8 +230,9 @@ transcribe.smgd.se=transcribe:8080
 ```
 
 - Formen är `<domän>=<värd>:<port>`. Värden är namnet på den andra tjänstens container på
-  Dockers nät (eller `127.0.0.1`), utan `http://` och utan sökväg. Tjänsten bakom talar vanlig
-  HTTP; WebSockets fungerar.
+  Dockers nät, utan `http://` och utan sökväg. Tjänsten bakom talar vanlig HTTP; WebSockets
+  fungerar. `localhost`, `127.0.0.1` och andra IP-adresser går inte: inne i appens container är
+  `127.0.0.1` DriveLog självt.
   I Home Assistant ligger appen på Supervisors interna nät och når andra appar på deras
   värdnamn.
 - **Domänen måste peka hit** precis som DriveLogs egen (A-post, och ingen AAAA-post som pekar
@@ -239,7 +240,14 @@ transcribe.smgd.se=transcribe:8080
 - Den extra domänen får bara de allmänna säkerhetshuvudena (HSTS, `nosniff`, `Referrer-Policy`)
   – inte DriveLogs spärr för mikrofon och kamera eller förbudet mot inramning. Det bestämmer
   tjänsten själv.
-- Är en rad felaktig startar appen inte, och loggen säger vad som ska rättas.
+- **Den extra tjänsten nås direkt från internet.** DriveLogs inloggning skyddar den inte, och
+  den ligger på samma domän som DriveLog. Tjänsten måste själv ha inloggning och vara säker –
+  lägg inte till en tjänst du inte litar på. Proxyn släpper igenom högst 50 MB per förfrågan.
+- Med STRATO DynDNS uppdateras bara `domain`: gör den extra domänen till ett CNAME till
+  DriveLogs domän, annars slutar den fungera när den publika adressen byts.
+- Är en rad felskriven startar appen inte, och loggen säger vad som ska rättas. En rad som pekar
+  på `localhost` eller en IP-adress (det föreslogs i 1.4) hoppas i stället över med en varning i
+  loggen, och appen startar med de andra raderna.
 - På en egen server sköts det här av installationsraden med `--extra-doman`, se
   [installation.md](installation.md#extra-domäner-fler-tjänster-på-samma-server).
 

@@ -22,7 +22,7 @@ configuration:
     description: "Hur mycket appens startprogram och API:t skriver i loggen."
   extra_domains:
     name: "Extra domäner"
-    description: "Fler tjänster på samma server: en rad per domän, t.ex. transcribe.smgd.se=transcribe:8080. Appen hämtar certifikat för domänen och skickar vidare till värden och porten. Domänen måste peka hit. Lämna tomt annars."
+    description: "Fler tjänster på samma server: en rad per domän, t.ex. transcribe.smgd.se=transcribe:8080. Appen hämtar certifikat för domänen och skickar vidare till värden och porten. Värden är den andra tjänstens container – inte localhost eller en IP-adress. Domänen måste peka hit. Lämna tomt annars."
 network:
   80/tcp: "HTTP – certifikatkontroll och vidarekoppling till HTTPS"
   443/tcp: "HTTPS – DriveLog"

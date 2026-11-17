@@ -25,11 +25,22 @@ LOGGNIVAER = {
 _ETIKETT = re.compile(r"^(?!-)[a-z0-9-]{1,63}(?<!-)$")
 MINSTA_LOSENORD = 12
 _EPOST = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-# Värden bakom en extra domän: 127.0.0.1 eller ett container-/DNS-namn på Dockers nät (t.ex.
+# Värden bakom en extra domän: namnet på den andra tjänstens container på Dockers nät (t.ex.
 # "transcribe"). Strikt eftersom namnet skrivs in i Caddyfilen: inget schema, ingen sökväg, inga
 # mellanslag, klamrar eller radbrytningar.
 _EXTRA_VARD = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,62}$")
 _EXTRA_PORT = re.compile(r"^[0-9]{1,5}$")
+# Värdar som inte får ligga bakom en extra domän. Caddy kör inne i DriveLogs container, så
+# localhost/127.0.0.1 (och containerns eget namn) är DriveLog självt – API:t, webben och
+# kontrollservern skulle läggas ut förbi DriveLogs egna skydd. IP-adresser och Dockers namn på
+# värdmaskinen leder ut ur Docker-nätet. Samma lista i caddyfil.py och deploy/server.sh
+# (ar_forbjuden_vard); drivelog/tests/test_extra_domaner_lika.py håller dem lika.
+FORBJUDNA_VARDAR = frozenset(
+    {"localhost", "ip6-localhost", "ip6-loopback", "host.docker.internal", "gateway.docker.internal", "drivelog"}
+)
+# Ser ut som en IP-adress, även i de skrivsätt som inet_aton godtar (127.1, 0x7f.1, 2130706433).
+# Varje del är antingen bara siffror eller 0x och hex – entydigt, så att ingen backtracking uppstår.
+_IP_LIKNANDE = re.compile(r"(?:0x[0-9a-f]*|[0-9]+)(?:\.(?:0x[0-9a-f]*|[0-9]+))*\.?")
 
 
 class OgiltigaInstallningar(ValueError):
@@ -118,6 +129,19 @@ def normalisera_doman(varde: str, nyckel: str = "domain") -> str:
     return doman
 
 
+def ar_forbjuden_vard(vard: str) -> bool:
+    """Sant om värden (redan i gemener) är DriveLog självt, en IP-adress eller värdmaskinen."""
+    if vard in FORBJUDNA_VARDAR or vard.endswith(".localhost"):
+        return True
+    if _IP_LIKNANDE.fullmatch(vard):
+        return True
+    try:
+        ipaddress.ip_address(vard)
+    except ValueError:
+        return False
+    return True
+
+
 def _text(data: dict, nyckel: str) -> str | None:
     varde = data.get(nyckel)
     if varde is None:
@@ -128,8 +152,13 @@ def _text(data: dict, nyckel: str) -> str | None:
     return varde or None
 
 
-def _extra_domaner(data: dict, huvuddoman: str) -> tuple[ExtraDoman, ...]:
-    """Kontrollerar 'extra_domains': en lista med ``"<domän>=<värd>:<port>"``."""
+def _extra_domaner(data: dict, huvuddoman: str, varningar: list[str]) -> tuple[ExtraDoman, ...]:
+    """Kontrollerar 'extra_domains': en lista med ``"<domän>=<värd>:<port>"``.
+
+    Ett fel i en rad stoppar starten, med ett undantag: en rad som är rätt skriven men pekar på
+    en förbjuden värd (ar_forbjuden_vard) hoppas över med en varning i ``varningar``. Den regeln
+    kom i 1.5.0, och en sådan rad som redan står i inställningarna ska inte hålla DriveLog nere
+    efter en automatisk uppdatering."""
     lista = data.get("extra_domains")
     if lista is None:
         return ()
@@ -166,19 +195,22 @@ def _extra_domaner(data: dict, huvuddoman: str) -> tuple[ExtraDoman, ...]:
         if doman in sedda:
             raise OgiltigaInstallningar(f"'extra_domains': {doman} står med mer än en gång.")
         sedda.add(doman)
-        if vard == "localhost":
-            raise OgiltigaInstallningar(
-                f"'extra_domains': skriv 127.0.0.1 i stället för localhost ('{rad}')."
-            )
         if not _EXTRA_VARD.fullmatch(vard):
             raise OgiltigaInstallningar(
-                f"'extra_domains': värden i '{rad}' ska vara 127.0.0.1 eller namnet på en container, t.ex. "
+                f"'extra_domains': värden i '{rad}' ska vara namnet på den andra tjänstens container, t.ex. "
                 "transcribe (bara a–z, 0–9, punkt, bindestreck och understreck – utan http:// och utan sökväg)."
             )
         if not _EXTRA_PORT.fullmatch(port) or not 1 <= int(port) <= 65535:
             raise OgiltigaInstallningar(
                 f"'extra_domains': porten i '{rad}' ska vara ett tal mellan 1 och 65535."
             )
+        if ar_forbjuden_vard(vard):
+            varningar.append(
+                f"'extra_domains': raden '{rad}' används inte – {vard} är DriveLog självt, en IP-adress eller "
+                "värdmaskinen, inte en annan tjänst. Ange den andra tjänstens container, t.ex. "
+                f"{doman}=transcribe:8080. DriveLog startar utan den raden."
+            )
+            continue
         resultat.append(ExtraDoman(doman=doman, vard=vard, port=int(port)))
     return tuple(resultat)
 
@@ -234,7 +266,7 @@ def tolka(data: dict) -> Installningar:
                 f"{doman}. STRATO vill normalt ha domänen i paketet som användarnamn."
             )
 
-    extra = _extra_domaner(data, doman)
+    extra = _extra_domaner(data, doman, varningar)
 
     niva = (_text(data, "log_level") or "info").lower()
     if niva not in LOGGNIVAER:

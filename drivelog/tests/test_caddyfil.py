@@ -74,12 +74,12 @@ def test_utan_extra_domaner_ingen_skillnad():
 def test_extra_domaner_far_egna_block():
     text = skapa_caddyfil(
         "drivelog.example.se",
-        extra=[("transcribe.example.se", "transcribe:8080"), ("b.example.se", "127.0.0.1:9000")],
+        extra=[("transcribe.example.se", "transcribe:8080"), ("b.example.se", "annan-tjanst:9000")],
     )
     assert text.count("{") == text.count("}")
     # DriveLogs eget block är oförändrat.
     assert _block(text, "drivelog.example.se") == _block(skapa_caddyfil("drivelog.example.se"), "drivelog.example.se")
-    for doman, uppstrom in (("transcribe.example.se", "transcribe:8080"), ("b.example.se", "127.0.0.1:9000")):
+    for doman, uppstrom in (("transcribe.example.se", "transcribe:8080"), ("b.example.se", "annan-tjanst:9000")):
         block = _rader(_block(text, doman))
         assert f"reverse_proxy {uppstrom} {{" in block
         assert "header_up X-Forwarded-For {remote_host}" in block
@@ -118,6 +118,15 @@ def test_extra_domaner_far_egna_block():
         ("transcribe.example.se, drivelog.example.se", "transcribe:8080"),
         ("", "transcribe:8080"),
         ("a..b.se", "transcribe:8080"),
+        # DriveLog självt, IP-adresser och värdmaskinen (installningar.ar_forbjuden_vard).
+        ("transcribe.example.se", "127.0.0.1:8000"),
+        ("transcribe.example.se", "localhost:3000"),
+        ("transcribe.example.se", "0.0.0.0:8099"),
+        ("transcribe.example.se", "169.254.169.254:80"),
+        ("transcribe.example.se", "192.168.1.10:8123"),
+        ("transcribe.example.se", "host.docker.internal:80"),
+        ("transcribe.example.se", "gateway.docker.internal:80"),
+        ("transcribe.example.se", "drivelog:8000"),
     ],
 )
 def test_ogiltig_extra_doman_avvisas(doman, uppstrom):

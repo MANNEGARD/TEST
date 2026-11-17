@@ -60,7 +60,8 @@ CLOCK_SKEW = timedelta(minutes=2)
 ROAD_FACTOR = 1.3  # väg/fågelväg vid uppskattning av mycket korta förflyttningar
 LAG_KM = 2.0  # mätarställning som släpar efter positionsrapporten
 LAG_SETTLE_FACTOR = 3  # längre väntan när bara mätarställning eller position har ändrats
-MAX_AVG_SPEED_KMH = 130.0  # högsta rimliga snittfart (ger senaste möjliga start)
+MAX_AVG_SPEED_KMH = 130.0
+OLD_REPLAY_ROWS = 200  # hur många avläsningar bakåt väntan från före 1.5.0 spelas upp (_old_movement)  # högsta rimliga snittfart (ger senaste möjliga start)
 VOID_REASON_SUPERSEDED = "Ersatt av importerad originalresa"
 _USER_SOURCES = (DecisionSource.USER, DecisionSource.HA)
 
@@ -138,8 +139,65 @@ def _diff(prev: Eff, cur: Eff, settings: dict[str, Any]) -> tuple[bool, bool, bo
     return odo_moved, pos_moved, odo_back
 
 
+def _is_arrival(step: Step, prev: Eff) -> bool:
+    """Är steget ett ankomstbesked: flyttad position med en nyare positionsrapport?"""
+    newer_report = step.eff.pos_ts is None or prev.pos_ts is None or step.eff.pos_ts > prev.pos_ts
+    return step.pos_moved and newer_report
+
+
+def _arrival_complete(anchor_eff: Eff, steps: list[Step], settings: dict[str, Any]) -> bool:
+    """Är rörelsen avslutad med en ankomst vars uppgifter är kompletta (1.5.0)?
+
+    En bil som bara rapporterar när tändningen slås av skickar position och mätarställning
+    i samma ögonblick. Då behöver DriveLog inte vänta: resan kan stängas vid den hämtning som
+    först ser ankomsten. Kompletta uppgifter betyder här:
+
+    * det senaste ändrade steget är ett ankomstbesked (ny positionsrapport, flyttad position),
+      eller steg efter det där bara mätarställningen har ändrats och ingen nyare
+      positionsrapport har kommit;
+    * mätarställningen är avläst vid ankomsten: bilens tidsstämpel för mätarvärdet ligger
+      inom ``CLOCK_SKEW`` från positionens. Ett äldre värde kan sakna en del av sträckan, och
+      ett mycket senare kan innehålla nästa körning;
+    * mätarsträckan är minst fågelvägen (med mätarens upplösning i marginal) – annars är
+      mätarvärdet bevisligen gammalt, vad tidsstämpeln än säger.
+
+    Motorstatus och "sett två gånger" krävs inte. Saknas något av detta gäller den vanliga
+    väntan i ``_settled`` oförändrad.
+    """
+    prev = anchor_eff
+    leg_start = anchor_eff
+    arrival: Step | None = None
+    for step in steps:
+        if _is_arrival(step, prev):
+            if arrival is not None:
+                leg_start = arrival.eff
+            arrival = step
+        elif arrival is not None and step.pos_moved:
+            return False  # en flyttad position utan nyare rapport: oklart läge
+        prev = step.eff
+    if arrival is None:
+        return False
+    final = steps[-1].eff
+    arrived_at, odo_ts = arrival.eff.pos_ts, final.odo_ts
+    if arrived_at is None or odo_ts is None or final.pos_ts != arrived_at:
+        return False
+    if not (arrived_at - CLOCK_SKEW <= odo_ts <= arrived_at + CLOCK_SKEW):
+        return False
+    if final.odo is None or leg_start.odo is None:
+        return False
+    crow_m = _dist_m(leg_start, final)
+    if crow_m is None:
+        return False
+    resolution = max(float(settings.get("min_odometer_delta_km", 1.0)), 1.0)
+    return final.odo - leg_start.odo + resolution >= crow_m / 1000
+
+
 def _settled(steps: list[Step], settings: dict[str, Any]) -> bool:
-    """Har läget varit oförändrat tillräckligt länge efter den senaste ändringen?"""
+    """Har läget varit oförändrat tillräckligt länge efter den senaste ändringen?
+
+    Detta är väntan från före 1.5.0. En ankomst med kompletta uppgifter stängs dessutom
+    direkt (``_arrival_complete``).
+    """
     idx = max(i for i, s in enumerate(steps) if s.changed)
     tail = steps[idx:]
     final = tail[0]
@@ -464,6 +522,228 @@ def _anchor_eff(db: Session, vehicle_id: uuid.UUID, anchor: VehicleObservation) 
     return eff
 
 
+def _same_instant(a: datetime | None, b: datetime | None) -> bool:
+    return a is not None and b is not None and abs((a - b).total_seconds()) < 1
+
+
+def _arrival_raw(db: Session, vehicle_id: uuid.UUID, at: Eff) -> RawTrip | None:
+    """Den rekonstruerade resa som slutade med just den här positionsrapporten (1.5.0)."""
+    if at.pos_ts is None or not at.has_pos:
+        return None
+    rows = db.execute(
+        select(RawTrip)
+        .where(
+            RawTrip.vehicle_id == vehicle_id,
+            RawTrip.voided_at.is_(None),
+            RawTrip.import_batch_id.is_(None),
+            RawTrip.source.in_((TripSource.VOLVO_API, TripSource.DEMO)),
+            RawTrip.end_time_quality == TimeQuality.REPORTED,
+            RawTrip.ended_at >= at.pos_ts - timedelta(seconds=1),
+            RawTrip.ended_at <= at.pos_ts + timedelta(seconds=1),
+        )
+        .order_by(RawTrip.created_at.desc())
+        .limit(5)
+    ).scalars().all()
+    for raw in rows:
+        if (
+            _same_instant(raw.ended_at, at.pos_ts)
+            and raw.end_lat is not None and raw.end_lon is not None
+            and abs(raw.end_lat - at.lat) < 1e-9 and abs(raw.end_lon - at.lon) < 1e-9  # type: ignore[operator]
+        ):
+            return raw
+    return None
+
+
+def _observation_ids(raw: RawTrip) -> list[str]:
+    value = raw.observation_ids
+    return [v for v in value if isinstance(v, str)] if isinstance(value, list) else []
+
+
+def _attach_late_odometer(
+    db: Session,
+    vehicle: Vehicle,
+    user_id: uuid.UUID,
+    step: Step,
+    prev: Eff,
+    settings: dict[str, Any],
+    *,
+    old_waiting: bool,
+) -> RawTrip | None:
+    """För ett släpande mätarvärde till den resa som redan har stängts vid ankomsten (1.5.0).
+
+    Bara när det är säkert att det är samma körning:
+
+    * bara mätarställningen har ökat, och ingen ny positionsrapport har kommit sedan
+      ankomsten (samma tidsstämpel);
+    * mätarvärdet är avläst senast vid ankomsten (bilens tidsstämpel högst ``CLOCK_SKEW``
+      efter positionens) – eller, utan tidsstämpel, en ökning på högst ``LAG_KM`` medan
+      väntan från före 1.5.0 ännu inte hade stängt rörelsen (då hade värdet hamnat i samma
+      resa förut också);
+    * resan som slutade med just den positionsrapporten finns, är inte makulerad och slutar
+      på den mätarställning bilen hade före ökningen.
+
+    Resans slutmätarställning och sträcka rättas, och rättningen syns i resans historik.
+    Returnerar resan (även när värdet redan förts dit vid en tidigare körning), annars None:
+    då gäller de vanliga reglerna.
+    """
+    if not step.odo_moved or step.pos_moved or step.eff.odo is None or prev.odo is None:
+        return None
+    arrived_at = prev.pos_ts
+    if arrived_at is None or not _same_instant(step.eff.pos_ts, arrived_at):
+        return None
+    odo_ts = step.eff.odo_ts
+    if odo_ts is not None:
+        if odo_ts > arrived_at + CLOCK_SKEW:
+            return None
+    elif not (old_waiting and step.eff.odo - prev.odo <= LAG_KM):
+        return None
+    raw = _arrival_raw(db, vehicle.id, prev)
+    if raw is None or raw.odometer_start is None or raw.odometer_end is None:
+        return None
+    obs_id = str(step.obs.id)
+    if obs_id in _observation_ids(raw):
+        return raw  # redan förd till resan (omkörning)
+    if abs(raw.odometer_end - prev.odo) > 1e-6:
+        return None
+    _correct_end_odometer(db, vehicle, user_id, raw, step, settings)
+    return raw
+
+
+def _correct_end_odometer(
+    db: Session, vehicle: Vehicle, user_id: uuid.UUID, raw: RawTrip, step: Step, settings: dict[str, Any]
+) -> None:
+    """Rättar resans slutmätarställning och sträcka efter ett släpande mätarvärde."""
+    before = {
+        "odometer_end": raw.odometer_end, "distance_km": raw.distance_km, "distance_quality": raw.distance_quality,
+    }
+    min_delta = float(settings.get("min_odometer_delta_km", 1.0))
+    raw.odometer_end = step.eff.odo
+    flags = set(raw.quality_flags or [])
+    odo_km = raw.odometer_end - raw.odometer_start  # type: ignore[operator]
+    if odo_km >= min_delta:
+        raw.distance_km, raw.distance_quality = round(odo_km, 1), DistanceQuality.ODOMETER
+        flags.discard("distance_estimated")
+        crow_m = (
+            haversine_m(raw.start_lat, raw.start_lon, raw.end_lat, raw.end_lon)  # type: ignore[arg-type]
+            if None not in (raw.start_lat, raw.start_lon, raw.end_lat, raw.end_lon) else None
+        )
+        if crow_m is not None and crow_m >= float(settings.get("position_threshold_m", 150)):
+            # Samma kontroll av omväg som när resan skapas (_raw_from_leg).
+            limit = float(settings.get("detour_factor", 1.8)) * (crow_m / 1000) + float(settings.get("detour_slack_km", 5.0))
+            if raw.distance_km > limit:
+                flags.add("detour_or_multiple_trips")
+                raw.possible_missed_trips = True
+                raw.is_complete = False
+    raw.quality_flags = sorted(flags)
+    raw.observation_ids = list(dict.fromkeys([*_observation_ids(raw), str(step.obs.id)]))
+    raw.updated_by = "system"
+    after = {
+        "odometer_end": raw.odometer_end, "distance_km": raw.distance_km, "distance_quality": raw.distance_quality,
+        "reason": "late_odometer", "observation_id": str(step.obs.id),
+    }
+    trip = _active_trip_for(db, raw.id)
+    if trip is None:
+        db.flush()
+        audit.record(db, audit.SYSTEM, "trip.update", "raw_trip", raw.id, before=before, after=after, user_id=user_id)
+        return
+    parts = sorted((s for s in trip.segments if s.raw_trip_id == raw.id), key=lambda s: s.part)
+    if len(parts) == 1:
+        parts[0].distance_km = raw.distance_km
+    elif parts:
+        # Fördelad på delsträckor: det tillkomna läggs på den sista, så att summan av
+        # delarna alltid är resans uppmätta sträcka.
+        diff = raw.distance_km - sum(s.distance_km for s in parts)
+        parts[-1].distance_km = round(parts[-1].distance_km + diff, 3)
+    trip.updated_by = "system"
+    seg.refresh_logical(db, trip)
+    db.flush()
+    audit.record(db, audit.SYSTEM, "trip.update", "logical_trip", trip.id, before=before, after=after, user_id=user_id)
+
+
+def _old_movement(db: Session, vehicle_id: uuid.UUID, anchor: VehicleObservation, settings: dict[str, Any]) -> list[Step]:
+    """Rörelsen som väntan från före 1.5.0 ännu inte hade stängt vid ankaret.
+
+    Räknas fram ur de bearbetade avläsningarna, utan att något sparas: från den senaste
+    avläsningen som setts oförändrad i minst ``LAG_SETTLE_FACTOR`` × ``settle_minutes`` (där hade
+    den gamla väntan alltid stängt rörelsen) spelas avläsningarna upp fram till ankaret med
+    samma regler som förut. Varje avläsning gav förut en ny bedömning först när nästa kom, och
+    då med alla dess hämtningar – därför blir uppspelningen densamma som förloppet var.
+    Tom lista när väntan inte hade någon öppen rörelse, eller när ingen sådan avläsning finns
+    bland de senaste ``OLD_REPLAY_ROWS``.
+    """
+    settle = timedelta(minutes=float(settings.get("settle_minutes", 10)))
+    rows = list(
+        db.execute(
+            select(VehicleObservation)
+            .where(
+                VehicleObservation.vehicle_id == vehicle_id,
+                VehicleObservation.processed_at.is_not(None),
+                VehicleObservation.fetched_at <= anchor.fetched_at,
+            )
+            .order_by(VehicleObservation.fetched_at.desc())
+            .limit(OLD_REPLAY_ROWS)
+        ).scalars()
+    )
+    start = next(
+        (i for i, row in enumerate(rows) if row.last_seen_at - row.fetched_at >= LAG_SETTLE_FACTOR * settle), None
+    )
+    if start is None or start == 0:
+        return []
+    replay = list(reversed(rows[:start]))
+    prev = _anchor_eff(db, vehicle_id, rows[start])
+    steps: list[Step] = []
+    for obs in replay:
+        eff = Eff.carry(prev, obs)
+        odo_moved, pos_moved, odo_back = _diff(prev, eff, settings)
+        if odo_back:
+            eff.odo, eff.odo_ts = prev.odo, prev.odo_ts
+        step = Step(obs, eff, odo_moved, pos_moved)
+        prev = eff
+        if not steps and not step.changed:
+            continue
+        steps.append(step)
+        if _settled(steps, settings):
+            steps = []
+    return steps
+
+
+def question_hold_until(db: Session, trip: LogicalTrip, user_id: uuid.UUID) -> datetime | None:
+    """När frågan till telefonen om en resa från bilen tidigast får skickas (1.5.0).
+
+    En ankomst med kompletta uppgifter stängs direkt, men frågan ska inte komma tidigare än
+    med väntan från före 1.5.0: när ankomsten först sågs plus ``settle_minutes``. Då hinner en
+    fortsatt körning efter ett kort stopp slås ihop med resan först. None för resor som inte
+    är rekonstruerade ur bilens avläsningar.
+    """
+    raws = seg.ordered_raws(trip)
+    if not raws:
+        return None
+    last = raws[-1]
+    if not _is_reconstructed(last) or last.end_lat is None or last.end_lon is None:
+        return None
+    ids: list[uuid.UUID] = []
+    for value in _observation_ids(last):
+        try:
+            ids.append(uuid.UUID(value))
+        except ValueError:
+            continue
+    if not ids:
+        return None
+    seen = [
+        fetched
+        for fetched, lat, lon in db.execute(
+            select(VehicleObservation.fetched_at, VehicleObservation.latitude, VehicleObservation.longitude).where(
+                VehicleObservation.id.in_(ids)
+            )
+        ).all()
+        if lat is not None and lon is not None and abs(lat - last.end_lat) < 1e-9 and abs(lon - last.end_lon) < 1e-9
+    ]
+    if not seen:
+        return None
+    settle = float(settings_svc.get_section(db, user_id, "volvo").get("settle_minutes", 10))
+    return min(seen) + timedelta(minutes=settle)
+
+
 def process_vehicle(
     db: Session,
     vehicle: Vehicle,
@@ -511,6 +791,12 @@ def process_vehicle(
     prev_eff = anchor_eff
     steps: list[Step] = []
     created: list[RawTrip] = []
+    corrected: list[RawTrip] = []
+    # Väntan från före 1.5.0 följs vid sidan av (``old_steps``): rörelsen som den ännu inte
+    # hade stängt. Det gör att (1) ingen resa stängs senare än förut – stänger den gamla väntan
+    # rörelsen stängs den pågående också – och (2) ett släpande mätarvärde utan tidsstämpel förs
+    # till den stängda resan precis så länge den gamla väntan hade tagit med det i samma resa.
+    old_steps = _old_movement(db, vehicle.id, anchor, settings)
 
     for obs in pending:
         eff = Eff.carry(prev_eff, obs)
@@ -530,14 +816,32 @@ def process_vehicle(
             )
             eff.odo, eff.odo_ts = prev_eff.odo, prev_eff.odo_ts
         step = Step(obs, eff, odo_moved, pos_moved)
+        old_closed = False
+        if old_steps or step.changed:
+            old_steps.append(step)
+            if _settled(old_steps, settings):
+                old_closed, old_steps = True, []
         if not steps and not step.changed:
             # Bilen står still: flytta fram ankaret.
             obs.processed_at = now
             anchor, anchor_eff, prev_eff = obs, eff, eff
             continue
+        if not steps:
+            late = _attach_late_odometer(
+                db, vehicle, user_id, step, prev_eff, settings, old_waiting=bool(old_steps),
+            )
+            if late is not None:
+                # Ett släpande mätarvärde för en resa som redan har stängts: resan rättas i
+                # stället för att värdet blir en ny "resa" för samma körning.
+                if late not in corrected and late not in created:
+                    corrected.append(late)
+                obs.processed_at = now
+                anchor, anchor_eff, prev_eff = obs, eff, eff
+                continue
         steps.append(step)
         prev_eff = eff
-        if not _settled(steps, settings):
+        # En ankomst med kompletta uppgifter stängs direkt (1.5.0); annars gäller väntan.
+        if not (old_closed or _arrival_complete(anchor_eff, steps, settings) or _settled(steps, settings)):
             continue
         legs = _build_legs(anchor, anchor_eff, steps, settings, poll)
         for i, leg in enumerate(legs):
@@ -550,6 +854,15 @@ def process_vehicle(
         steps = []
 
     db.flush()
+    if corrected and run_pipeline and not created:
+        from app.services.trips import pipeline
+
+        pipeline.after_trips_changed(
+            db, user_id=user_id, vehicle=vehicle, actor=audit.SYSTEM, apply_merge_rules=True, notify=True,
+            origin="live", isolate_steps=True,
+        )
+        db.flush()
+        return []
     if not created:
         _estimate_existing(db, vehicle, user_id, run_pipeline)
         return []
