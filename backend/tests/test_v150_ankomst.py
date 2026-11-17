@@ -72,8 +72,10 @@ def assert_no_double_km(rows: list[M.RawTrip], increase: float) -> None:
 
 
 def trip_of(db, raw: M.RawTrip) -> M.LogicalTrip:
-    segment = db.execute(select(M.TripSegment).where(M.TripSegment.raw_trip_id == raw.id)).scalar_one()
-    return seg.load_trip(db, segment.logical_trip_id)
+    """Den aktiva journalresa som delresan ingår i."""
+    trip = detection._active_trip_for(db, raw.id)
+    assert trip is not None
+    return trip
 
 
 @pytest.fixture()
@@ -346,9 +348,9 @@ def test_round_trip_without_new_position_uses_todays_rules(db, user, vehicle, ca
 
 def test_collection_gap_is_flagged_as_before(db, user, vehicle, car):
     parked(db, vehicle, car)
-    engine_on(car, -100)
-    arrive(car, PB, 9, pos_min=-40.0, odo_min=-39.5)
-    poll(db, vehicle, car, at(1))  # hämtningen låg nere i 80 minuter
+    engine_on(car, 0)
+    arrive(car, PB, 9, pos_min=30.0, odo_min=30.5)
+    poll(db, vehicle, car, at(60))  # hämtningen låg nere i 80 minuter
     (raw,) = raws(db)
     assert "collection_gap" in raw.quality_flags and raw.possible_missed_trips
     assert raw.collection_gap["odometer_km"] == 9
@@ -419,7 +421,7 @@ def test_self_driving_question_waits_for_settle(db, user, vehicle):
     connect(db, user, vehicle)
     setup_push(db, user, batch_window_minutes=0)
     settings_svc.update_section(db, user.id, "automation", {"mode": "self_driving"})
-    settings_svc.update_section(db, user.id, "automation", {"active_since": utcnow() - timedelta(hours=1)},
+    settings_svc.update_section(db, user.id, "automation", {"active_since": (utcnow() - timedelta(hours=1)).isoformat()},
                                 allow_read_only=True)
     base = utcnow().replace(microsecond=0) - timedelta(minutes=20)
     car = FakeCar(odometer=10_000, lat=PA[0], lon=PA[1], odo_ts=base - timedelta(hours=5),
@@ -682,16 +684,19 @@ def compare(db, user, old_module: ModuleType, seed: int) -> dict[str, Any]:
     new_spans = [(r.odometer_start, r.odometer_end) for r in new_rows]
     if old_spans != new_spans:
         # Den enda tillåtna skillnaden: 1.4.2 stängde resan innan ett släpande mätarvärde (avläst
-        # vid ankomsten) kom och gjorde resten till en egen "resa" utan ny position. Nu förs det
-        # till samma resa. Allt annat är ett fel.
+        # vid ankomsten) kom och gjorde resten till en egen "resa" utan ny position, med flaggan
+        # "möjligen tur och retur". Nu förs det till samma resa. Allt annat är ett fel.
         expected = list(old_spans)
+        old_by_span = {(r.odometer_start, r.odometer_end): r for r in old_rows}
         for d in sc.drives:
-            if d.lag_kind != "partial" or not d.lag:
+            if not d.lag or d.lag_kind == "pos_late" or (d.odo_from, d.odo_to) not in new_spans:
                 continue
-            a, b = (d.odo_from, d.odo_to - d.partial), (d.odo_to - d.partial, d.odo_to)
-            if a in expected and b in expected:
-                expected[expected.index(a)] = (d.odo_from, d.odo_to)
-                expected.remove(b)
+            split = [x for (a, x) in expected if a == d.odo_from and (x, d.odo_to) in expected]
+            if split:
+                rest = old_by_span[(split[0], d.odo_to)]
+                assert "round_trip_unobserved" in rest.quality_flags, info  # utan ny position
+                expected[expected.index((d.odo_from, split[0]))] = (d.odo_from, d.odo_to)
+                expected.remove((split[0], d.odo_to))
                 out["merged_late_odometer"] += 1
         assert expected == new_spans, f"{info}\n gammal {old_spans}\n ny {new_spans}"
     old_by_start = {r.odometer_start: r for r in old_rows}
