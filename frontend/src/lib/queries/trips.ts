@@ -52,7 +52,7 @@ export function useTrips(params: TripListParams) {
 export function useTripDetail(id: string) {
   return useQuery({
     queryKey: qk.trips.detail(id),
-    queryFn: ({ signal }) => api.get<TripDetail>(`/trips/${id}`, { signal }),
+    queryFn: ({ signal }) => api.get<TripDetail>(`/trips/${encodeURIComponent(id)}`, { signal }),
   });
 }
 
@@ -112,7 +112,7 @@ export function useUpdateTrip() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, patch }: { id: string; patch: TripUpdate }) =>
-      api.patch<Trip>(`/trips/${id}`, patch, { timeoutMs: DECISION_TIMEOUT_MS }),
+      api.patch<Trip>(`/trips/${encodeURIComponent(id)}`, patch, { timeoutMs: DECISION_TIMEOUT_MS }),
     onMutate: async ({ id, patch }) => {
       await qc.cancelQueries({ queryKey: qk.trips.all });
       return { snapshot: optimisticTripPatch(qc, [id], patch) };
@@ -128,7 +128,7 @@ export function useApproveTrip() {
     /** `expected`: förslaget (kategori och syfte) som ägaren såg. Har det hunnit ändras svarar servern 409. */
     mutationFn: ({ id, expected }: { id: string; expected?: { category: CategoryCode; purpose: string | null } }) =>
       api.post<Trip>(
-        `/trips/${id}/approve`,
+        `/trips/${encodeURIComponent(id)}/approve`,
         expected ? { expected_category: expected.category, expected_purpose: expected.purpose } : undefined,
         { timeoutMs: DECISION_TIMEOUT_MS },
       ),
@@ -166,7 +166,7 @@ export function useMergeTrips() {
 export function useUnmerge() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: string) => api.post<Trip[]>(`/trips/${id}/unmerge`),
+    mutationFn: (id: string) => api.post<Trip[]>(`/trips/${encodeURIComponent(id)}/unmerge`),
     onSuccess: () => invalidateJournalData(qc),
   });
 }
@@ -175,7 +175,7 @@ export function useSplitTrip() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, afterIndex }: { id: string; afterIndex: number }) =>
-      api.post<Trip[]>(`/trips/${id}/split`, { after_index: afterIndex }),
+      api.post<Trip[]>(`/trips/${encodeURIComponent(id)}/split`, { after_index: afterIndex }),
     onSuccess: () => invalidateJournalData(qc),
   });
 }
@@ -190,7 +190,7 @@ export function useAllocate() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, rawTripId, parts }: { id: string; rawTripId: string; parts: AllocationPart[] }) =>
-      api.post<Trip>(`/trips/${id}/allocate`, { raw_trip_id: rawTripId, parts }),
+      api.post<Trip>(`/trips/${encodeURIComponent(id)}/allocate`, { raw_trip_id: rawTripId, parts }),
     onSuccess: () => invalidateJournalData(qc),
   });
 }
@@ -230,7 +230,7 @@ function invalidateAfterDelete(qc: QueryClient, ids: string[]): void {
 export function useDeleteTrip() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: string) => api.del(`/trips/${id}`),
+    mutationFn: (id: string) => api.del(`/trips/${encodeURIComponent(id)}`),
     onSuccess: (_d, id) => invalidateAfterDelete(qc, [id]),
   });
 }

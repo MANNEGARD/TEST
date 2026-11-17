@@ -120,7 +120,7 @@ AUDIT_LABELS = {
     "trip.undo_change": "Ändring ångrad",
     "trip.merge_declined": "Sammanslagning avböjd",
 }
-_INJECTION_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+_INJECTION_PREFIXES = ("=", "+", "-", "@", "\t", "\r", "\n")
 
 
 def safe_text(value: Any) -> str:

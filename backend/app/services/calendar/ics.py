@@ -63,6 +63,13 @@ MAX_EXPANDED = 20_000
 # Tidsbudget (sekunder väggtid) för expansionen. Prövas mellan serierna, så en enskild serie
 # kan dra över något; stegtaken ovan håller varje serie liten.
 EXPAND_SECONDS = 15.0
+# Högst så här många RRULE och EXRULE i en VEVENT. Alla regler i en VEVENT blir en enda serie
+# som tidsbudgeten inte kan avbryta; riktiga kalendrar har en regel per händelse.
+MAX_RULES = 10
+# Råtext som tvättas per fält (tecken). Bara de första 500 respektive 4 000 tecknen sparas,
+# så taket ligger långt över det och ändrar aldrig resultatet för verklig text.
+RAW_TEXT_MIN = 4_000
+RAW_TEXT_FACTOR = 16
 
 MSG_NOT_ICS = "Filen bakom länken är ingen kalender (ICS)."
 MSG_TOO_MANY = "Kalendern innehåller för många händelser (högst 25 000)."
@@ -117,6 +124,10 @@ class ParseResult:
     with_description: int = 0
     with_attendees: int = 0
     occurrences: int = 0  # ej inställda förekomster i fönstret (före ev. busy_only-rensning)
+    # Kapad under expansionen (tid eller MAX_EXPANDED): okänt vilka händelser som saknas.
+    expand_capped: bool = False
+    # Kapad vid MAX_OCCURRENCES: starten för den första förekomsten som föll bort.
+    cut_at: datetime | None = None
 
 
 def _as_utc(value: datetime | date, tz: ZoneInfo) -> datetime:
@@ -138,7 +149,7 @@ def _decoded(component: Any, name: str) -> Any:
     return value if isinstance(value, (datetime, date)) else None
 
 
-def _text(component: Any, name: str, limit: int) -> str | None:
+def _text(component: Any, name: str, limit: int, memo: dict[Any, Any] | None = None) -> str | None:
     value = component.get(name)
     if value is None:
         return None
@@ -146,17 +157,31 @@ def _text(component: Any, name: str, limit: int) -> str | None:
         value = value[0] if value else None
         if value is None:
             return None
-    return sanitize_text(str(value), limit)
+    # Kapa råtexten innan den tvättas (tecken för tecken), och tvätta samma text en gång per
+    # tolkning: en upprepad serie ger annars samma arbete för varje förekomst.
+    raw = str(value)[: max(limit * RAW_TEXT_FACTOR, RAW_TEXT_MIN)]
+    if memo is None:
+        return sanitize_text(raw, limit)
+    key = ("text", limit, raw)
+    if key not in memo:
+        memo[key] = sanitize_text(raw, limit)
+    return memo[key]
 
 
-def _description(component: Any) -> str | None:
+def _description(component: Any, memo: dict[Any, Any] | None = None) -> str | None:
     """Bokningens beskrivning med radbrytningarna kvar (tvättas vid sändning, se calendar_text)."""
     value = component.get("DESCRIPTION")
     if isinstance(value, list):
         value = value[0] if value else None
     if value is None:
         return None
-    return calendar_text.store_body(str(value))
+    raw = str(value)[: calendar_text.BODY_RAW_LIMIT]
+    if memo is None:
+        return calendar_text.store_body(raw)
+    key = ("body", raw)
+    if key not in memo:
+        memo[key] = calendar_text.store_body(raw)
+    return memo[key]
 
 
 def _attendees(component: Any) -> list[dict[str, str]] | None:
@@ -184,12 +209,19 @@ def _attendees(component: Any) -> list[dict[str, str]] | None:
     return out or None
 
 
-def _flag(component: Any, name: str) -> str:
-    return (_text(component, name, 40) or "").upper()
+def _flag(component: Any, name: str, memo: dict[Any, Any] | None = None) -> str:
+    return (_text(component, name, 40, memo) or "").upper()
 
 
 def _rrules(component: Any) -> list[Any]:
     value = component.get("RRULE")
+    if value is None:
+        return []
+    return list(value) if isinstance(value, list) else [value]
+
+
+def _exrules(component: Any) -> list[Any]:
+    value = component.get("EXRULE")
     if value is None:
         return []
     return list(value) if isinstance(value, list) else [value]
@@ -287,6 +319,27 @@ def _weeks_possible(months: frozenset[int], weeks: list[int]) -> bool:
     return False
 
 
+def _ordinal_monthday_possible(months: frozenset[int], monthdays: frozenset[int], ordinals: list[int]) -> bool:
+    """Kan k:te veckodagen i månaden (2MO, -1FR …) falla på någon av BYMONTHDAY-dagarna?
+    K:te veckodagen ligger alltid på dag 7(k−1)+1 … 7k (räknat bakifrån för k < 0). Generöst
+    räknat över alla månadslängder (28–31) som BYMONTH tillåter."""
+    lengths = {_MONTH_DAYS[m - 1] for m in months if 1 <= m <= 12} or {31}
+    if not months or 2 in months:
+        lengths |= {28, 29}
+    if not months:
+        lengths |= {30}
+    for length in lengths:
+        days = {d if d > 0 else length + 1 + d for d in monthdays if 1 <= abs(d) <= length}
+        for k in ordinals:
+            if not 1 <= abs(k) <= 5:
+                continue
+            first = 7 * (k - 1) + 1 if k > 0 else length + 1 - 7 * -k
+            last = 7 * k if k > 0 else length - 7 * (-k - 1)
+            if any(max(first, 1) <= d <= min(last, length) for d in days):
+                return True
+    return False
+
+
 def _never_occurs(rule: Any, freq: str, per: int) -> bool:
     """Sant för en regel som aldrig kan ge någon förekomst (30 februari, BYSETPOS=6 bland fem
     måndagar …). Biblioteket letar då efter nästa förekomst ända till år 9999, vilket tar
@@ -309,6 +362,8 @@ def _never_occurs(rule: Any, freq: str, per: int) -> bool:
     if ordinals and not plain:
         limit = 5 if freq == "MONTHLY" or (freq == "YEARLY" and months) else 53
         if not any(1 <= abs(n) <= limit for n in ordinals):
+            return True
+        if monthdays and limit == 5 and not _ordinal_monthday_possible(months, monthdays, ordinals):
             return True
     setpos = _ints(rule, "BYSETPOS")
     return bool(setpos) and not any(1 <= abs(n) <= per for n in setpos)
@@ -458,6 +513,9 @@ def _prefilter(
         if comp.get("RECURRENCE-ID") is not None or not (has_rrule or rdates):
             kept.append(comp)  # ändrade förekomster och enstaka händelser behålls alltid
             continue
+        if len(_rrules(comp)) + len(_exrules(comp)) > MAX_RULES:
+            skipped += 1
+            continue
         try:
             cost = _series_cost(comp, window_start, window_end, tz) if has_rrule else (0, 0)
         except (TypeError, ValueError, OverflowError, AttributeError):
@@ -542,13 +600,14 @@ def _sha(text: str) -> str:
 
 
 def _event_values(
-    comp: Any, tz: ZoneInfo, include_body: bool, recurring: set[str], aliases: dict[str, str] | None = None
+    comp: Any, tz: ZoneInfo, include_body: bool, recurring: set[str], aliases: dict[str, str] | None = None,
+    memo: dict[Any, Any] | None = None,
 ) -> dict[str, Any] | None:
     raw_start = _decoded(comp, "DTSTART")
     if raw_start is None:
         return None
     raw_end = _decoded(comp, "DTEND")
-    all_day = not isinstance(raw_start, datetime) or _flag(comp, "X-MICROSOFT-CDO-ALLDAYEVENT") == "TRUE"
+    all_day = not isinstance(raw_start, datetime) or _flag(comp, "X-MICROSOFT-CDO-ALLDAYEVENT", memo) == "TRUE"
     start_at = _as_utc(raw_start, tz)
     if raw_end is not None:
         end_at = _as_utc(raw_end, tz)
@@ -557,20 +616,20 @@ def _event_values(
     else:
         end_at = start_at
     end_at = max(end_at, start_at)
-    uid = _text(comp, "UID", 400)
+    uid = _text(comp, "UID", 400, memo)
     if uid and aliases:
         uid = aliases.get(uid, uid)
-    summary = _text(comp, "SUMMARY", 500)
+    summary = _text(comp, "SUMMARY", 500, memo)
     if uid:
         key = uid
     else:
         raw_text = comp.get("DTSTART").to_ical().decode("utf-8", "replace") if comp.get("DTSTART") else ""
         key = "nouid:" + _sha(f"{raw_text}|{summary or ''}")
     occ = _decoded(comp, "RECURRENCE-ID") or raw_start
-    busy = _flag(comp, "X-MICROSOFT-CDO-BUSYSTATUS")
+    busy = _flag(comp, "X-MICROSOFT-CDO-BUSYSTATUS", memo)
     if busy in _BUSY_STATUS:
         show_as = _BUSY_STATUS[busy]
-    elif _flag(comp, "TRANSP") == "TRANSPARENT":
+    elif _flag(comp, "TRANSP", memo) == "TRANSPARENT":
         show_as = "free"
     else:
         show_as = "busy"
@@ -582,17 +641,17 @@ def _event_values(
         "start_at": start_at,
         "end_at": end_at,
         "is_all_day": all_day,
-        "is_cancelled": _flag(comp, "STATUS") == "CANCELLED",
+        "is_cancelled": _flag(comp, "STATUS", memo) == "CANCELLED",
         "show_as": show_as,
-        "sensitivity": "private" if _flag(comp, "CLASS") in ("PRIVATE", "CONFIDENTIAL") else "normal",
+        "sensitivity": "private" if _flag(comp, "CLASS", memo) in ("PRIVATE", "CONFIDENTIAL") else "normal",
         "is_online": is_online,
         "online_provider": "teamsForBusiness" if is_online else None,
-        "location_name": _text(comp, "LOCATION", 500),
+        "location_name": _text(comp, "LOCATION", 500, memo),
         "location_address": None,
         "location_city": None,
         "latitude": None,
         "longitude": None,
-        "body_preview": _description(comp) if include_body else None,
+        "body_preview": _description(comp, memo) if include_body else None,
         "attendees": _attendees(comp) if include_body else None,
         "series_master_id": uid if uid and uid in recurring else None,
     }
@@ -639,10 +698,12 @@ def parse(
     result.skipped, recurring, aliases, found, failed, capped = expanded
     result.skipped += failed
     result.truncated = capped
+    result.expand_capped = capped
     occurrences: list[dict[str, Any]] = []
+    memo: dict[Any, Any] = {}
     for comp in found:
         try:
-            values = _event_values(comp, tz, include_body, recurring, aliases)
+            values = _event_values(comp, tz, include_body, recurring, aliases, memo)
         except Exception:
             values = None
         if values is None:
@@ -652,6 +713,7 @@ def parse(
             occurrences.append(values)
     occurrences.sort(key=lambda v: (v["start_at"], v["external_id"]))
     if len(occurrences) > MAX_OCCURRENCES:
+        result.cut_at = occurrences[MAX_OCCURRENCES]["start_at"]
         occurrences = occurrences[:MAX_OCCURRENCES]
         result.truncated = True
     by_id: dict[str, dict[str, Any]] = {}
@@ -773,6 +835,10 @@ def _upsert(
         ev.fetched_at = now
     for ext_id, ev in existing.items():
         if ext_id not in seen and ev.removed_at is None:
+            # En kapad tolkning har inte sett allt: det som kan ha fallit bort i kapningen ligger
+            # kvar som det senast kända läget, i stället för att markeras som borttaget.
+            if parsed.expand_capped or (parsed.cut_at is not None and _norm(ev.start_at) >= parsed.cut_at):
+                continue
             ev.removed_at = now  # borttagen ur länken (eller flyttad ur fönstret)
             stats["removed"] += 1
     db.flush()

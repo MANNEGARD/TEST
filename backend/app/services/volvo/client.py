@@ -22,13 +22,18 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
+from app.services.text_safety import sanitize_text
 from app.services.volvo import constants as C
 
 logger = logging.getLogger(__name__)
 
+# Ett riktigt VIN (ISO 3779): 17 tecken utan I, O och Q.
+_VIN_FORMAT = re.compile(r"^[A-HJ-NPR-Z0-9]{17}$", re.IGNORECASE)
+_VIN_IN_TEXT = re.compile(r"\b[A-HJ-NPR-Z0-9]{13}([A-HJ-NPR-Z0-9]{4})\b")
 _VIN_IN_PATH = re.compile(r"(/vehicles/)([A-HJ-NPR-Z0-9]{5,})([A-HJ-NPR-Z0-9]{4})(?=[/?\s\"']|$)", re.IGNORECASE)
 
 
@@ -59,6 +64,7 @@ _install_log_redaction()
 HTTP_TRANSPORT: httpx.BaseTransport | None = None
 DEFAULT_TIMEOUT = httpx.Timeout(20.0, connect=10.0)
 MAX_RETRIES = 2
+MAX_RESPONSE_BYTES = 10 * 1024 * 1024  # riktiga svar är några kB
 RETRY_BASE_SECONDS = 1.0
 
 _sleep: Callable[[float], None] = time.sleep
@@ -208,7 +214,11 @@ def _parse_retry_after(value: str | None) -> float | None:
 
 
 def _error_message(resp: httpx.Response) -> str:
-    """Plockar ut ett kort felmeddelande ur de tre API:ernas olika felformat."""
+    """Plockar ut ett kort felmeddelande ur de tre API:ernas olika felformat.
+
+    Texten tvättas från styrtecken och ett VIN i den maskeras (…+ fyra sista), eftersom den
+    sparas på fordonet och anslutningen och visas i API-svar.
+    """
     try:
         body = resp.json()
     except ValueError:
@@ -218,10 +228,31 @@ def _error_message(resp: httpx.Response) -> str:
         if isinstance(err, dict):
             msg = err.get("message") or err.get("description")
             if msg:
-                return str(msg)[:300]
+                return _clean_message(str(msg)[:300], resp.status_code)
         if isinstance(body.get("message"), str):
-            return body["message"][:300]
+            return _clean_message(body["message"][:300], resp.status_code)
     return f"HTTP {resp.status_code}"
+
+
+def _clean_message(text: str, status: int) -> str:
+    cleaned = sanitize_text(_VIN_IN_TEXT.sub(lambda m: f"…{m.group(1)}", text), 300)
+    return cleaned or f"HTTP {status}"
+
+
+class _TooLarge(Exception):
+    pass
+
+
+def _read_limited(http: httpx.Client, url: str, headers: dict[str, str]) -> httpx.Response:
+    """GET där svaret läses strömmat med en storleksgräns; kroppen finns sedan i ``content``."""
+    with http.stream("GET", url, headers=headers) as resp:
+        body = bytearray()
+        for chunk in resp.iter_bytes():
+            body.extend(chunk)
+            if len(body) > MAX_RESPONSE_BYTES:
+                raise _TooLarge
+        resp._content = bytes(body)
+    return resp
 
 
 def mask_vin(vin: str | None) -> str:
@@ -286,7 +317,9 @@ class VolvoClient:
             self.limiter.acquire()
             self.quota.record(api, self._now())
             try:
-                resp = self._http.get(url, headers=self._headers())
+                resp = _read_limited(self._http, url, self._headers())
+            except _TooLarge:
+                return ApiResult("error", None, message="Svaret från Volvo var för stort.", attempts=attempt)
             except httpx.HTTPError as exc:
                 if attempt <= MAX_RETRIES:
                     _sleep(RETRY_BASE_SECONDS * (2 ** (attempt - 1)) + _rng.uniform(0, 0.5))
@@ -335,7 +368,7 @@ class VolvoClient:
 
     def fetch(self, endpoint_name: str, vin: str) -> ApiResult:
         ep = C.ENDPOINTS[endpoint_name]
-        return self.get(ep.api, ep.path.format(vin=vin))
+        return self.get(ep.api, ep.path.format(vin=quote(vin, safe="")))
 
     def list_vehicles(self) -> list[str]:
         result = self.get(C.API_CONNECTED_VEHICLE, C.VEHICLE_LIST_PATH)
@@ -350,12 +383,13 @@ class VolvoClient:
         vins: list[str] = []
         for item in data or []:
             vin = item.get("vin") if isinstance(item, dict) else None
-            if isinstance(vin, str) and vin:
+            # Bara riktiga VIN: värdet sätts in i sökvägen för följande anrop.
+            if isinstance(vin, str) and _VIN_FORMAT.match(vin):
                 vins.append(vin)
         return vins
 
     def vehicle_details(self, vin: str) -> ApiResult:
-        return self.get(C.API_CONNECTED_VEHICLE, C.VEHICLE_DETAILS_PATH.format(vin=vin))
+        return self.get(C.API_CONNECTED_VEHICLE, C.VEHICLE_DETAILS_PATH.format(vin=quote(vin, safe="")))
 
 
 # ---------------------------------------------------------------------- tolkning

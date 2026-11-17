@@ -295,7 +295,7 @@ export function useDemoInbox(enabled: boolean) {
 export function useDemoRespond() {
   return useIntegrationMutation(
     ({ publicId, action, replyText }: { publicId: string; action: string; replyText?: string }) =>
-      api.post<RespondResult>(`/notifications/${publicId}/respond`, { action, reply_text: replyText ?? null, as_phone: true }),
+      api.post<RespondResult>(`/notifications/${encodeURIComponent(publicId)}/respond`, { action, reply_text: replyText ?? null, as_phone: true }),
     { journal: true },
   );
 }

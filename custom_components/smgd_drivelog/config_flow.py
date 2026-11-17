@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import socket
 from collections.abc import Mapping
 from typing import Any
 
@@ -22,7 +23,13 @@ from homeassistant.helpers.selector import (
 
 from .api import DriveLogApiClient, DriveLogAuthError, DriveLogError
 from .const import CONF_NOTIFY_SERVICE, CONF_SEND_FEEDBACK, CONF_TOKEN, CONF_URL, DOMAIN, NAME
-from .core import mobile_app_services, normalize_base_url, notify_service_name, token_has_scope
+from .core import (
+    mobile_app_services,
+    normalize_base_url,
+    notify_service_name,
+    secure_base_url,
+    token_has_scope,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -44,6 +51,13 @@ async def _validate(hass: HomeAssistant, url: str, token: str) -> tuple[dict[str
         base = normalize_base_url(url)
     except ValueError:
         return {}, {CONF_URL: "invalid_url"}
+
+    async def _resolve(host: str) -> list[str]:
+        infos = await hass.async_add_executor_job(socket.getaddrinfo, host, None)
+        return [info[4][0] for info in infos]
+
+    # http mot en publik adress blir https innan token skickas (lokala adresser behåller http).
+    base = await secure_base_url(base, _resolve)
     client = DriveLogApiClient(async_get_clientsession(hass), base, token.strip())
     try:
         who = await client.whoami()

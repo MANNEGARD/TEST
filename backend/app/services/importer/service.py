@@ -34,7 +34,7 @@ from app.models.enums import (
     TripSource,
     ValueQuality,
 )
-from app.services import audit
+from app.services import audit, text_safety
 from app.services import settings as settings_svc
 from app.services.audit import Actor
 from app.services.importer import parse
@@ -517,7 +517,8 @@ def commit(
         known[key] = raw  # type: ignore[index]
 
         category = v.get("category", Category.UNDECIDED)
-        notes = v.get("original_notes")
+        # Syftet tvättas från osynliga styr- och formattecken; originalanteckningen sparas orörd.
+        notes = text_safety.strip_invisible(v.get("original_notes"))
         has_purpose = bool(notes and notes.strip())
         # Källmärkt klassning ur originaljournalen. Okänd kategori → granskning.
         review = ReviewStatus.IMPORTED if category != Category.UNDECIDED else ReviewStatus.NEEDS_REVIEW
@@ -676,6 +677,16 @@ def _local_day_bounds(local_iso: str, tz: ZoneInfo) -> tuple[datetime, datetime]
     return start.astimezone(UTC), end.astimezone(UTC)
 
 
+def _safe_unlink(path: Path, root: Path) -> None:
+    """Raderar filen bara om den ligger under ``root`` (skydd mot en ändrad sökväg i databasen)."""
+    try:
+        resolved = path.resolve()
+        if root.resolve() in resolved.parents:
+            resolved.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def delete_original_files(db: Session, batch: ImportBatch, *, actor: Actor) -> int:
     """Raderar lagrade originalfiler för en import (resorna påverkas inte)."""
     removed = 0
@@ -685,10 +696,7 @@ def delete_original_files(db: Session, batch: ImportBatch, *, actor: Actor) -> i
                 select(ImportedFile.id).where(ImportedFile.stored_path == f.stored_path, ImportedFile.id != f.id).limit(1)
             ).first()
             if not still_used:
-                try:
-                    Path(f.stored_path).unlink(missing_ok=True)
-                except OSError:
-                    pass
+                _safe_unlink(Path(f.stored_path), get_config().uploads_dir)
             f.stored_path = None
             removed += 1
     audit.record(db, actor, "import.delete_files", "import_batch", batch.id, after={"removed": removed})

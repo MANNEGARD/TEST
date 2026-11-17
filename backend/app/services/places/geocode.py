@@ -42,6 +42,7 @@ from datetime import datetime, timedelta
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
+import httpcore
 import httpx
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -671,14 +672,31 @@ def _apply_address(db: Session, loc: KnownLocation, addr: GeoAddress, now: datet
 
 
 def _existing_for(db: Session, loc: KnownLocation, addr: GeoAddress) -> KnownLocation | None:
-    """Befintlig plats (t.ex. från importen) med samma gatuadress."""
+    """Befintlig plats (t.ex. från importen) med samma gatuadress.
+
+    En plats vars position är säker (ägarens eller bilens, inte bara uppslagen ur adressen)
+    slås bara ihop med ett stopp i närheten. Annars kunde ett felaktigt kartsvar flytta
+    stopp långt bort till bostaden eller kontoret.
+    """
     if not addr.house_number:
         return None
     for text in _address_variants(addr):
         found = places.find_by_address(db, loc.owner_user_id, text)
         if found is not None and found.id != loc.id and bool(found.is_demo) == bool(loc.is_demo):
-            return found
+            return found if _near_enough(found, loc) else None
     return None
+
+
+ALIAS_MERGE_MAX_M = 2000  # ett stopp längre bort än så från en plats med säker position slås inte ihop
+
+
+def _near_enough(target: KnownLocation, loc: KnownLocation) -> bool:
+    if target.latitude is None or target.longitude is None or target.coordinate_source == COORDINATE_GEOCODED:
+        return True
+    if not valid_coordinates(loc.latitude, loc.longitude):
+        return True
+    d = haversine_m(loc.latitude, loc.longitude, target.latitude, target.longitude)  # type: ignore[arg-type]
+    return d <= max(float(target.radius_m or 0), ALIAS_MERGE_MAX_M)
 
 
 def _address_variants(addr: GeoAddress) -> list[str]:
@@ -782,10 +800,28 @@ def _check_ip(value: str) -> None:
         ip = ipaddress.ip_address(value.split("%", 1)[0])
     except ValueError as exc:
         raise ValueError("Geokodarens adress är ogiltig.") from exc
-    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
-        ip = ip.ipv4_mapped
+    if isinstance(ip, ipaddress.IPv6Address):
+        if ip in _SITE_LOCAL_V6:
+            raise ValueError("Geokodaren pekar på en lokal eller reserverad adress.")
+        ip = _embedded_ipv4(ip)
     if not ip.is_global or ip.is_multicast:
         raise ValueError("Geokodaren pekar på en lokal eller reserverad adress.")
+
+
+# IPv6-adresser som bär en IPv4-adress i de sista 32 bitarna: IPv4-mappad, IPv4-kompatibel
+# (::/96), SIIT (::ffff:0:0:0/96) och NAT64 (64:ff9b::/96). Den inbäddade adressen prövas
+# med samma regel, så att t.ex. 64:ff9b::a9fe:a9fe inte når 169.254.169.254 via NAT64.
+_EMBEDDED_V4_NETS = tuple(
+    ipaddress.IPv6Network(n) for n in ("::ffff:0:0/96", "::/96", "::ffff:0:0:0/96", "64:ff9b::/96")
+)
+_SITE_LOCAL_V6 = ipaddress.IPv6Network("fec0::/10")
+
+
+def _embedded_ipv4(ip: ipaddress.IPv6Address) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
+    for net in _EMBEDDED_V4_NETS:
+        if ip in net:
+            return ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)
+    return ip
 
 
 def _check_peer(response: httpx.Response, *, required: bool) -> None:
@@ -816,8 +852,61 @@ def _throttle() -> None:
         _last_call = now
 
 
+class _CheckedBackend(httpcore.NetworkBackend):
+    """Nätverksbackend som slår upp namnet, prövar varje adress med ``_check_ip`` och
+    ansluter till just de prövade adresserna. Värdnamnet används ändå för SNI, Host och
+    certifikatkontrollen. Stänger DNS-ombindning före anslutningen, inte först efter svaret.
+    Adresserna prövas i samma ordning som ``socket.create_connection`` skulle ha gjort."""
+
+    def __init__(self) -> None:
+        self._inner = httpcore.SyncBackend()
+
+    def connect_tcp(
+        self,
+        host: str,
+        port: int,
+        timeout: float | None = None,
+        local_address: str | None = None,
+        socket_options: Any = None,
+    ) -> httpcore.NetworkStream:
+        try:
+            infos = _getaddrinfo(host, port, type=socket.SOCK_STREAM)
+        except (OSError, UnicodeError) as exc:
+            raise httpcore.ConnectError(type(exc).__name__) from None
+        addrs: list[str] = []
+        for info in infos or []:
+            addr = str(info[4][0])
+            if addr not in addrs:
+                addrs.append(addr)
+        if not addrs:
+            raise httpcore.ConnectError("Inga adresser.")
+        for addr in addrs:
+            try:
+                _check_ip(addr)
+            except ValueError as exc:
+                raise GeocodeError(str(exc)) from None
+        last: Exception | None = None
+        for addr in addrs:
+            try:
+                return self._inner.connect_tcp(
+                    addr, port, timeout=timeout, local_address=local_address, socket_options=socket_options
+                )
+            except (httpcore.ConnectError, httpcore.ConnectTimeout) as exc:
+                last = exc
+        assert last is not None
+        raise last
+
+    def connect_unix_socket(self, path: str, timeout: float | None = None, socket_options: Any = None) -> Any:
+        raise httpcore.ConnectError("Unix-socket används inte.")
+
+    def sleep(self, seconds: float) -> None:
+        self._inner.sleep(seconds)
+
+
 def _real_transport() -> httpx.BaseTransport:
-    return httpx.HTTPTransport(verify=True, trust_env=False, retries=0)
+    transport = httpx.HTTPTransport(verify=True, trust_env=False, retries=0)
+    transport._pool._network_backend = _CheckedBackend()  # type: ignore[attr-defined]
+    return transport
 
 
 def reverse(

@@ -90,7 +90,8 @@ function useOAuthReturn(open: (provider: ProviderKey) => void) {
         toast.success(r.connected, { description: r.next, duration: 8000 });
       } else {
         toast.error(`${name} kunde inte anslutas.`, {
-          description: RETURN_REASONS[reason] ?? (reason ? `Leverantören svarade: ${reason}.` : "Försök igen."),
+          // Okända koder visas bara om de ser ut som en felkod (inte fri text ur adressfältet).
+          description: RETURN_REASONS[reason] ?? (/^[A-Za-z0-9_-]{1,40}$/.test(reason) ? `Leverantören svarade: ${reason}.` : "Försök igen."),
           duration: 12000,
         });
       }

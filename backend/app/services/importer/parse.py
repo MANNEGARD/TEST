@@ -23,8 +23,12 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from app.services.places.normalize import clean, fold
+from app.services.text_safety import strip_invisible
 
 MAX_UNCOMPRESSED_BYTES = 150 * 1024 * 1024
+# openpyxl läser alla delade strängar till minnet. En verklig körjournal (högst 20 000 rader per
+# fil) har några MB; taket ger stor marginal även för långa anteckningar i varje rad.
+MAX_SHARED_STRINGS_BYTES = 50 * 1024 * 1024
 MAX_ZIP_ENTRIES = 2000
 MAX_COLUMNS = 60
 HEADER_SCAN_ROWS = 15
@@ -255,6 +259,29 @@ def _raw_repr(value: Any) -> Any:
 # ----------------------------------------------------------------------- inläsning
 
 
+_CT_OVERRIDE_RE = re.compile(r"<(?:\w+:)?Override\b[^>]*>", re.IGNORECASE)
+_CT_PART_RE = re.compile(r"PartName\s*=\s*[\"']/?([^\"']+)[\"']", re.IGNORECASE)
+MAX_CONTENT_TYPES_BYTES = 1024 * 1024
+
+
+def _shared_strings_parts(zf: zipfile.ZipFile, infos: list[zipfile.ZipInfo]) -> set[str]:
+    """Delarna (gemener) som openpyxl läser som delade strängar: standardnamnet och det
+    namn som [Content_Types].xml anger."""
+    parts = {"xl/sharedstrings.xml"}
+    ct = next((i for i in infos if i.filename.lower() == "[content_types].xml"), None)
+    if ct is None:
+        return parts
+    if ct.file_size > MAX_CONTENT_TYPES_BYTES:  # en verklig är några kB
+        raise ImportFileError("Filen är inte en giltig Excel-arbetsbok.")
+    text = zf.read(ct).decode("utf-8", errors="replace")
+    for element in _CT_OVERRIDE_RE.findall(text):
+        if "sharedstrings" in element.lower():
+            m = _CT_PART_RE.search(element)
+            if m:
+                parts.add(m.group(1).lower())
+    return parts
+
+
 def _guard_xlsx(data: bytes) -> None:
     if not zipfile.is_zipfile(io.BytesIO(data)):
         raise ImportFileError("Filen är inte en giltig XLSX-fil.")
@@ -265,6 +292,9 @@ def _guard_xlsx(data: bytes) -> None:
                 raise ImportFileError("Filen innehåller orimligt många delar.")
             total = sum(i.file_size for i in infos)
             if total > MAX_UNCOMPRESSED_BYTES:
+                raise ImportFileError("Filen är för stor när den packas upp.")
+            strings_parts = _shared_strings_parts(zf, infos)
+            if any(i.file_size > MAX_SHARED_STRINGS_BYTES for i in infos if i.filename.lower() in strings_parts):
                 raise ImportFileError("Filen är för stor när den packas upp.")
             names = {i.filename.lower() for i in infos}
             if any(n.endswith("vbaproject.bin") for n in names):
@@ -485,8 +515,9 @@ def _parse_row(pr: ParsedRow, cell: dict[str, Any], tz: ZoneInfo, date1904: bool
         elif elapsed - duration > 300:
             v["includes_stops"] = True  # källan har redan slagit ihop delsträckor
 
-    v["start_address"] = clean(cell.get("start_address")) or None
-    v["end_address"] = clean(cell.get("end_address")) or None
+    # Osynliga styr- och formattecken (bidi, nollbredd) tas bort ur adresserna.
+    v["start_address"] = clean(strip_invisible(cell.get("start_address"))) or None
+    v["end_address"] = clean(strip_invisible(cell.get("end_address"))) or None
 
     fuel = parse_number(cell.get("fuel"))
     energy = parse_number(cell.get("energy"))

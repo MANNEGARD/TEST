@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import uuid
 from datetime import datetime
 
@@ -14,13 +16,23 @@ from app.api.errors import ApiError, bad_request, not_found
 from app.config import get_config
 from app.db import utcnow
 from app.models import ApiToken, User
-from app.security import passwords, ratelimit, sessions
+from app.security import crypto, passwords, ratelimit, sessions
 from app.services import audit, vehicles
 from app.services.export import links
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 ALLOWED_TOKEN_SCOPES = {"ha"}
+
+# Kaka för känd enhet: sätts vid lyckad inloggning. Ett försök som bär en giltig sådan kaka
+# räknas per enhet i stället för per konto, så att den som gissar mot kontot inte kan låsa ute
+# ägaren från de enheter där hen redan har loggat in. Kakan gäller tills lösenordet byts.
+DEVICE_COOKIE = "drivelog_device"
+DEVICE_COOKIE_MAX_AGE = 365 * 24 * 3600
+
+# Spärr mot gissning av nuvarande lösenord vid lösenordsbyte (bara felaktiga försök räknas).
+PASSWORD_CHANGE_ATTEMPTS = 8
+PASSWORD_CHANGE_WINDOW_SECONDS = 300
 
 _DUMMY_HASH: str | None = None
 
@@ -99,6 +111,34 @@ def _set_cookie(response: Response, token: str) -> None:
     )
 
 
+def _device_signature(user: User, nonce: str) -> str:
+    msg = f"device:{user.id}:{user.password_hash}:{nonce}".encode()
+    return hmac.new(get_config().secret_key.encode(), msg, hashlib.sha256).hexdigest()
+
+
+def _known_device(request: Request, user: User | None) -> str | None:
+    """Enhetens slumpdel om kakan är giltig för just det här kontot, annars None."""
+    raw = request.cookies.get(DEVICE_COOKIE) or ""
+    nonce, _, sig = raw.partition(".")
+    if user is None or not nonce or not sig or len(raw) > 200:
+        return None
+    return nonce if crypto.constant_time_equals(sig, _device_signature(user, nonce)) else None
+
+
+def _set_device_cookie(response: Response, user: User, nonce: str | None) -> None:
+    cfg = get_config()
+    nonce = nonce or crypto.random_token(16)
+    response.set_cookie(
+        DEVICE_COOKIE,
+        f"{nonce}.{_device_signature(user, nonce)}",
+        max_age=DEVICE_COOKIE_MAX_AGE,
+        httponly=True,
+        secure=cfg.use_secure_cookies,
+        samesite="strict",
+        path=f"{cfg.api_prefix}/auth/login",
+    )
+
+
 def _validate_email(email: str) -> str:
     email = email.strip().lower()
     if "@" not in email or email.startswith("@") or email.endswith("@") or " " in email:
@@ -155,20 +195,24 @@ def login(body: Credentials, request: Request, response: Response, db: DbDep) ->
     email = body.email.strip().lower()
     limit, window = cfg.login_rate_limit_attempts, cfg.login_rate_limit_window_seconds
     ip_key, user_key = f"login:ip:{ip}", f"login:user:{email}"
-    # Avvisade (429) försök registreras inte och förlänger alltså inte spärren.
-    for key in (ip_key, user_key):
-        allowed, wait = ratelimit.check(key, limit, window)
-        if not allowed:
-            raise ApiError(429, f"För många inloggningsförsök. Vänta {wait} sekunder.", "rate_limited")
-    ratelimit.record(ip_key, window)
     user = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
+    device = _known_device(request, user)
+    # En känd enhet räknas mot en egen spärr i stället för kontots.
+    account_key = f"login:dev:{crypto.sha256_hex(device)[:32]}" if device else user_key
+    # Försöket räknas innan lösenordet prövas, i samma låsta steg som prövningen, så att
+    # samtidiga försök inte tar sig förbi spärren. Avvisade (429) försök registreras inte och
+    # förlänger alltså inte spärren.
+    allowed, wait = ratelimit.try_acquire([ip_key, account_key], limit, window)
+    if not allowed:
+        raise ApiError(429, f"För många inloggningsförsök. Vänta {wait} sekunder.", "rate_limited")
     # Verifiera alltid exakt en hash så att svarstiden inte avslöjar om kontot finns.
     stored = user.password_hash if user else _dummy_hash()
     ok = passwords.verify_password(stored, body.password)
     if user is None or not ok or not user.is_active:
-        # Kontospärren räknar bara misslyckade försök.
-        ratelimit.record(user_key, window)
-        audit.record(db, audit.Actor("user", None, None, ip), "auth.login_failed", "user", None, after={"email": email})
+        # Den inskrivna texten sparas bara när den är adressen till ett befintligt konto (ett
+        # lösenord som skrivits i fel fält ska inte hamna i ändringsloggen eller i kopiorna).
+        after = {"email": email} if user is not None else {"known_account": False}
+        audit.record(db, audit.Actor("user", None, None, ip), "auth.login_failed", "user", None, after=after)
         db.commit()
         raise ApiError(401, "Fel e-postadress eller lösenord.", "invalid_credentials")
     if passwords.needs_rehash(user.password_hash):
@@ -176,8 +220,12 @@ def login(body: Credentials, request: Request, response: Response, db: DbDep) ->
     token, sess = sessions.create_session(db, user, user_agent=request.headers.get("user-agent", ""), ip=ip)
     audit.record(db, audit.user_actor(user.id, ip), "auth.login", "user", user.id)
     db.commit()
-    ratelimit.reset(f"login:user:{email}")
+    # Kontospärren räknar bara misslyckade försök: ett lyckat nollställer den.
+    ratelimit.reset(user_key)
+    if account_key != user_key:
+        ratelimit.reset(account_key)
     _set_cookie(response, token)
+    _set_device_cookie(response, user, device)
     return SessionOut(user=_user_out(user), csrf_token=sess.csrf_token)
 
 
@@ -200,8 +248,16 @@ def me(principal: WebPrincipalDep) -> SessionOut:
 @router.post("/change-password", status_code=204, summary="Byt lösenord")
 def change_password(body: PasswordChange, principal: WebPrincipalDep, db: DbDep) -> Response:
     user = principal.user
+    pw_key = f"pwchange:{user.id}"
+    allowed, wait = ratelimit.try_acquire([pw_key], PASSWORD_CHANGE_ATTEMPTS, PASSWORD_CHANGE_WINDOW_SECONDS)
+    if not allowed:
+        raise ApiError(429, f"För många försök. Vänta {wait} sekunder.", "rate_limited")
     if not passwords.verify_password(user.password_hash, body.current_password):
+        audit.record(db, principal.actor, "auth.password_change_failed", "user", user.id)
+        db.commit()
         raise bad_request("Nuvarande lösenord stämmer inte.", "invalid_credentials")
+    # Bara felaktiga nuvarande lösenord räknas mot spärren.
+    ratelimit.reset(pw_key)
     problem = passwords.validate_password_strength(body.new_password)
     if problem:
         raise bad_request(problem, "weak_password")

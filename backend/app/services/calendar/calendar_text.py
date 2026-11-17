@@ -19,6 +19,9 @@ from app.services.places.normalize import fold
 from app.services.text_safety import sanitize_text
 
 BODY_STORE_LIMIT = 4000
+# Råtext som tvättas innan den kapas till BODY_STORE_LIMIT. Långt över det, så att även en
+# beskrivning med stora block av blanksteg och tomma rader ger samma lagrade text.
+BODY_RAW_LIMIT = 64_000
 BODY_SEND_LIMIT = 1500
 NAME_LIMIT = 80
 MAX_ATTENDEES = 50
@@ -67,7 +70,7 @@ def store_body(value: Any) -> str | None:
     """Beskrivningen som den lagras: styrtecken bort, radbrytningar kvar, högst 4 000 tecken."""
     if value is None:
         return None
-    text = str(value).replace("\r\n", "\n").replace("\r", "\n")
+    text = str(value)[:BODY_RAW_LIMIT].replace("\r\n", "\n").replace("\r", "\n")
     lines = [sanitize_text(line, limit=BODY_STORE_LIMIT) or "" for line in text.split("\n")]
     out = "\n".join(lines).strip()
     # Många tomma rader i rad blir en.
@@ -252,23 +255,37 @@ def domain_matches(domain: str | None, *names: str | None) -> bool:
     return False
 
 
+# Andranivåsuffix (co.uk, com.au …): en sådan "domän" är aldrig en arbetsgivare, och som
+# jobbdomän skulle varje adress under suffixet räknas som kollega.
+_SUFFIX_LABELS = frozenset({"co", "com", "org", "net", "ac", "gov", "ltd", "plc"})
+
+
+def _suffix_only(domain: str) -> bool:
+    labels = domain.split(".")
+    return len(labels) == 2 and labels[0] in _SUFFIX_LABELS
+
+
 def learn_owner(events: list[dict[str, Any]]) -> tuple[str | None, str | None]:
     """(ägarens egen adress, ägarens jobbdomän) ur bokningarnas deltagare.
 
     Egen adress = den som förekommer i flest bokningar med deltagare, om den finns i minst
-    hälften av dem. Domänen = den egna adressens domän, annars vanligaste arrangörsdomänen,
-    annars vanligaste deltagardomänen – aldrig en allmän domän.
+    hälften av dem; vid lika antal den som syntes i en tidigare bokning. Står det då fortfarande
+    lika (samma bokning) gissas ingen adress. Domänen = den egna adressens
+    domän, annars vanligaste arrangörsdomänen, annars vanligaste deltagardomänen – aldrig en
+    allmän domän eller ett andranivåsuffix. Inställda bokningar räknas inte.
     """
-    with_people = [e.get("attendees") or [] for e in events if e.get("attendees")]
+    with_people = [e.get("attendees") or [] for e in events if e.get("attendees") and not e.get("is_cancelled")]
     if not with_people:
         return None, None
     seen_in: Counter[str] = Counter()
     organizers: Counter[str] = Counter()
     everyone: Counter[str] = Counter()
-    for people in with_people:
+    first_seen: dict[str, int] = {}
+    for index, people in enumerate(with_people):
         emails = {str(p.get("email") or "").lower() for p in people if p.get("email")}
         for email in emails:
             seen_in[email] += 1
+            first_seen.setdefault(email, index)
         for p in people:
             domain = domain_of(str(p.get("email") or ""))
             if not domain or is_generic(domain):
@@ -277,18 +294,27 @@ def learn_owner(events: list[dict[str, Any]]) -> tuple[str | None, str | None]:
             if p.get("role") == "organizer":
                 organizers[domain] += 1
     self_email = None
+    domain = None
     if seen_in:
         email, count = seen_in.most_common(1)[0]
         if count * 2 >= len(with_people):
-            self_email = email
-    domain = domain_of(self_email)
+            # Ordningen inom en bokning är slumpmässig (en mängd): bara den som syntes i en
+            # tidigare bokning vinner ett lika antal, annars avgör ingen gissning.
+            first = min(first_seen[e] for e, n in seen_in.items() if n == count)
+            tied = [e for e, n in seen_in.items() if n == count and first_seen[e] == first]
+            email = tied[0]
+            if len(tied) == 1:
+                self_email = email
+                domain = domain_of(email)
+            elif len({domain_of(e) for e in tied}) == 1:
+                domain = domain_of(email)  # lika antal men samma domän: domänen är ändå säker
     if not domain or is_generic(domain):
         domain = None
         if organizers:
             domain = organizers.most_common(1)[0][0]
         elif everyone:
             domain = everyone.most_common(1)[0][0]
-    if domain is not None and not WORK_DOMAIN_RE.match(domain):
+    if domain is not None and (not WORK_DOMAIN_RE.match(domain) or _suffix_only(domain)):
         domain = None  # t.ex. en domän med å/ä/ö: ägaren fyller i den själv
     return self_email, domain
 

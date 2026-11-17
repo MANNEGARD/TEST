@@ -79,6 +79,13 @@ def absolute_url(base_url: str, path: str) -> str:
     return base_url.rstrip("/") + "/" + path.lstrip("/")
 
 
+def _no_html(text: str) -> str:
+    """Companion för Android tolkar HTML i notisen; < och > byts mot ‹ › (ser likadana ut).
+
+    ``&`` lämnas orört, annars skulle "A & B" visas som "&amp;"."""
+    return text.replace("<", "‹").replace(">", "›")
+
+
 def build_notify_data(
     *,
     public_id: str,
@@ -104,8 +111,8 @@ def build_notify_data(
             item["icon"] = a["icon"]
         ha_actions.append(item)
     return {
-        "title": ("Påminnelse: " + title) if reminder else title,
-        "message": message,
+        "title": _no_html(("Påminnelse: " + title) if reminder else title),
+        "message": _no_html(message),
         "data": {
             "tag": tag_for(public_id),
             "group": GROUP,

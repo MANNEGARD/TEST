@@ -12,7 +12,9 @@ Sökvägarna nedan måste stämma exakt med backend/app/api/routes/ha.py.
 
 from __future__ import annotations
 
+import ipaddress
 import re
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -98,6 +100,33 @@ def normalize_base_url(url: str) -> str:
     return urlunsplit((parts.scheme, parts.netloc, path.rstrip("/"), "", ""))
 
 
+async def secure_base_url(base_url: str, resolve: Callable[[str], Awaitable[list[str]]]) -> str:
+    """Byter http mot https när adressen bara pekar på publika adresser.
+
+    Görs innan token skickas första gången: mot en publik server svarar proxyn ändå med
+    en omdirigering till https, men då har token redan gått okrypterad. Värdnamn utan
+    punkt (tilläggets värdnamn), namn som inte går att slå upp och namn som pekar på
+    privata, lokala eller CGNAT-adresser behåller http. ``resolve`` slår upp värdens
+    adresser (``getaddrinfo`` i en executor i Home Assistant).
+    """
+    parts = urlsplit(base_url)
+    host = parts.hostname
+    if parts.scheme != "http" or not host:
+        return base_url
+    try:
+        addresses = [ipaddress.ip_address(host)]
+    except ValueError:
+        if "." not in host:
+            return base_url
+        try:
+            addresses = [ipaddress.ip_address(str(a).split("%")[0]) for a in await resolve(host)]
+        except (OSError, ValueError):
+            return base_url
+    if not addresses or not all(a.is_global for a in addresses):
+        return base_url
+    return urlunsplit(("https", parts.netloc, parts.path, "", ""))
+
+
 def api_url(base_url: str, path: str) -> str:
     return base_url.rstrip("/") + path
 
@@ -170,6 +199,81 @@ class OutboxDelivery:
 
 
 NO_SERVICE_ERROR = "Ingen notify.mobile_app-tjänst är vald i DriveLog eller i integrationen."
+REFUSED_ERROR = "Notisen avvisades: den innehöll annat än DriveLogs eget notisformat."
+
+# Det DriveLog själv bygger (backend/app/services/ha/actions.py, build_notify_data och
+# build_clear_data). Allt annat släpps; Companion-kommandon, främmande länkar och
+# åtgärder utan DRIVELOG_ avvisar hela notisen.
+_TEXT_KEYS = ("title", "message")
+_DATA_TEXT_KEYS = ("tag", "group")
+_ACTION_TEXT_KEYS = ("title", "textInputButtonTitle", "textInputPlaceholder", "icon")
+_ACTION_DATA_KEYS = ("drivelog_id", "kind")
+_INTERRUPTION_LEVELS = ("active",)
+_CLEAR = "clear_notification"
+_COMMAND_RE = re.compile(r"^(?:TTS|[a-z]+(?:_[a-z]+)+)$")
+
+
+class _Refused(ValueError):
+    pass
+
+
+def _no_html(text: str) -> str:
+    """Companion för Android tolkar HTML i notisen; < och > byts mot ‹ › (ser likadana ut)."""
+    return text.replace("<", "‹").replace(">", "›")
+
+
+def _web_link(value: Any) -> str:
+    if not isinstance(value, str) or urlsplit(value).scheme.lower() not in ("http", "https"):
+        raise _Refused
+    return value
+
+
+def _safe_action(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict) or parse_action_id(raw.get("action")) is None:
+        raise _Refused
+    out: dict[str, Any] = {"action": raw["action"]}
+    for key in _ACTION_TEXT_KEYS:
+        if isinstance(raw.get(key), str):
+            out[key] = raw[key]
+    if "uri" in raw:
+        out["uri"] = _web_link(raw["uri"])
+    if "behavior" in raw:
+        if raw["behavior"] != "textInput":
+            raise _Refused
+        out["behavior"] = raw["behavior"]
+    return out
+
+
+def safe_notify_data(data: dict[str, Any]) -> dict[str, Any]:
+    """Bygger om tjänstedatan ur en vitlista. Kastar ValueError om notisen ska avvisas."""
+    message = data.get("message")
+    if not isinstance(message, str):
+        raise _Refused
+    inner = data.get("data") if isinstance(data.get("data"), dict) else {}
+    tag = inner.get("tag")
+    if message.strip() == _CLEAR:
+        if not isinstance(tag, str) or not tag.startswith("drivelog-"):
+            raise _Refused
+        return {"message": _CLEAR, "data": {"tag": tag}}
+    if _COMMAND_RE.match(message.strip()):
+        raise _Refused
+    out: dict[str, Any] = {k: _no_html(data[k]) for k in _TEXT_KEYS if isinstance(data.get(k), str)}
+    safe: dict[str, Any] = {k: inner[k] for k in _DATA_TEXT_KEYS if isinstance(inner.get(k), str)}
+    if "url" in inner:
+        safe["url"] = _web_link(inner["url"])
+    push = inner.get("push")
+    if isinstance(push, dict) and push.get("interruption-level") in _INTERRUPTION_LEVELS:
+        safe["push"] = {"interruption-level": push["interruption-level"]}
+    action_data = inner.get("action_data")
+    if isinstance(action_data, dict):
+        safe["action_data"] = {k: action_data[k] for k in _ACTION_DATA_KEYS if isinstance(action_data.get(k), str)}
+    if "actions" in inner:
+        if not isinstance(inner["actions"], list):
+            raise _Refused
+        safe["actions"] = [_safe_action(a) for a in inner["actions"]]
+    if safe:
+        out["data"] = safe
+    return out
 
 
 def parse_outbox(
@@ -199,6 +303,11 @@ def parse_outbox(
             continue
         if not isinstance(data.get("message"), str):
             failed.append({"id": item_id, "error": "Notisen saknar text."})
+            continue
+        try:
+            data = safe_notify_data(data)
+        except ValueError:
+            failed.append({"id": item_id, "error": REFUSED_ERROR})
             continue
         deliveries.append(OutboxDelivery(id=item_id, type=kind, service=service, data=data))
     return deliveries, failed

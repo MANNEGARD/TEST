@@ -197,10 +197,83 @@ const lineCount = (locator) =>
     return tops.size;
   });
 
+// ----------------------------------------------------------------------------- ren logik (säkerhet)
+
+await section("målet efter inloggning", async () => {
+  step("safeNext: bara sökvägar på samma ursprung godtas, interna mål med frågesträng som förut");
+  const { safeNext } = await import(path.join(HERE, "..", "src", "lib", "safe-next.ts"));
+  const origin = "https://drivelog.example";
+  for (const bad of [
+    "/\\evil.example/x", "/\\\\evil.example", "/\t/evil.example", "/\n/evil.example", "//evil.example",
+    "https://evil.example", "/login?next=/x", "/login/", "", null,
+  ]) {
+    const got = safeNext(bad, origin);
+    if (got !== "/") fail(`safeNext(${JSON.stringify(bad)}) gav ${JSON.stringify(got)}`);
+  }
+  for (const ok of ["/", "/journal/", "/journal/?q=1", "/export/?manad=2026-10", "/journal/abc/#x", "/m/q/abc123/", "/settings/?sektion=om"]) {
+    const got = safeNext(ok, origin);
+    if (got !== ok) fail(`safeNext(${JSON.stringify(ok)}) gav ${JSON.stringify(got)}`);
+  }
+});
+
+await section("id i API-sökvägar", async () => {
+  step("Id ur adressfältet kodas när det sätts in i en API-sökväg");
+  const src = (f) => readFileSync(path.join(HERE, "..", "src", "lib", "queries", f), "utf8");
+  for (const [file, raw] of [["trips.ts", "`/trips/${id}`"], ["places.ts", "`/trips/${id}`"], ["notifications.ts", "`/trips/${tripId}`"]]) {
+    if (src(file).includes(raw)) fail(`${file}: ${raw} sätts in okodat`);
+  }
+});
+
 // ----------------------------------------------------------------------------- körning
 
 const browser = await chromium.launch();
 try {
+  await section("inloggning och next", async () => {
+    step("Inloggning: externa mål i ?next= byts mot startsidan, interna mål med frågesträng fungerar");
+    const lctx = await newContext(browser);
+    // Ett externt mål får aldrig nås; skulle det ändå laddas syns det på adressen.
+    await lctx.route((u) => u.hostname === "example.invalid", (r) => r.fulfill({ status: 200, contentType: "text/html", body: "<h1>extern</h1>" }));
+    const lp = await lctx.newPage();
+    for (const [next, want] of [
+      ["/%5Cexample.invalid/x", "/"],
+      ["/%09/example.invalid/", "/"],
+      [encodeURIComponent("/journal/?q=1"), "/journal/?q=1"],
+    ]) {
+      await lp.goto(`${BASE}/login/?next=${next}`);
+      await lp.getByLabel("E-postadress").fill("demo@example.com");
+      await lp.getByLabel("Lösenord", { exact: true }).fill("hemligt-demo");
+      await lp.getByRole("button", { name: "Logga in" }).click();
+      try {
+        await lp.waitForURL((u) => !u.pathname.startsWith("/login"), { timeout: 8000 });
+      } catch {
+        /* prövas nedan */
+      }
+      await lp.waitForTimeout(500);
+      const u = new URL(lp.url());
+      if (u.origin !== BASE || u.pathname + u.search !== want) fail(`next=${next} ledde till ${lp.url()} (väntat ${want})`);
+    }
+    await lctx.close();
+  });
+
+  await section("återkomst från leverantören", async () => {
+    step("Integrationer: kända felkoder och leverantörens kod visas, fri text ur adressen visas inte");
+    const octx = await newContext(browser);
+    const op = await octx.newPage();
+    await op.goto(`${BASE}/integrations/?microsoft=error&reason=unauthorized_client`);
+    await expectText(op, "Leverantören svarade: unauthorized_client.");
+    await op.goto(`${BASE}/integrations/?volvo=error&reason=access_denied`);
+    await expectText(op, "Inloggningen avbröts eller nekades.", 8000);
+    const free = "Volvo ID har spärrats. Gå till x.example";
+    await op.goto(`${BASE}/integrations/?volvo=error&reason=${encodeURIComponent(free)}`);
+    try {
+      await op.getByText("Försök igen.", { exact: true }).first().waitFor({ timeout: 8000 });
+    } catch {
+      fail('texten "Försök igen." visas inte för fri text');
+    }
+    if (await op.getByText("spärrats", { exact: false }).count()) fail("fri text ur adressfältet visas i appen");
+    await octx.close();
+  });
+
   const ctx = await newContext(browser);
   const page = await ctx.newPage();
   watch(page);

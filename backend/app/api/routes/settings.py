@@ -72,12 +72,25 @@ def _workplace_out(db, wp: WorkplacePeriod) -> dict[str, Any]:
             "valid_from": wp.valid_from, "valid_to": wp.valid_to, "note": wp.note}
 
 
+def _without_logo_file(section: dict[str, Any]) -> dict[str, Any]:
+    """Exportsektionen utan loggans filnamn på servern (bara de uppgifter som visas)."""
+    from app.services.export import logo as logo_svc
+
+    logo = section.get("logo")
+    if isinstance(logo, dict):
+        return {**section, "logo": logo_svc.public_meta(logo)}
+    return section
+
+
 @router.get("/settings", summary="Alla inställningar (med standardvärden)")
 def get_settings(principal: PrincipalDep, db: DbDep) -> dict[str, Any]:
     from app.services.classify import lunch
 
+    all_settings = settings_svc.get_all(db, principal.user.id)
+    if isinstance(all_settings.get("export"), dict):
+        all_settings = {**all_settings, "export": _without_logo_file(all_settings["export"])}
     return {
-        "settings": settings_svc.get_all(db, principal.user.id),
+        "settings": all_settings,
         "defaults": settings_svc.defaults(),
         # Lunchregeln kräver att minst ett av arbetsgivarens kontor finns som bekräftad plats.
         "status": {"lunch_office_ready": lunch.office_ready(db, principal.user.id)},
@@ -105,7 +118,7 @@ def update_settings(section: str, body: dict[str, Any], principal: WebPrincipalD
         autopilot.ensure_active_since(db, principal.user.id)
         updated = settings_svc.get_section(db, principal.user.id, section)
     db.commit()
-    return updated
+    return _without_logo_file(updated) if section == "export" else updated
 
 
 @router.get("/settings/workplaces/list", summary="Tjänsteställen med giltighetsperioder")

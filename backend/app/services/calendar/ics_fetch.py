@@ -205,6 +205,17 @@ def _get_once(
     url: str, injected: httpx.BaseTransport | None, headers: dict[str, str], deadline: float
 ) -> bytes | str:
     """Ett hopp: kroppen (bytes) vid 200, annars nästa adress (str) vid omdirigering."""
+    try:
+        return _get_once_inner(url, injected, headers, deadline)
+    except GeocodeError:
+        # Den riktiga transporten prövar adressen redan vid anslutningen (geocode._CheckedBackend).
+        error = _invalid(MSG_LOCAL)
+    raise error  # utanför except: inget __context__
+
+
+def _get_once_inner(
+    url: str, injected: httpx.BaseTransport | None, headers: dict[str, str], deadline: float
+) -> bytes | str:
     with httpx.Client(
         transport=injected or _real_transport(),
         trust_env=False,

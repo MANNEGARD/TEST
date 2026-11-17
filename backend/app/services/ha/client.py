@@ -13,6 +13,8 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 
 _SERVICE_RE = re.compile(r"^mobile_app_[a-z0-9_]{1,200}$")
+# Svaren läses strömmat med en gräns; riktiga svar (även /api/services) är långt mindre.
+MAX_RESPONSE_BYTES = 20 * 1024 * 1024
 
 # Transport som används när ingen anges uttryckligen (tester ersätter den med
 # httpx.MockTransport). None = vanlig nätverkstrafik.
@@ -93,10 +95,20 @@ class HAClient:
         self.close()
 
     def _request(self, method: str, path: str, json: Any | None = None) -> Any:
+        too_large = False
         try:
-            resp = self._client.request(method, path, json=json)
+            with self._client.stream(method, path, json=json) as resp:
+                body = bytearray()
+                for chunk in resp.iter_bytes():
+                    body.extend(chunk)
+                    if len(body) > MAX_RESPONSE_BYTES:
+                        too_large = True
+                        break
+                resp._content = bytes(body)
         except httpx.HTTPError as exc:
             raise HAError("Home Assistant kunde inte nås.", "unreachable") from exc
+        if too_large:
+            raise HAError("Svaret från Home Assistant var för stort.", "invalid")
         if resp.status_code in (401, 403):
             raise HAError("Home Assistant avvisade åtkomsttoken.", "auth", resp.status_code)
         if resp.status_code == 404:

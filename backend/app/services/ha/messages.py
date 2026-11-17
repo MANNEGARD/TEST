@@ -120,8 +120,8 @@ def purpose(
     message = f"Du har en tjänsteresa på {fmt_mil(trip.distance_km)} utan syfte. Vad var syftet?" if hide_locations else detail
     acts: list[dict[str, Any]] = []
     for i, text in enumerate(previous[:MAX_PURPOSE_BUTTONS]):
-        title = text if len(text) <= MAX_BUTTON_TITLE else text[: MAX_BUTTON_TITLE - 1] + "…"
-        acts.append({"key": f"{A.PURPOSE_PICK}{i}", "title": title, "purpose": text})
+        # Syftet innehåller ofta platsens namn: med "Dölj platser" som i självgående läge.
+        acts.append(_pick(f"{A.PURPOSE_PICK}{i}", "", text, hide_locations, f"Föreslaget ärende {i + 1}"))
     acts.append({"key": A.PURPOSE_TEXT, "title": "Ange nytt syfte", "text_input": True, "placeholder": "Syfte med resan"})
     acts.append({"key": A.OPEN, "title": "Öppna körjournal", "uri": _q_path(public_id)})
     return {

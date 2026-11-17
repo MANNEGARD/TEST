@@ -214,7 +214,7 @@ export function useTripsById(ids: string[]): Map<string, Trip> {
   const results = useQueries({
     queries: unique.map((id) => ({
       queryKey: qk.trips.detail(id),
-      queryFn: ({ signal }: { signal: AbortSignal }) => api.get<TripDetail>(`/trips/${id}`, { signal }),
+      queryFn: ({ signal }: { signal: AbortSignal }) => api.get<TripDetail>(`/trips/${encodeURIComponent(id)}`, { signal }),
       staleTime: 60_000,
       retry: false,
     })),

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from datetime import datetime, timedelta
 from typing import Any
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import RedirectResponse
@@ -33,6 +35,8 @@ from app.services.learning import feedback
 
 router = APIRouter(tags=["Calendar matching"])
 logger = logging.getLogger(__name__)
+# Formen på en OAuth-felkod (RFC 6749): gemener, siffror och understreck.
+_OAUTH_ERROR = re.compile(r"[a-z0-9_]+")
 PROVIDER = IntegrationProvider.MICROSOFT
 
 
@@ -198,8 +202,15 @@ def callback(
     if principal.api_token is not None:
         return RedirectResponse(f"{base}/integrations?microsoft=error&reason=session_required", status_code=302)
     if error or not code:
-        logger.info("Microsoft-inloggningen avbröts: %s", error)
-        return RedirectResponse(f"{base}/integrations?microsoft=error&reason={(error or 'missing_code')[:40]}", status_code=302)
+        # error kommer ur adressen och kan vara vad som helst: OAuth-felkoder (access_denied,
+        # consent_required …) skickas vidare som förut, allt annat blir "denied". Loggas med repr,
+        # så att radbrytningar inte kan bli egna loggrader.
+        reason = (error or "missing_code")[:40]
+        if not _OAUTH_ERROR.fullmatch(reason):
+            reason = "denied"
+        logger.info("Microsoft-inloggningen avbröts: %r", error[:100] if error else error)
+        query = urlencode({"microsoft": "error", "reason": reason})
+        return RedirectResponse(f"{base}/integrations?{query}", status_code=302)
     try:
         conn = sync.complete_authorization(db, principal.user.id, code=code, state=state or "")
         audit.record(db, principal.actor, "integration.connected", "integration", conn.id, after={"provider": PROVIDER})

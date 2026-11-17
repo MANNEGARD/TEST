@@ -49,7 +49,7 @@ export function useRespond(publicId: string) {
 export function useQuestionTrip(tripId: string | null | undefined) {
   return useQuery({
     queryKey: qk.trips.detail(tripId ?? ""),
-    queryFn: ({ signal }) => api.get<TripDetail>(`/trips/${tripId}`, { signal }),
+    queryFn: ({ signal }) => api.get<TripDetail>(`/trips/${encodeURIComponent(tripId ?? "")}`, { signal }),
     enabled: !!tripId,
     retry: false,
   });

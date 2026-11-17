@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import threading
 import time
+import uuid
 from collections import defaultdict, deque
 
 from app.config import get_config
@@ -88,6 +89,56 @@ def check(key: str, limit: int, window_seconds: int) -> tuple[bool, int]:
             q.popleft()
         if len(q) >= limit:
             return False, int(window_seconds - (now - q[0])) + 1
+        return True, 0
+
+
+# Prövar alla nycklar och registrerar försöket i dem alla bara om ingen är full, i ett steg.
+_TRY_ACQUIRE_LUA = """
+local now = tonumber(ARGV[1])
+local window = tonumber(ARGV[2])
+local limit = tonumber(ARGV[3])
+for _, k in ipairs(KEYS) do
+  redis.call('ZREMRANGEBYSCORE', k, 0, now - window)
+  if redis.call('ZCARD', k) >= limit then
+    return 0
+  end
+end
+for _, k in ipairs(KEYS) do
+  redis.call('ZADD', k, now, ARGV[4])
+  redis.call('EXPIRE', k, window)
+end
+return 1
+"""
+
+
+def try_acquire(keys: list[str], limit: int, window_seconds: int) -> tuple[bool, int]:
+    """Prövar och registrerar ett försök i samma låsta steg.
+
+    Försöket registreras i alla nycklar om ingen av dem har nått gränsen, annars i ingen
+    (ett avvisat försök förlänger alltså inte spärren). Returnerar (tillåtet, sekunder att vänta).
+    """
+    now = time.time()
+    client = _redis()
+    if client is not None:
+        try:
+            rkeys = [f"drivelog:rl:{k}" for k in keys]
+            member = f"{now}:{uuid.uuid4().hex}"
+            ok = client.eval(_TRY_ACQUIRE_LUA, len(rkeys), *rkeys, now, window_seconds, limit, member)
+            return (True, 0) if int(ok) == 1 else (False, window_seconds)
+        except Exception:  # noqa: S110 - faller tillbaka till minnet
+            pass
+    with _lock:
+        queues = [_memory[k] for k in keys]
+        wait = 0
+        for q in queues:
+            while q and q[0] < now - window_seconds:
+                q.popleft()
+            if len(q) >= limit:
+                wait = max(wait, int(window_seconds - (now - q[0])) + 1)
+        if wait:
+            return False, wait
+        for q in queues:
+            q.append(now)
         return True, 0
 
 

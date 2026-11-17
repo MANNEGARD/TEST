@@ -155,11 +155,23 @@ def refresh_tokens(
     return _token_request(tenant=tenant, data=data, transport=transport)
 
 
+def _next_link(body: dict[str, Any]) -> str | None:
+    """Nästa sida, men bara på Graph: åtkomsttoken följer med varje anrop."""
+    link = body.get("@odata.nextLink")
+    if not link:
+        return None
+    if isinstance(link, str) and link.startswith(f"{GRAPH_BASE}/"):
+        return link
+    logger.warning("Microsoft Graph angav nästa sida på en annan adress; sidindelningen avbröts.")
+    return None
+
+
 class GraphClient:
     def __init__(self, access_token: str, *, transport: httpx.BaseTransport | None = None, max_retries: int = 2):
         self._client = httpx.Client(
             timeout=30.0,
             transport=transport,
+            follow_redirects=False,
             headers={
                 "Authorization": f"Bearer {access_token}",
                 "Accept": "application/json",
@@ -227,7 +239,7 @@ class GraphClient:
                         "owner": ((c.get("owner") or {}).get("address")),
                     }
                 )
-            url, params = body.get("@odata.nextLink"), None  # nextLink innehåller redan alla parametrar
+            url, params = _next_link(body), None  # nextLink innehåller redan alla parametrar
             pages += 1
         return out
 
@@ -253,7 +265,7 @@ class GraphClient:
         while url and pages < MAX_PAGES:
             body = self._get(url, params, headers=headers) if headers else self._get(url, params)
             out.extend(body.get("value", []))
-            url, params = body.get("@odata.nextLink"), None
+            url, params = _next_link(body), None
             pages += 1
         if url:
             logger.warning("Kalendervyn avbröts efter %s sidor.", MAX_PAGES)

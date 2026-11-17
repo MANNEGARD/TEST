@@ -9,16 +9,11 @@ import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
 import { ApiError, errorMessage } from "@/lib/api";
 import { useLogin, useSetupStatus } from "@/lib/queries/auth";
-
-function safeNext(next: string | null): string {
-  if (!next || !next.startsWith("/") || next.startsWith("//") || next.startsWith("/login")) return "/";
-  return next;
-}
+import { safeNext } from "@/lib/safe-next";
 
 export function LoginForm() {
   const router = useRouter();
   const params = useSearchParams();
-  const next = safeNext(params.get("next"));
   const setup = useSetupStatus();
   const login = useLogin();
   const [email, setEmail] = React.useState("");
@@ -36,7 +31,7 @@ export function LoginForm() {
     login.mutate(
       { email, password },
       {
-        onSuccess: () => router.replace(next),
+        onSuccess: () => router.replace(safeNext(params.get("next"), window.location.origin)),
         onError: (err) => {
           if (err instanceof ApiError && err.status === 429) setRetryAfter(retryUntil(err.retryAfterSeconds));
         },
