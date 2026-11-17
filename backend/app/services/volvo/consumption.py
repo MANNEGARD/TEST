@@ -44,9 +44,11 @@ både ett värde och en FELGRÄNS, och den med minst felgräns väljs (1.5.0):
      procentenheter ger inget värde. Värdet är netto ur batteriet: bilen kan ha laddat batteriet
      med motorn eller bromsarna under färd.
 
-Säger två metoder emot varandra utanför sina felgränser väljs nivåskillnaden (ett fysiskt mått)
-och avvikelsen antecknas i grunden. Orimliga värden (negativa, mer än tanken eller batteriet
-rymmer, mer än 60 l eller 60 kWh per 100 km) kastas.
+Säger nivåskillnaden emot den valda metoden utanför felgränserna behålls metoden med minst
+felgräns (färddatorns snitt, som i 1.3.0) och nivåskillnaden antecknas som avvikelse i grunden.
+Orimliga värden (negativa, mer än tanken eller batteriet rymmer, mer än 60 l eller 60 kWh per
+100 km) kastas. Nivån efter måste ha mätarställningen vid resans slut och vara rapporterad efter
+starten, och nivån före rapporterad vid resans startmätarställning; annars lämnas värdet okänt.
 
 Värdet märks ``estimated`` ("Uppskattad ur bilens egna avläsningar") och GRUNDEN sparas
 (``RawTrip.fuel_basis``/``energy_basis``: metod, värdena före och efter, felgränsen,
@@ -318,9 +320,22 @@ def _level_candidate(
     if before is None:
         return "no_before"
     t0 = _reported(before, name)
+    # Nivån kan vara rapporterad före en tidigare körning och ha följt med till senare rader: då
+    # gäller mätarställningen på den första raden med samma rapport, inte radens egen.
+    first = next((r for r in pool if _reported(r, name) == t0), before)
+    if start_odo is not None and first.odometer_km is not None and abs(first.odometer_km - start_odo) > ODO_STILL_KM:
+        return "driven_between"
     between = [r for r in pool if r.fetched_at > before.fetched_at and _reported(r, name) > t0]
     res = resolution([float(getattr(r, name)) for r in [*readings, arrival] if getattr(r, name) is not None])
     return before, [*between, arrival], res
+
+
+def _after_mismatch(raw: RawTrip, after: Reading, name: str, distance: float) -> bool:
+    """Nivån "efter" hör inte till resan: annan mätarställning än resans slut, eller rapporterad före starten."""
+    end_odo = raw.odometer_end
+    if end_odo is not None and after.odometer_km is not None and abs(after.odometer_km - end_odo) > ODO_STILL_KM:
+        return True
+    return _reported(after, name) < _latest_start(raw, distance) - CLOCK_SKEW
 
 
 def estimate_for_raw(
@@ -378,6 +393,8 @@ def estimate_for_raw(
     events: dict[str, str] = {}
     vol = everything  # alla avläsningar, äldst först (för nivån före och upplösningen)
     fa = first_after_with("fuel_liters")
+    if fa is not None and _after_mismatch(raw, fa, "fuel_liters", distance):
+        events["fuel"], fa = "no_after", None
     if fa is not None:
         found = _level_candidate(raw, [r for r in vol if r.fetched_at < fa.fetched_at], fa, "fuel_liters", distance)
         if isinstance(found, str):
@@ -396,12 +413,14 @@ def estimate_for_raw(
                 ok = _plausible(net, distance, cap=cap)
                 if ok is not None:
                     fuel_c.append(_Candidate(ok, round(res, 3), "level", {
-                        "unit": "l", "resolution": res,
+                        "unit": "l", "resolution": res, "readings": len(values),
                         "before": {"value": fb.fuel_liters, "unit": "l", "at": _reported(fb, "fuel_liters").isoformat()},
                         "after": {"value": fa.fuel_liters, "unit": "l", "at": _reported(fa, "fuel_liters").isoformat()},
                     }))
 
     ba = first_after_with("battery_percent")
+    if ba is not None and _after_mismatch(raw, ba, "battery_percent", distance):
+        events["energy"], ba = "no_after", None
     if ba is not None and battery_kwh:
         found = _level_candidate(raw, [r for r in vol if r.fetched_at < ba.fetched_at], ba, "battery_percent",
                                  distance)
@@ -442,7 +461,7 @@ def estimate_for_raw(
 
 
 def _choose(candidates: list[_Candidate], physical: str) -> _Candidate | None:
-    """Metoden med minst felgräns; säger den emot nivåskillnaden väljs nivåskillnaden."""
+    """Metoden med minst felgräns; säger nivåskillnaden emot den antecknas avvikelsen (1.3.0-värdet behålls)."""
     if not candidates:
         return None
     best = min(candidates, key=lambda c: c.margin)
@@ -450,9 +469,8 @@ def _choose(candidates: list[_Candidate], physical: str) -> _Candidate | None:
     level = next((c for c in candidates if c.method == physical), None)
     deviation = None
     if level is not None and best is not level and abs(best.value - level.value) > best.margin + level.margin:
-        deviation = {"method": best.method, "value": best.value, "margin": best.margin}
+        deviation = {"method": level.method, "value": level.value, "margin": level.margin}
         notes.append("disagree")
-        best = level
     others = [
         {"method": c.method, "value": c.value, "margin": c.margin} for c in candidates if c is not best
     ]
@@ -506,6 +524,8 @@ def basis_out(value: Any) -> dict[str, Any] | None:
             step = "hela liter" if method == "level" and res >= 1 else (
                 "hela procent" if res >= 1 else f"{_num(res, u)} i taget")
             parts.append(f"Bilen rapporterar {step}, därav felgränsen.")
+        if method == "level" and _float(value.get("readings")) == 2:
+            parts.append("En tankning mellan avläsningarna som är mindre än resans förbrukning syns inte.")
         if method == "battery_level":
             kwh = _float(value.get("capacity_kwh"))
             if kwh is not None:
@@ -523,7 +543,7 @@ def basis_out(value: Any) -> dict[str, Any] | None:
         if dv is not None and dm is not None and isinstance(dmeth, str):
             parts.append(
                 f"{_METHOD_TEXT.get(dmeth, dmeth)} gav {_num(dv, unit)} ± {_num(dm, unit)}, utanför felgränserna; "
-                "nivåskillnaden (ett fysiskt mått) används."
+                "metoden med minst felgräns används."
             )
     return {"method": method, "value": amount, "margin": margin, "unit": unit, "text": " ".join(parts)}
 

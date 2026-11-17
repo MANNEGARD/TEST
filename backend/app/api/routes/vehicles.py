@@ -127,10 +127,13 @@ def update_vehicle(vehicle_id: uuid.UUID, body: VehicleIn, principal: WebPrincip
     audit.record(db, principal.actor, "vehicle.update", "vehicle", v.id, before=before, after=data)
     if "usable_battery_kwh" in data and data["usable_battery_kwh"] != capacity_before:
         # Elen som räknats ur kapaciteten (och el som saknas) räknas om (volvo.consumption).
+        # I ett eget delsteg (skyddsnätet): ett fel i omräkningen får inte hindra att kapaciteten sparas.
+        from app.services import internal_errors
         from app.services.volvo import consumption
 
         db.flush()
-        consumption.refill_after_capacity_change(db, v.id)
+        internal_errors.run_step(db, "vehicle.capacity_refill", consumption.refill_after_capacity_change, db, v.id,
+                                 default=0)
     db.commit()
     return vehicle_out(v)
 

@@ -319,8 +319,11 @@ Resedetekteringen (`detection.process_vehicle`) är en tillståndsmaskin:
        ankomsten under laddning), eller pågick laddningen när "före" rapporterades, lämnas elen
        okänd. Värdet är **netto ur batteriet**: bilen kan ha laddat batteriet med motorn eller
        bromsarna under färd.
-  Säger två metoder emot varandra utanför sina felgränser används nivåskillnaden (ett fysiskt
-  mått) och avvikelsen antecknas. Orimliga värden (negativa, mer än tanken/batteriet rymmer,
+  Säger nivåskillnaden emot den valda metoden utanför felgränserna behålls metoden med minst
+  felgräns (färddatorns snitt, som i 1.3.0) och nivåskillnaden antecknas som avvikelse. Nivån
+  efter måste ha resans slutmätarställning och vara rapporterad efter starten, och nivån före
+  vara rapporterad vid resans startmätarställning, annars lämnas värdet okänt (så hamnar inte
+  liter på fel resa när en rapport uteblir). Orimliga värden (negativa, mer än tanken/batteriet rymmer,
   mer än 60 l eller 60 kWh per 100 km) kastas. Räcker inget lämnas värdet okänt (`unknown`, "–").
   **Precisionen:** Volvos API ger tanknivån i hela liter och batterinivån i hela procent. Före och
   efter kan då vara fel med en halv enhet var, så nivåskillnaden är riktig på ±1 l respektive

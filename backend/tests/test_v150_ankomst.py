@@ -687,6 +687,7 @@ def compare(db, user, old_module: ModuleType, seed: int) -> dict[str, Any]:
     changed: set[tuple[float, float]] = set()
     waited_for_position: set[tuple[float, float]] = set()
     removed: set[tuple[float, float]] = set()  # dubbelräknade resor i 1.4.2 som inte finns i den nya
+    origin: dict[tuple[float, float], Any] = {}  # (b): normaliserat spann → resan i 1.4.2
     old_spans = [(r.odometer_start, r.odometer_end) for r in old_rows]
     new_spans = [(r.odometer_start, r.odometer_end) for r in new_rows]
     if old_spans != new_spans:
@@ -708,11 +709,14 @@ def compare(db, user, old_module: ModuleType, seed: int) -> dict[str, Any]:
                 # uppskattad ur fågelvägen – samma kilometer två gånger. Den nya motorn väntar på
                 # positionen (som före 1.4.2 för en rörelse utan ankomst) och gör en resa av det.
                 before = [(a, x) for (a, x) in expected if x == d.odo_to and a < x]
+                trip_row = (origin.get(before[0]) or old_by_span.get(before[0])) if before else None
+                late_row = old_by_span.get((d.odo_to, d.odo_to))
                 if (
-                    before and before[0] in new_spans and (d.odo_to, d.odo_to) not in new_spans
-                    and "round_trip_unobserved" in old_by_span[before[0]].quality_flags
-                    and old_by_span[(d.odo_to, d.odo_to)].distance_quality == DistanceQuality.ESTIMATED
-                    and old_created[old_by_span[(d.odo_to, d.odo_to)].id] >= old_created[old_by_span[before[0]].id]
+                    trip_row is not None and late_row is not None
+                    and before[0] in new_spans and (d.odo_to, d.odo_to) not in new_spans
+                    and "round_trip_unobserved" in trip_row.quality_flags
+                    and late_row.distance_quality == DistanceQuality.ESTIMATED
+                    and old_created[late_row.id] >= old_created[trip_row.id]
                 ):
                     expected.remove((d.odo_to, d.odo_to))
                     removed.add((d.odo_to, d.odo_to))
@@ -732,12 +736,12 @@ def compare(db, user, old_module: ModuleType, seed: int) -> dict[str, Any]:
                 changed.add((a, d.odo_to))
                 out["stale_estimate_double_km"] += 1
                 continue
-            # Resan till d:s mål kan ha börjat före d (en rundresa utan ny position före den
-            # hör till samma resa i båda motorerna): leta upp den gamla resan som slutade mitt i d.
-            short = [(a, x) for (a, x) in expected if a <= d.odo_from < x < d.odo_to]
+            # Resan till d:s mål kan ha börjat före eller efter d:s start (i båda motorerna lika):
+            # leta upp den gamla resan som slutade mitt i d.
+            short = [(a, x) for (a, x) in expected if a < x and d.odo_from < x < d.odo_to]
             if not short:
                 continue
-            a, x = short[0]
+            a, x = max(short, key=lambda span: span[1])  # den som slutade närmast d:s mål
             right = (a, d.odo_to)
             if right not in new_spans or right in expected:
                 continue
@@ -754,6 +758,8 @@ def compare(db, user, old_module: ModuleType, seed: int) -> dict[str, Any]:
             nxt = [y for (b, y) in expected if b == x and y > d.odo_to]
             if nxt:
                 # (b) bilen körde vidare inom väntan: resten hamnade i nästa resa
+                origin[right] = origin.get((a, x)) or old_by_span[(a, x)]
+                origin[(d.odo_to, nxt[0])] = origin.get((x, nxt[0])) or old_by_span[(x, nxt[0])]
                 expected[expected.index((a, x))] = right
                 expected[expected.index((x, nxt[0]))] = (d.odo_to, nxt[0])
                 changed.update({right, (d.odo_to, nxt[0])})
@@ -761,11 +767,15 @@ def compare(db, user, old_module: ModuleType, seed: int) -> dict[str, Any]:
         assert expected == new_spans, f"{info}\n gammal {old_spans}\n ny {new_spans}"
     for raw in new_rows:
         # Samma resa i 1.4.2: samma början (vid (a) och (c) den första av dem), annars samma slut (b).
-        kept = [r for r in old_rows if (r.odometer_start, r.odometer_end) not in removed]
-        cands = [r for r in kept if r.odometer_start == raw.odometer_start] or [
-            r for r in kept if r.odometer_end == raw.odometer_end]
-        assert cands, info
-        old = min(cands, key=lambda r: old_created[r.id])
+        span = (raw.odometer_start, raw.odometer_end)
+        if span in origin:
+            old = origin[span]  # (b): den gamla resa som spannet kommer från
+        else:
+            kept = [r for r in old_rows if (r.odometer_start, r.odometer_end) not in removed]
+            cands = [r for r in kept if r.odometer_start == raw.odometer_start] or [
+                r for r in kept if r.odometer_end == raw.odometer_end]
+            assert cands, info
+            old = min(cands, key=lambda r: old_created[r.id])
         delay = old_created[old.id] - new_created[raw.id]
         if delay < 0 and (raw.odometer_start, raw.odometer_end) in waited_for_position:
             out["later_for_position"].append(-delay)  # (d): 1.4.2 var tidigare men räknade dubbelt

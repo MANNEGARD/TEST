@@ -228,14 +228,48 @@ def test_the_method_with_the_smallest_margin_wins():
     assert e.fuel_method == "level" and (e.fuel_liters, e.fuel_basis["margin"]) == (3.0, 1.0)
 
 
-def test_two_methods_that_disagree_choose_the_level_and_note_it():
+def test_two_methods_that_disagree_keep_the_smallest_margin_and_note_the_level():
+    """Som i de16760: färddatorns värde behålls när tankmätaren avviker; nivån antecknas."""
     raw = raw_trip(40, 0, 40)
     before = [rd(-5, fuel_liters=40.0, trip_meter_auto_km=0.0, avg_fuel_consumption_auto=0.0)]
     after = [rd(41, fuel_liters=33.0, trip_meter_auto_km=40.0, avg_fuel_consumption_auto=5.0)]  # 2 l mot 7 l
     e = est(raw, before, after)
-    assert e.fuel_method == "level" and e.fuel_liters == 7.0
-    assert e.fuel_basis["deviation"]["method"] == "trip_meter" and "disagree" in e.fuel_basis["notes"]
+    assert e.fuel_method == "trip_meter" and e.fuel_liters == 2.0
+    assert e.fuel_basis["deviation"] == {"method": "level", "value": 7.0, "margin": 1.0}
+    assert "disagree" in e.fuel_basis["notes"]
     assert "utanför felgränserna" in consumption.basis_out(e.fuel_basis)["text"]
+    # Granskningens fall: 30 km, snitt 5,0 och tanken 26 → 23 l gav 1,5 l i de16760.
+    raw = raw_trip(30, 0, 30)
+    before = [rd(-5, fuel_liters=26.0, trip_meter_auto_km=0.0, avg_fuel_consumption_auto=0.0)]
+    after = [rd(31, fuel_liters=23.0, trip_meter_auto_km=30.0, avg_fuel_consumption_auto=5.0)]
+    e = est(raw, before, after)
+    assert (e.fuel_method, e.fuel_liters) == ("trip_meter", 1.5)
+
+
+def test_level_after_must_belong_to_the_trip():
+    """Uteblir tanknivån vid ankomsten får resan inte nästa resas liter (och inte tvärtom)."""
+    # X: 1000 → 1020 utan nivå vid ankomsten; Y: 1020 → 1040 med nivån 34 l.
+    x = raw_trip(20, 0, 20, odo=1000.0)
+    x.odometer_end = 1020.0
+    y = raw_trip(20, 60, 80, odo=1020.0)
+    y.odometer_end = 1040.0
+    readings = [rd(-5, fuel_liters=40.0, odometer_km=1000.0), rd(21, odometer_km=1020.0),
+                rd(81, fuel_liters=34.0, odometer_km=1040.0)]
+    assert est(x, readings[:1], readings[1:], hybrid=True).fuel_liters is None
+    assert est(y, readings[:2], readings[2:], hybrid=True).fuel_liters is None  # nivån före är från 1000
+    # Ankomstraden för X har ny mätarställning men nivån rapporterades före X.
+    old = DEP - timedelta(minutes=1)
+    readings = [rd(-5, fuel_liters=40.0, odometer_km=1000.0, fuel_reported_at=old),
+                rd(21, fuel_liters=40.0, odometer_km=1020.0, fuel_reported_at=old),
+                rd(81, fuel_liters=34.0, odometer_km=1040.0, fuel_reported_at=DEP + timedelta(minutes=80.5))]
+    assert est(x, readings[:1], readings[1:], hybrid=True).fuel_liters is None
+    assert est(y, readings[:2], readings[2:], hybrid=True).fuel_liters is None
+
+
+def test_level_from_two_readings_says_a_small_refuel_is_hidden():
+    raw = raw_trip(50, 0, 60)
+    e = est(raw, [rd(-5, fuel_liters=40.0)], [rd(61, fuel_liters=38.0)], hybrid=True)
+    assert "En tankning mellan avläsningarna" in consumption.basis_out(e.fuel_basis)["text"]
 
 
 def test_a_car_with_decimals_uses_them():
@@ -474,6 +508,21 @@ def test_capacity_in_the_api_and_the_basis_in_the_trip_details(client, db, trips
     assert raw["energy_kwh"] == pytest.approx(3.0) and raw["energy_basis"]["margin"] == pytest.approx(0.1)
     assert raw["fuel_basis"]["text"].startswith("Nivåskillnad i tanken: 2 l ± 1 l.")
     assert client.patch(f"/api/v1/vehicles/{vehicle.id}", json={"usable_battery_kwh": -1}).status_code == 422
+
+
+def test_capacity_is_saved_even_if_the_recomputation_fails(client, db, trips, vehicle, monkeypatch):
+    """Omräkningen är ett delsteg i skyddsnätet: i driften sparas kapaciteten ändå."""
+    from app.services import internal_errors
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("omräkningen föll")
+
+    monkeypatch.setattr(consumption, "refill_after_capacity_change", boom)
+    with internal_errors.tolerant_mode():
+        resp = client.patch(f"/api/v1/vehicles/{vehicle.id}", json={"usable_battery_kwh": 9.5})
+    assert resp.status_code == 200 and resp.json()["usable_battery_kwh"] == 9.5
+    db.expire_all()
+    assert db.get(M.Vehicle, vehicle.id).usable_battery_kwh == 9.5
 
 
 # ----------------------------------------------------------------------------- migreringen

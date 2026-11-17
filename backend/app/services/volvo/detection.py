@@ -875,8 +875,9 @@ def process_vehicle(
     corrected: list[RawTrip] = []
     # Väntan från före 1.5.0 följs vid sidan av (``old_steps``): rörelsen som den ännu inte
     # hade stängt. Det gör att (1) ingen resa med ankomst stängs senare än förut – stänger den
-    # gamla väntan rörelsen stängs den pågående också (se ``forced`` nedan) – och (2) ett släpande mätarvärde utan tidsstämpel förs
-    # till den stängda resan precis så länge den gamla väntan hade tagit med det i samma resa.
+    # gamla väntan rörelsen stängs den pågående också (se ``forced`` nedan) – och (2) ett
+    # släpande mätarvärde utan tidsstämpel förs till den stängda resan precis så länge den
+    # gamla väntan hade tagit med det i samma resa.
     old_steps = _old_movement(db, vehicle.id, anchor, settings)
 
     for obs in pending:
