@@ -566,7 +566,7 @@ def process_vehicle(
         from app.services.trips import pipeline
 
         # Resan är skapad: varje delsteg efter det körs för sig, så att ett fel i ett av dem
-        # aldrig tar resan med sig (1.4.1, internal_errors.run_step).
+        # aldrig tar resan med sig (1.4.2, internal_errors.run_step).
         pipeline.after_trips_changed(
             db, user_id=user_id, vehicle=vehicle, actor=audit.SYSTEM, apply_merge_rules=True, notify=True,
             origin="live", isolate_steps=True,

@@ -208,5 +208,10 @@ sidomeny och under *Inställningar → Om DriveLog*.
 - **Aviseringen *… leder inte längre hem*:** se *Utan DynDNS: adressvakten* ovan.
 - **Appen startar inte:** loggen börjar med vad som behöver rättas.
 - **Konstiga resor eller förbrukning från bilen:** ladda ner felsökningsfilen under
-  *Integrationer → Volvo* (utan chassinummer, registreringsnummer, positioner och adresser) och
-  skicka den till den som hjälper dig.
+  *Integrationer → Volvo* och skicka den till den som hjälper dig. Filen innehåller inga
+  chassinummer, registreringsnummer eller positioner. Från 1.4.2 innehåller den också de senaste
+  interna felen med ett tvättat felmeddelande: kända nycklar, sparade platser och resornas
+  adresser tas bort, men ett okänt platsnamn eller en okänd adress kan finnas kvar i texten.
+- **Raden *Avläsningen hämtades, men …* under *Senaste fel*:** ett steg i bearbetningen av en
+  resa misslyckades. Resan finns i journalen. Raden står kvar tills en resa har bearbetats utan
+  fel. Ladda ner felsökningsfilen och skicka den till den som hjälper dig.

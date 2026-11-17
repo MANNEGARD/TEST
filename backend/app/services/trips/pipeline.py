@@ -180,7 +180,7 @@ def after_trips_changed(
 ) -> dict[str, Any]:
     """Kör hela efterbearbetningen för ett fordon.
 
-    ``isolate_steps`` (1.4.1, resor från bilen): varje delsteg körs för sig
+    ``isolate_steps`` (1.4.2, resor från bilen): varje delsteg körs för sig
     (``internal_errors.run_step``). Kraschar ett steg rullas bara dess egna ändringar tillbaka,
     felet loggas och antecknas, och resten fortsätter med stegets neutrala utfall. I testmiljön
     (strängt läge) och utan ``isolate_steps`` är allt som förut: samma ordning, samma frågor,

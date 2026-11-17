@@ -3,6 +3,26 @@
 > Från 1.0.2 visar Home Assistant **Uppdatera** först när den nya versionen är färdigbyggd och
 > går att hämta – det går bra att trycka direkt.
 
+## 1.4.2
+
+- **Ett fel i efterarbetet stoppar inte längre resan.** När bilen har rapporterat en körning
+  körs varje steg i efterarbetet för sig (starttid, sammanslagning, kalender, klassning,
+  notiser …). Kraschar ett steg hoppas bara det steget över: avläsningen är sparad och resan
+  finns i journalen. Kraschar själva resedetekteringen sparas avläsningarna och prövas igen vid
+  nästa hämtning. Det var ett fel i ett sådant steg som stoppade hämtningen i 1.4.0.
+- **Felet syns.** Hoppas ett steg över står det under *Senaste fel* i Volvo-panelen ("Avläsningen
+  hämtades, men …") tills en resa har bearbetats utan fel, och *Synka nu* svarar med samma text i
+  stället för "Ett oväntat fel inträffade". Felsökningsfilen har fått en lista över de senaste
+  interna felen: steg, typ av fel, var i koden och ett tvättat felmeddelande. Kända nycklar, VIN,
+  registreringsnummer, dina sparade platser och resornas adresser tas bort ur meddelandet; ett
+  okänt platsnamn eller en okänd adress kan finnas kvar.
+- **Försiktigare när något har gått fel.** Hoppas ett steg över som den självgående journalen
+  bygger på, godkänns inga resor automatiskt i den körningen – de frågas på vanligt sätt.
+- **Fler kraschrisker rättade**, hittade vid genomgången efter felet: ett svar från AI-tjänsten i
+  oväntat format (resan bedöms då med reglerna, som vid ett vanligt avbrott hos AI-tjänsten), och
+  ärenden eller resor med trasigt innehåll i databasen, som inte längre kan fälla efterarbetet
+  eller listorna i *Resor* och *Granskning*.
+
 ## 1.4.1
 
 - **Rättat: hämtningen från Volvo stannade med "Ett oväntat fel" efter en körning.** Lunchregeln

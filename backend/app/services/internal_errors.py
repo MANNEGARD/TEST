@@ -1,4 +1,4 @@
-"""Skyddsnätet (1.4.1): delsteg som får misslyckas utan att resten går förlorat.
+"""Skyddsnätet (1.4.2): delsteg som får misslyckas utan att resten går förlorat.
 
 Bakgrund: i 1.4.0 låg lagringen av bilens avläsning, skapandet av resan och hela
 efterbearbetningen i samma transaktion. Ett ohanterat undantag i ett enda delsteg rullade
@@ -395,10 +395,14 @@ def private_values(db: Session, user_id: Any) -> list[str]:
     return values
 
 
+def _where(entry: dict[str, Any]) -> list[str]:
+    """Postens kodställen. En sparad post i oväntad form (inte en lista) räknas som utan kodställen."""
+    value = entry.get("where")
+    return [w for w in value if isinstance(w, str)] if isinstance(value, list) else []
+
+
 def _same_error(a: dict[str, Any], b: dict[str, Any]) -> bool:
-    return (a.get("step"), a.get("type"), list(a.get("where") or [])) == (
-        b.get("step"), b.get("type"), list(b.get("where") or [])
-    )
+    return (a.get("step"), a.get("type"), _where(a)) == (b.get("step"), b.get("type"), _where(b))
 
 
 def save_failures(db: Session, user_id: Any, failures: list[dict[str, Any]], *, origin: str | None = None) -> None:
@@ -433,6 +437,27 @@ def save_failures(db: Session, user_id: Any, failures: list[dict[str, Any]], *, 
                 break
         stored.insert(0, entry)
     settings_svc.update_section(db, user_id, SECTION, {KEY: stored[:MAX_ENTRIES]}, allow_read_only=True)
+
+
+def save_failures_safely(db: Session, user_id: Any, failures: list[dict[str, Any]], *, origin: str | None = None) -> bool:
+    """Som ``save_failures``, men antecknandet får aldrig fälla det som redan är gjort (avläsningen
+    och resan): det körs i en egen sparpunkt, och går det inte att spara loggas det bara.
+    Returnerar om felen sparades."""
+    if not failures:
+        return True
+    # Det som redan är ändrat hör till anroparen: ett fel här är inte antecknandets.
+    db.flush()
+    _ensure_transaction(db)
+    try:
+        with db.begin_nested():
+            save_failures(db, user_id, failures, origin=origin)
+        return True
+    except Exception:
+        try:
+            logger.exception("De interna felen kunde inte antecknas")
+        except Exception:  # noqa: S110 – loggningen får aldrig fälla skyddsnätet
+            pass
+        return False
 
 
 def record_after_rollback(
@@ -509,7 +534,7 @@ def public_entries(db: Session, user_id: Any, *, scrub: tuple[str | None, ...] =
             "origin": origin if _STEP_RE.fullmatch(origin) else None,
             "type": type_ if _TYPE_RE.fullmatch(type_) else None,
             "message": clean_message(str(e.get("message") or ""), extra=known) if known is not None else "",
-            "where": [w for w in (e.get("where") or []) if isinstance(w, str) and _WHERE_RE.fullmatch(w)][-MAX_FRAMES:],
+            "where": [w for w in _where(e) if _WHERE_RE.fullmatch(w)][-MAX_FRAMES:],
         })
     return out
 
@@ -530,6 +555,7 @@ __all__ = [
     "record_after_rollback",
     "run_step",
     "save_failures",
+    "save_failures_safely",
     "step_label",
     "take_failures",
     "take_pipeline_done",

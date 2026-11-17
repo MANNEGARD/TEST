@@ -512,18 +512,18 @@ UNEXPECTED_LLM_ERROR = "Oväntat fel i AI-anropet – resorna bedöms med regler
 def _record_unexpected_llm_error(db: Session, user_id: uuid.UUID, exc: BaseException) -> None:
     """Ett oförutsett fel i AI-anropet: syns på AI-anslutningen och i felsökningsfilen
     (``internal_errors``, steget ``classify.ai``). Antecknas inte som ett misslyckat delsteg –
-    bedömningen har gjorts, med reglerna – och kastar aldrig."""
+    bedömningen har gjorts, med reglerna. Själva antecknandet får aldrig fälla bedömningen."""
     from app.services import internal_errors
 
     try:
         logger.exception("Oväntat fel i AI-anropet; resan bedöms med reglerna", exc_info=exc)
     except Exception:  # noqa: S110 – loggningen får aldrig fälla bedömningen
         pass
+    internal_errors.save_failures_safely(db, user_id, [internal_errors.describe("classify.ai", exc)], origin="classify")
     try:
-        internal_errors.save_failures(db, user_id, [internal_errors.describe("classify.ai", exc)], origin="classify")
         _report_llm_outcome(db, user_id, llm_mod.LLMError(UNEXPECTED_LLM_ERROR))
     except Exception:
-        logger.exception("Felet i AI-anropet kunde inte antecknas")
+        logger.exception("Felet i AI-anropet kunde inte visas på AI-anslutningen")
 
 
 # ----------------------------------------------------------------------------- huvudflöde

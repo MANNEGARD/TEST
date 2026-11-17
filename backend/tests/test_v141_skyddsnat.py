@@ -939,3 +939,66 @@ def test_without_errors_the_same_statements_run_as_before(engine):
     assert sorted(tolerant_) == sorted(strict)
     # Läsfrågorna kommer i samma ordning.
     assert [q for q in tolerant_ if q.startswith("SELECT")] == [q for q in strict if q.startswith("SELECT")]
+
+
+# ----------------------------------------------------------------------------- antecknandet fäller aldrig sparandet
+
+
+def test_recording_the_error_never_undoes_the_reading_and_the_trip(client, db, user, vehicle, car, monkeypatch, tolerant):
+    """Granskningsfynd (1.4.2): antecknandet av ett fel kördes oskyddat efter bearbetningen. Gick
+    det sönder rullades hela hämtningen tillbaka – avläsningen och resan med. Nu körs det i en egen
+    sparpunkt: resan finns, raden under "Senaste fel" visas, bara posten i listan saknas."""
+    break_step(monkeypatch, gaps, "recompute")
+
+    def cannot_save(db_, user_id, failures, *, origin=None):
+        audit.record(db_, audit.SYSTEM, "test.halvfardigt", "vehicle", vehicle.id)
+        db_.flush()
+        raise Boom("listan gick inte att spara")
+
+    monkeypatch.setattr(internal_errors, "save_failures", cannot_save)
+    result = drive_until_processed(db, vehicle, car)
+    db.commit()
+
+    assert result["new_trips"] == 1 and result["processing_error"]["step"] == "pipeline.gaps"
+    db.expire_all()
+    assert db.scalar(select(func.count()).select_from(M.VehicleObservation)
+                     .where(M.VehicleObservation.processed_at.is_(None))) == 0
+    (trip,) = seg.active_trips(db, vehicle.id)
+    assert trip.distance_km == 14
+    # Det antecknandet hann skriva är borta, och listan är tom.
+    assert db.scalar(select(func.count()).select_from(M.AuditEvent)
+                     .where(M.AuditEvent.action == "test.halvfardigt")) == 0
+    assert internal_errors.entries(db, user.id) == []
+    assert client.get(f"{API}/status").json()["last_error"] == result["processing_error"]["message"]
+
+
+def test_save_failures_safely_reports_whether_it_saved(db, user, monkeypatch):
+    entry = internal_errors.describe("pipeline.gaps", _raise_here("en gång"))
+    assert internal_errors.save_failures_safely(db, user.id, [], origin="poll") is True
+    assert internal_errors.save_failures_safely(db, user.id, [entry], origin="poll") is True
+    assert [e["step"] for e in internal_errors.entries(db, user.id)] == ["pipeline.gaps"]
+
+    def boom(*args, **kwargs):
+        raise Boom("går inte")
+
+    monkeypatch.setattr(internal_errors, "save_failures", boom)
+    assert internal_errors.save_failures_safely(db, user.id, [entry], origin="poll") is False
+    db.commit()  # sessionen går att använda efteråt
+    assert len(internal_errors.entries(db, user.id)) == 1
+
+
+@pytest.mark.parametrize("where", [5, "app/x.py:1:f", None, {"a": 1}, [1, None]])
+def test_a_stored_entry_in_unexpected_form_does_not_break_the_merging(db, user, where):
+    """Granskningsfynd (1.4.2): en sparad post vars ``where`` inte är en lista fällde sammanslagningen
+    av samma fel (och därmed hämtningen). Nu räknas den som en post utan kodställen."""
+    settings_svc.update_section(
+        db, user.id, internal_errors.SECTION,
+        {internal_errors.KEY: [{"at": "2026-11-01T10:00:00+00:00", "step": "pipeline.gaps", "type": "Boom", "where": where},
+                               "inte en post", 7]},
+        allow_read_only=True,
+    )
+    db.flush()
+    internal_errors.save_failures(db, user.id, [internal_errors.describe("pipeline.gaps", _raise_here("ny"))], origin="poll")
+    stored = internal_errors.entries(db, user.id)
+    assert [e["step"] for e in stored] == ["pipeline.gaps", "pipeline.gaps"] and stored[0]["count"] == 1
+    assert len(internal_errors.public_entries(db, user.id)) == 2

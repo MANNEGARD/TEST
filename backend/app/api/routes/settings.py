@@ -83,7 +83,7 @@ def _without_logo_file(section: dict[str, Any]) -> dict[str, Any]:
 
 
 def _without_internal_errors(sections: dict[str, Any]) -> dict[str, Any]:
-    """De interna felen (1.4.1) visas i Volvos felsökningsfil, inte bland inställningarna."""
+    """De interna felen (1.4.2) visas i Volvos felsökningsfil, inte bland inställningarna."""
     system = sections.get("system")
     if isinstance(system, dict) and "internal_errors" in system:
         return {**sections, "system": {k: v for k, v in system.items() if k != "internal_errors"}}

@@ -213,7 +213,7 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         # Versionen som DriveLog senast startade med för användaren (services/release.py).
         # Sätts bara av appen; tom = ny användare eller installation (ingen notis).
         "last_version": "",
-        # De senaste interna felen (1.4.1, services/internal_errors.py): tid, steg, typ, kodställen
+        # De senaste interna felen (1.4.2, services/internal_errors.py): tid, steg, typ, kodställen
         # och ett tvättat meddelande. Visas i felsökningsfilen, inte i inställningarna.
         "internal_errors": [],
     },

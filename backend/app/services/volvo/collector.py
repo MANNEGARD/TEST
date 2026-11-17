@@ -701,7 +701,7 @@ def _process(
     origin: str,
     previous_error: tuple[str | None, datetime | None] = (None, None),
 ) -> tuple[list[Any], dict[str, Any] | None]:
-    """Resedetekteringen och efterbearbetningen efter en hämtning (1.4.1).
+    """Resedetekteringen och efterbearbetningen efter en hämtning (1.4.2).
 
     Avläsningen är redan sparad i den yttre transaktionen. I det toleranta läget körs
     detekteringen i en egen sparpunkt: kraschar den rullas bara den tillbaka – avläsningarna
@@ -730,7 +730,8 @@ def _process(
     if not failures:
         _keep_unresolved_processing_line(conn, vehicle, previous_error, pipeline_done=pipeline_done)
         return list(created or []), None
-    internal_errors.save_failures(db, user_id, failures, origin=origin)
+    # I egen sparpunkt: går felen inte att anteckna får det aldrig ta avläsningen och resan med sig.
+    internal_errors.save_failures_safely(db, user_id, failures, origin=origin)
     message = internal_errors.processing_message(failures)
     steps = list(dict.fromkeys(f["step"] for f in failures))
     if not vehicle.is_demo:
@@ -849,7 +850,7 @@ def poll_due(
             except Exception as exc:
                 db.rollback()
                 logger.exception("Insamlingen misslyckades för fordon %s", vc.mask_vin(vehicle.vin))
-                # Felet antecknas och visas under "Senaste fel" (1.4.1), i en egen kort transaktion.
+                # Felet antecknas och visas under "Senaste fel" (1.4.2), i en egen kort transaktion.
                 from app.services import internal_errors
 
                 internal_errors.record_after_rollback(

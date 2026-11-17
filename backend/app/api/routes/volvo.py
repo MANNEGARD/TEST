@@ -402,7 +402,7 @@ def sync_now(principal: WebPrincipalDep, db: DbDep, body: SyncIn | None = None) 
         raise _api_error(exc) from exc
     except Exception as exc:
         # Ett fel utanför de skyddade stegen: svaret blir fortfarande 500, men felet antecknas och
-        # syns under "Senaste fel" och i felsökningsfilen (1.4.1).
+        # syns under "Senaste fel" och i felsökningsfilen (1.4.2).
         db.rollback()
         internal_errors.record_after_rollback(
             db, principal.user.id, "volvo.poll", exc, origin="sync", connection_id=conn.id
@@ -412,7 +412,7 @@ def sync_now(principal: WebPrincipalDep, db: DbDep, body: SyncIn | None = None) 
     result.pop("freshness", None)
     processing = result.get("processing_error")
     if processing:
-        # Hämtningen lyckades men bearbetningen gjorde det inte (1.4.1). Svaret är detsamma som vid
+        # Hämtningen lyckades men bearbetningen gjorde det inte (1.4.2). Svaret är detsamma som vid
         # en lyckad hämtning, men med status "error" och raden som meddelande – så som webben redan
         # visar ett misslyckat "Synka nu". Hämtningens eget utfall finns kvar i fetch_status.
         result["fetch_status"] = result.get("status")
@@ -598,7 +598,7 @@ def build_diagnostics(db: DbDep, vehicle: Vehicle, *, days: int, now: Any) -> di
         "observations": obs_out,
         "sync_runs": runs,
         "trips": trips_out,
-        # De senaste interna felen (1.4.1): steg, typ, kodställen och ett tvättat meddelande. Bilens
+        # De senaste interna felen (1.4.2): steg, typ, kodställen och ett tvättat meddelande. Bilens
         # VIN och registreringsnummer tvättas bort en gång till här.
         "internal_errors": internal_errors.public_entries(
             db, vehicle.owner_user_id, scrub=(vehicle.vin, vehicle.registration_number)
