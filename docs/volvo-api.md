@@ -266,7 +266,8 @@ Resedetekteringen (`detection.process_vehicle`) är en tillståndsmaskin:
     eller resor som finns i ett underlag som redan är skapat (eller som skulle flytta till en
     annan månad med ett skapat underlag). Från 1.5.0 är en resa skyddad bara om den finns i
     filen: månaden har ett skapat underlag (`exported`/`stale`) och delresan skapades
-    (`raw_trips.created_at`) senast när filen skapades (`export_jobs.created_at`; okänt → skyddad).
+    (`raw_trips.created_at`) senast när filen skapades (`export_jobs.finished_at`, som sätts efter
+    att raderna lästs, annars `created_at`; okänt → skyddad).
     En resa som tillkommit efter filen – t.ex. när månadens fil skapats i förväg – får starttid
     och förbrukning som vanligt, och månaden blir inaktuell som vid varje ny resa
     (`month_close.protection`, samma regel för K4 och förbrukningen).
@@ -349,7 +350,8 @@ Resedetekteringen (`detection.process_vehicle`) är en tillståndsmaskin:
   som DriveLog har skapat ur bilens avläsningar de senaste 14 dygnen räknas; importerade resor
   och värden som redan finns rörs aldrig, och inte heller resor som finns i ett underlag som redan
   är skapat (1.5.0: en resa som tillkommit efter att månadens fil skapades finns inte i filen och
-  fylls i som vanligt). Resor som saknar värden fylls i efterhand vid nästa efterbearbetning.
+  fylls i som vanligt). Resor som saknar värden fylls i efterhand vid nästa efterbearbetning;
+  går ett värde att räkna fram kör insamlingen efterbearbetningen även när ingen ny resa hittas.
 * **Batteriets användbara kapacitet** (1.5.0, `vehicles.usable_battery_kwh`) anges under
   *Inställningar → Fordon och förare*. Tomt fält: ett standardvärde används bara där den
   ANVÄNDBARA kapaciteten är belagd för modellen och årsmodellen, annars är elen okänd. När
@@ -378,7 +380,8 @@ Resedetekteringen (`detection.process_vehicle`) är en tillståndsmaskin:
   koordinater tas bort ur meddelandet, men en adress eller ett platsnamn som varken är känt eller
   följer mönstren kan finnas kvar – läs filen innan du skickar den vidare.
   Från 1.5.0 innehåller filen också `months` (månad, läge, om filen skapades i förväg och när)
-  och per resa `protected_by_month` samt korta koder för varför starttiden, bensinen och elen är
+  och per resa `protected_by_month`, `created_at` (när DriveLog skapade resan), `start_method`
+  (hur starttiden togs fram) samt korta koder för varför starttiden, bensinen och elen är
   okända (`start_unknown_reason`/`start_unknown_steps`, `fuel_unknown_reason`,
   `energy_unknown_reason`: t.ex. `closed_month`, `no_engine_start`, `engine_window`,
   `no_before_level`, `no_after_level`, `refuel`, `charging`, `no_capacity`, `unchanged_level`,

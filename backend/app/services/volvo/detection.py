@@ -740,7 +740,7 @@ def _attach_late_position(
     samma ankomst:
 
     * bara positionen har flyttats (ny positionsrapport), mätarställningen är oförändrad och
-      bilen har inte rapporterat en ny motorstart;
+      positionen är inte rapporterad efter en ny motorstart;
     * den senaste resan slutar på just den mätarställningen, saknar ankomst (flaggad
       ``round_trip_unobserved``) och har ingen senare resa efter sig;
     * positionens tidsstämpel ligger inom ``CLOCK_SKEW`` från resans sluttid (mätarvärdets
@@ -754,9 +754,9 @@ def _attach_late_position(
     if prev.pos_ts is not None and step.eff.pos_ts <= prev.pos_ts:
         return None
     if step.obs.engine_running is True and (
-        step.obs.engine_reported_at is None or step.obs.engine_reported_at > step.eff.pos_ts
+        step.obs.engine_reported_at is None or step.obs.engine_reported_at < step.eff.pos_ts
     ):
-        return None
+        return None  # positionen är rapporterad efter en ny motorstart: kan vara nästa körning
     raw = db.execute(
         select(RawTrip)
         .where(

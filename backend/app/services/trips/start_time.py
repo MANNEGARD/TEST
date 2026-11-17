@@ -42,14 +42,28 @@ själv; bara ägaren kan ange en annan.
 
 Statusen "bilen används" (Volvos command-accessibility, ``VehicleObservation.car_in_use``)
 räknas lika med "motorn igång": en avläsning visar att bilen används när motorn är igång ELLER
-statusen är UNAVAILABLE med orsaken CAR_IN_USE. Laddhybriden kan starta på el, och då kan
-"motorn igång" komma först en bit in i resan. Starttiden blir den tidigaste av bilens egna
+statusen är UNAVAILABLE med orsaken CAR_IN_USE. Starttiden blir den tidigaste av bilens egna
 tidsstämplar (motorstartens och statusens) inom fönstret; grunden anger då vilket besked som
-gav tiden (``start_signal``: ``engine``, ``car_in_use`` eller ``engine_and_car_in_use``, och
-``in_use_reported_at``). Det är inte prövat att den riktiga bilen svarar CAR_IN_USE under färd:
-utan statusen blir allt som förut, och statusen AVAILABLE räknas aldrig som att bilen stod
-still (det kräver fortfarande motorn avstängd). Metoden är ``engine_start`` även när statusen
-gav tiden, så att den ligger fast och visas som bilens egen tid.
+visade övergången (och gav tiden när metoden är ``engine_start``): ``start_signal`` (``engine``,
+``car_in_use`` eller ``engine_and_car_in_use``) och ``in_use_reported_at``. Det är inte prövat
+att den riktiga bilen svarar CAR_IN_USE under färd, eller vad den svarar när den står: utan
+statusen blir allt som förut, och statusen AVAILABLE räknas aldrig som att bilen stod still (det
+kräver fortfarande motorn avstängd). Metoden är ``engine_start`` även när statusen gav tiden, så
+att den ligger fast och visas som bilens egen tid. Statusen räknas bara där den inte motsägs;
+annars gäller motorstartens regel ensam, som utan statusen (grunden får ``status_ignored``):
+
+* ``stop`` – en avläsning som bara statusen räknar som "används" har en ny rapport om att motorn
+  stängts av. Bilen stannade, och statusen kan ha legat kvar under stoppet eller sedan förra
+  ankomsten; annars kunde förra resans start bli den här resans.
+* ``engine_later`` – statusen slog om utan motorn igång och motorn startade först i en senare
+  avläsning. En start på el med motorstart senare går inte att skilja från en bil som stod kvar
+  med statusen påslagen (dörren öppnad, bilen förvärmd); hellre motorstarten, eller en okänd
+  starttid via rimlighetsspärren, än en halvtimme för tidigt. Statusen ger alltså tiden när den
+  slår om i samma hämtning som motorstarten eller när motorn aldrig går under resan.
+
+Ett kort glapp i statusen (UNAVAILABLE av annan orsak, t.ex. NO_INTERNET, eller ingen status)
+mellan två avläsningar med CAR_IN_USE, med samma tidsstämpel för förra avstängningen hela vägen,
+är ingen ny start.
 
 Tider som räknar med starttiden som känd (kalenderns avfärd, pendlingskedjan, AI-underlaget)
 använder ``known_start``: en uppskattning ur sträckan räknas där som okänd, precis som
@@ -465,12 +479,15 @@ def _distance_plan(db: Session, vehicle_id: uuid.UUID) -> list[tuple[RawTrip, St
 
 def has_distance_candidates(db: Session, vehicle_id: uuid.UUID) -> bool:
     """Finns det resor som efterbearbetningen kan ge en starttid (ur motorstarten eller ur
-    sträckan)? Insamlingen kör då efterbearbetningen även när ingen ny resa har hittats."""
+    sträckan), eller bensin och el (``consumption.has_candidates``)? Insamlingen kör då
+    efterbearbetningen även när ingen ny resa har hittats."""
+    from app.services.volvo import consumption
+
     if engine_plan(db, vehicle_id):
         return True
-    if db.execute(_distance_candidates_query(vehicle_id).limit(1)).first() is None:
-        return False
-    return bool(_distance_plan(db, vehicle_id))
+    if db.execute(_distance_candidates_query(vehicle_id).limit(1)).first() is not None and _distance_plan(db, vehicle_id):
+        return True
+    return consumption.has_candidates(db, vehicle_id)
 
 
 def fill_from_distance(db: Session, vehicle_id: uuid.UUID) -> int:
@@ -556,23 +573,97 @@ def find_engine_start(
     rad med motorn av som rapporterades vid ankomsten. Bilen ska ha använts i alla avläsningar
     från övergången fram till ankomsten (sågs den stå still emellan var det en annan körning),
     och övergången ska ligga efter resans tidigaste gräns.
+
+    Statusen räknas bara där den inte motsägs; annars gäller motorstartens regel ensam (som utan
+    statusen), se ``_find_start``.
     """
-    # En avläsning där motorstatusen inte kunde läsas (None) och statusen inte säger "används"
-    # räknas inte alls, så att ett enstaka fel mitt i resan inte blir en start.
-    seen = [r for r in rows if r.fetched_at <= ended_at and (r.engine_running is not None or _in_use(r))]
-    while seen and seen[-1].engine_running is False and (
-        seen[-1].engine_reported_at is not None and seen[-1].engine_reported_at >= ended_at - ENGINE_CLOCK_SKEW
-    ):
-        seen.pop()  # ankomstraden
+    found = _find_start(rows, earliest=earliest, ended_at=ended_at)
+    return None if found is None else (found[0], found[1])
+
+
+def _status_gap(row: Any) -> bool:
+    """Motorn av och statusen säger varken "används" eller AVAILABLE (t.ex. UNAVAILABLE med orsaken
+    NO_INTERNET, eller ingen status lästes): avläsningen säger inget om att bilen stod still."""
+    return row.engine_running is False and not _in_use(row) and (
+        (getattr(row, "accessibility_status", None) or "").upper() != "AVAILABLE")
+
+
+def _start_index(seen: Sequence[Any], *, use_status: bool) -> int:
+    """Index för den första avläsningen i den sista sammanhängande följden "används" fram till slutet.
+
+    Med statusen räknas också ett glapp (``_status_gap``) mellan två avläsningar som bara statusen
+    räknar som "används", när motorns tidsstämpel (förra avstängningen) är densamma hela vägen –
+    ett kort täckningsglapp under en start på el är ingen ny start.
+    """
     i = len(seen)
-    while i > 0 and (seen[i - 1].engine_running is True or _in_use(seen[i - 1])):
-        i -= 1
+    while i > 0:
+        r = seen[i - 1]
+        if r.engine_running is True or (use_status and _in_use(r)):
+            i -= 1
+            continue
+        nxt = seen[i] if i < len(seen) else None
+        if not (use_status and nxt is not None and _in_use(nxt) and nxt.engine_running is not True
+                and nxt.engine_reported_at is not None and _status_gap(r)):
+            break
+        j = i - 1
+        while j >= 0 and _status_gap(seen[j]) and seen[j].engine_reported_at == nxt.engine_reported_at:
+            j -= 1
+        before = seen[j] if j >= 0 else None
+        if not (before is not None and _in_use(before) and before.engine_running is not True
+                and before.engine_reported_at == nxt.engine_reported_at):
+            break
+        i = j + 1  # glappet hör till följden; ``before`` räknas i nästa varv
+    return i
+
+
+def _fresh_off(seen: Sequence[Any], k: int) -> bool:
+    """Motorn rapporterades avstängd efter föregående hämtning: bilen stannade just då."""
+    r = seen[k]
+    return k > 0 and r.engine_running is False and r.engine_reported_at is not None and (
+        r.engine_reported_at > seen[k - 1].last_seen_at - ENGINE_CLOCK_SKEW)
+
+
+def _find_start(
+    rows: Sequence[Any], *, earliest: datetime | None, ended_at: datetime,
+) -> tuple[Any, Any, str | None] | None:
+    """Som ``find_engine_start`` men med en tredje del: ``None`` när statusen räknades (eller inte
+    fanns), annars varför den lämnades och motorstartens regel fick gälla ensam:
+
+    * ``stop`` – en avläsning som bara statusen räknar som "används" har en NY rapport om att
+      motorn stängts av: bilen stannade, och statusen kan ha legat kvar under stoppet. Följden kan
+      då sträcka sig över förra resan.
+    * ``engine_later`` – statusen slog om i en avläsning utan motorn igång och motorn startade
+      först i en senare avläsning. Det går inte att skilja en start på el från en bil som stod kvar
+      med statusen påslagen (dörren öppnad, bilen förvärmd); motorstarten räknas som förut.
+    """
+    def readings(use_status: bool) -> list[Any]:
+        # En avläsning där motorstatusen inte kunde läsas (None) och statusen inte säger "används"
+        # räknas inte alls, så att ett enstaka fel mitt i resan inte blir en start.
+        seen = [r for r in rows if r.fetched_at <= ended_at
+                and (r.engine_running is not None or (use_status and _in_use(r)))]
+        while seen and seen[-1].engine_running is False and (
+            seen[-1].engine_reported_at is not None and seen[-1].engine_reported_at >= ended_at - ENGINE_CLOCK_SKEW
+        ):
+            seen.pop()  # ankomstraden
+        return seen
+
+    seen = readings(True)
+    ignored: str | None = None
+    i = _start_index(seen, use_status=True)
+    if any(_in_use(seen[k]) and _fresh_off(seen, k) for k in range(i, len(seen))):
+        ignored = "stop"
+    elif i < len(seen) and seen[i].engine_running is not True and any(
+            r.engine_running is True for r in seen[i + 1:]):
+        ignored = "engine_later"
+    if ignored is not None:
+        seen = readings(False)
+        i = _start_index(seen, use_status=False)
     if i == len(seen) or i == 0:
         return None  # motorn gick inte vid ankomsten, eller övergången syns inte
     prev, first_on = seen[i - 1], seen[i]
     if earliest is not None and first_on.fetched_at < earliest:
         return None
-    return prev, first_on
+    return prev, first_on, ignored
 
 
 def engine_estimate(
@@ -585,14 +676,15 @@ def engine_estimate(
     Ger ``("set", tid, None, grund)``, ``("narrow", None, ny senaste start, grund)`` eller
     ``("none", None, None, {})``. Se modulens docstring för reglerna.
     """
-    found = find_engine_start(rows, earliest=earliest, ended_at=ended_at)
+    found = _find_start(rows, earliest=earliest, ended_at=ended_at)
     if found is None:
         return "none", None, None, {}
-    prev, first_on = found
+    prev, first_on, status_ignored = found
     lo = prev.last_seen_at - ENGINE_CLOCK_SKEW
     hi = first_on.fetched_at + ENGINE_CLOCK_SKEW
     gap = _minutes(first_on.fetched_at - prev.last_seen_at)
-    in_use = _in_use(first_on)
+    # Lämnades statusen (``_find_start``) gäller motorstartens regel ensam, som utan statusen.
+    in_use = status_ignored is None and _in_use(first_on)
     # Motorstartens tidsstämpel gäller bara när avläsningen visar motorn igång: vid start på el
     # (bara statusen) är den tidsstämpeln förra avstängningen.
     engine_on = first_on.engine_running is True
@@ -606,12 +698,15 @@ def engine_estimate(
         "earliest": _iso(earliest),
         "trip_km": round(distance_km, 1) if distance_km else None,
     }
+    if status_ignored is not None:
+        basis["status_ignored"] = status_ignored
     # Bilens egna tidsstämplar inom fönstret mellan hämtningarna; den tidigaste är starten.
     candidates = [(t, name) for t, name in ((reported, "engine"), (in_use_at, "car_in_use"))
                   if t is not None and lo <= t <= hi]
     chosen = min(t for t, _ in candidates) if candidates else None
     if in_use:
-        # Vilket besked som gav tiden (utan statusen förblir grunden som förut).
+        # Vilket besked som visade övergången (och gav tiden när metoden är engine_start); utan
+        # statusen förblir grunden som förut.
         signals = [name for t, name in candidates if t == chosen] or (
             ["engine", "car_in_use"] if engine_on else ["car_in_use"])
         basis.update(in_use_reported_at=_iso(in_use_at), start_signal="_and_".join(signals))
@@ -713,7 +808,7 @@ def engine_plan(db: Session, vehicle_id: uuid.UUID) -> list[EngineChange]:
                 continue
             if raw.start_earliest is not None and new_latest < raw.start_earliest:
                 continue
-        if locks.blocks(raw, at):
+        if locks.blocks(raw, at, new_latest):  # även en snävare senaste start flyttar resan (sort_time)
             continue
         plan.append(EngineChange(raw=raw, kind=kind, at=at, latest=new_latest, basis=basis))
     return plan
@@ -777,7 +872,8 @@ def unknown_start_reasons(db: Session, raw: RawTrip, locks: Any, history: Any = 
     """Varför delresans starttid är okänd, som korta koder i stegens ordning (felsökningsfilen).
 
     Tom lista när starttiden är känd. Skriver ingenting. Koderna: ``imported``, ``voided``,
-    ``owner_set`` (ägaren har angett starttiden på journalresan), ``closed_month`` (resan finns i
+    ``owner_set`` (ägaren har angett starttiden på journalresan; den gäller före allt annat, men K4
+    kan ändå spara en uppskattning på delresan), ``closed_month`` (resan finns i
     ett skapat underlag, eller tiden skulle flytta den till en annan månad med ett skapat
     underlag), ``no_arrival``; steget ur motorstarten: ``no_readings``, ``too_old``, ``no_engine_start``,
     ``engine_window`` (för långt mellan hämtningarna), ``engine_late`` (orimligt sen motorstart);

@@ -851,9 +851,13 @@ class Protection:
 
 
 def protection(db: Session, vehicle_id: uuid.UUID) -> Protection:
-    """Fordonets månader med ett skapat underlag och när filen skapades, i ägarens tidszon."""
+    """Fordonets månader med ett skapat underlag och när filen skapades, i ägarens tidszon.
+
+    Filens tid är ``finished_at`` (satt efter att raderna lästs), annars ``created_at``: en resa
+    som sparades medan filen byggdes och kom med i den räknas då som skyddad.
+    """
     rows = db.execute(
-        select(MonthClose.month, ExportJob.created_at)
+        select(MonthClose.month, func.coalesce(ExportJob.finished_at, ExportJob.created_at))
         .outerjoin(ExportJob, ExportJob.id == MonthClose.export_id)
         .where(
             MonthClose.vehicle_id == vehicle_id,

@@ -777,6 +777,26 @@ def fill_vehicle(db: Session, vehicle_id: uuid.UUID, *, now: datetime | None = N
     return len(changed)
 
 
+def has_candidates(db: Session, vehicle_id: uuid.UUID, *, now: datetime | None = None) -> bool:
+    """Skulle ``fill_vehicle`` fylla i bensin eller el på någon delresa nu? Skriver ingenting.
+
+    Insamlingen kör då efterbearbetningen även när ingen ny resa har hittats, så att en resa
+    med redan känd starttid också får sin förbrukning i efterhand (``start_time.has_distance_candidates``).
+    """
+    vehicle = db.get(Vehicle, vehicle_id)
+    if vehicle is None:
+        return False
+    raws = _candidates(db, vehicle_id, now or utcnow())
+    if not raws:
+        return False
+    raws = _open_month(raws, _protection(db, vehicle))
+    return any(
+        (est.fuel_liters is not None and raw.fuel_quality == ValueQuality.UNKNOWN and raw.fuel_liters is None)
+        or (est.energy_kwh is not None and raw.energy_quality == ValueQuality.UNKNOWN and raw.energy_kwh is None)
+        for raw, est in _estimates(db, vehicle, raws)
+    )
+
+
 def _capacity_based(raw: RawTrip) -> bool:
     basis = raw.energy_basis
     return (

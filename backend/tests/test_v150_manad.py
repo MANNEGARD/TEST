@@ -239,6 +239,94 @@ def test_without_a_month_close_row_nothing_is_protected(db, user, vehicle):
     assert month_close.protection(db, vehicle.id).files == {}
 
 
+def november_rows(db, vehicle):
+    from zoneinfo import ZoneInfo
+
+    from app.services.export import service as export_svc
+
+    tz = ZoneInfo("Europe/Stockholm")
+    journal, _ = export_svc.build_simple_journal(
+        db, vehicle=vehicle, start=datetime(2026, 11, 1, tzinfo=tz), end=datetime(2026, 12, 1, tzinfo=tz), tz=tz)
+    return [r.as_dict() for r in journal.rows], month_close.rows_fingerprint(journal)
+
+
+def test_a_narrower_latest_start_never_moves_a_trip_into_a_month_with_a_file(db, user, vehicle):
+    """Steget ur motorstarten som bara snävar in senaste starten ('narrow') flyttar också resan
+    (sort_time = senaste starten). Novembers fil skapad vid månadsskiftet; resan framme 00:40 den
+    1 december svensk tid. Motorn igång 23:55 den 30 november, men 85 min mellan hämtningarna:
+    den nya senaste starten ligger i november och lämnas – novembers rader ändras inte."""
+    from app.models.enums import Category, ReviewStatus
+
+    ended = datetime(2026, 11, 30, 23, 40, tzinfo=UTC)
+    raw = live_raw(db, vehicle, user, km=40.0, ended=ended, earliest=datetime(2026, 11, 30, 20, 0, tzinfo=UTC),
+                   latest=datetime(2026, 11, 30, 23, 10, tzinfo=UTC))
+    raw.created_at = ended + timedelta(minutes=1)
+    trip = seg.create_logical_for_raw(db, raw, category=Category.WORK, review_status=ReviewStatus.APPROVED)
+    for i, (fetched, seen, running, reported) in enumerate([
+        (datetime(2026, 11, 30, 21, 0, tzinfo=UTC), datetime(2026, 11, 30, 21, 30, tzinfo=UTC), False,
+         datetime(2026, 11, 30, 20, 0, tzinfo=UTC)),
+        (datetime(2026, 11, 30, 22, 55, tzinfo=UTC), datetime(2026, 11, 30, 22, 55, tzinfo=UTC), True, None),
+        (datetime(2026, 11, 30, 23, 30, tzinfo=UTC), datetime(2026, 11, 30, 23, 30, tzinfo=UTC), True, None),
+    ]):
+        db.add(M.VehicleObservation(vehicle_id=vehicle.id, source="volvo_api", fetched_at=fetched, last_seen_at=seen,
+                                    seen_count=1, engine_running=running, engine_reported_at=reported,
+                                    content_hash=f"narrow-{i}", processed_at=fetched))
+    db.flush()
+    close_month(db, user, vehicle, made=datetime(2026, 12, 1, 5, 30, tzinfo=UTC))
+    sort_before, nov_before = raw.sort_time, november_rows(db, vehicle)
+    locks = month_close.protection(db, vehicle.id)
+    assert locks.month_of(sort_before) == "2026-12" and not locks.in_file(raw)
+    assert start_time.engine_plan(db, vehicle.id) == []
+    start_time.fill_from_engine(db, vehicle.id)
+    db.refresh(raw)
+    seg.refresh_logical(db, trip)
+    db.flush()
+    assert raw.sort_time == sort_before
+    assert november_rows(db, vehicle) == nov_before
+
+
+def test_the_file_time_is_when_its_rows_were_read(db, user, vehicle):
+    """ExportJob.created_at tas innan raderna läses; finished_at efter. En resa som sparades
+    medan filen byggdes (och därför står i den) är skyddad."""
+    raw = k4_raw(db, vehicle, user, ended=NOV, created=NOV + timedelta(minutes=1), odo=50000)
+    record = close_month(db, user, vehicle, made=raw.created_at - timedelta(milliseconds=200))
+    job = db.get(M.ExportJob, record.export_id)
+    job.finished_at = raw.created_at + timedelta(seconds=2)
+    db.flush()
+    locks = month_close.protection(db, vehicle.id)
+    assert locks.files == {"2026-11": job.finished_at}
+    assert locks.in_file(raw)
+    assert start_time.fill_from_distance(db, vehicle.id) == 0
+    # Utan finished_at (äldre filer): created_at som förut.
+    job.finished_at = None
+    db.flush()
+    assert not month_close.protection(db, vehicle.id).in_file(raw)
+
+
+def test_consumption_is_filled_afterwards_also_when_the_start_time_is_known(db, user, vehicle):
+    """Resorna har redan känd starttid men saknar bensin (t.ex. från före uppgraderingen, när
+    novembers fil skapats i förväg). Nästa hämtning utan ny resa kör efterbearbetningen ändå."""
+    raws = replay(db, user, vehicle)
+    close_month(db, user, vehicle, made=IN_ADVANCE)
+    for raw in raws:
+        raw.started_at = raw.start_latest or raw.ended_at - timedelta(minutes=10)
+        raw.start_time_quality = TimeQuality.REPORTED
+        raw.start_estimate_basis = {"method": "engine_start"}
+        seg.set_raw_sort_time(raw)
+    db.flush()
+    long = by_km(raws)["long"]
+    assert long.fuel_liters is None
+    assert start_time.engine_plan(db, vehicle.id) == []
+    assert consumption.has_candidates(db, vehicle.id)
+    assert start_time.has_distance_candidates(db, vehicle.id)
+    detection.process_vehicle(db, vehicle, user_id=user.id, now=m(10.0), run_pipeline=True,
+                              settings={"poll_interval_seconds": 120})
+    db.refresh(long)
+    assert long.fuel_quality == ValueQuality.ESTIMATED
+    assert long.fuel_liters == pytest.approx(12.0, abs=1.0)
+    assert not consumption.has_candidates(db, vehicle.id)  # idempotent: ingen ny körning i onödan
+
+
 # ----------------------------------------------------------------------------- felsökningsfilen
 
 
