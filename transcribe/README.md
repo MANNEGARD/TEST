@@ -39,6 +39,14 @@ Servern behöver ungefär 100 MB RAM. ffmpeg körs bara kort efter varje inspeln
 
 ## Installation på VPS:en (bredvid DriveLog)
 
+**Allt i en rad:** när nycklarna (steg 1) och DNS-posten (steg 2) finns gör den här raden steg
+3–5 åt dig. Den frågar efter de två nycklarna med dold inmatning, startar tjänsten och visar
+inbjudningslänken. Raden går att köra igen; en `.env` som redan finns skrivs inte över.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/SMGD-MP/TEST/HEAD/transcribe/installera.sh | sudo bash -s -- drivelog.smgd.se transcribe.smgd.se
+```
+
 ### 1. Skaffa nycklar (gratis)
 
 1. **Deepgram:** skapa ett konto på <https://console.deepgram.com>, gå till *API Keys* och välj
