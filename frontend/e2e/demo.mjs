@@ -592,6 +592,7 @@ try {
       stale: "e2e00000-0000-4000-8000-000000000004",
       gone: "e2e00000-0000-4000-8000-000000000005",
       mergeOverlap: "e2e00000-0000-4000-8000-000000000006",
+      part: "e2e00000-0000-4000-8000-000000000007",
     };
     add(ids.time, "Körtiden är längre än resans längd i tid", { type: "time_conflict", started_at: imported.started_at, ended_at: imported.ended_at, driving_minutes: elapsed + 45, elapsed_minutes: elapsed }, [imported.id]);
     add(ids.dist, "Körsträckan stämmer inte med mätarställningen", { type: "odometer_mismatch", distance_km: imported.distance_km, reported_km: imported.distance_km, odometer_km: imported.distance_km + 20 }, [imported.id]);
@@ -599,6 +600,8 @@ try {
     add(ids.stale, "Fordonet har inte rapporterat nya uppgifter", { type: "stale_data" }, []);
     add(ids.gone, "Körsträckan stämmer inte med mätarställningen", { type: "odometer_mismatch", distance_km: 21.4, started_at: "2026-11-10T07:15:00Z" }, ["00000000-0000-4000-8000-0000deadbeef"], { demo_trip_gone: true });
     add(ids.mergeOverlap, "Överlappande resor", { type: "overlap", first_trip_id: a.id, second_trip_id: b.id }, [a.id, b.id]);
+    // Råresan är bara en del av den sammanslagna resan i rutan.
+    add(ids.part, "Körsträckan stämmer inte med mätarställningen", { type: "odometer_mismatch", distance_km: 8.0, odometer_km: 20, reported_km: imported.distance_km, part_of_trip: true, part_distance_km: 8.0, trip_distance_km: imported.distance_km, part_started_at: imported.started_at, part_ended_at: imported.ended_at }, [imported.id]);
     await page.evaluate(([k, v]) => window.localStorage.setItem(k, v), [KEY, JSON.stringify(state)]);
     const restore = async () => {
       await page.evaluate(([k, v]) => window.localStorage.setItem(k, v), [KEY, saved]);
@@ -619,6 +622,14 @@ try {
         const t = await textOf(dist);
         if (t.includes("importera Volvos körjournal för dagen")) fail("kortet råder att importera Volvos körjournal för en resa som redan är importerad");
         if (!t.includes("en ny import ger samma värden")) fail("kortet säger inte att en ny import ger samma värden");
+      }
+      // En delsträcka: texten säger att det gäller en del av resan, och underlaget redovisar hela resans sträcka.
+      const part = await showAnomaly(page, null, ids.part);
+      if (part) {
+        const t = await textOf(part);
+        if (!t.includes("delsträcka av resan")) fail("kortet säger inte att avvikelsen gäller en delsträcka av resan");
+        if (!t.includes("8,0 km")) fail("kortet visar inte delsträckans sträcka");
+        if (t.includes("Delsträckans sträcka är 8,0 km") && !t.includes(`redovisar ${imported.distance_km.toFixed(1).replace(".", ",")} km`)) fail("kortet säger inte att underlaget redovisar hela resans sträcka");
       }
       // Omräkningens äldre typ odometer_overlap förklaras som mätarställningar som går bakåt.
       const legacy = await showAnomaly(page, null, ids.legacy);
