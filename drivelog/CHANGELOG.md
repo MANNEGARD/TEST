@@ -5,6 +5,18 @@
 
 ## 1.4.0
 
+- **Avvikelser i Granskning visar vilken resa det gäller.** Varje avvikelse visar nu resan –
+  datum, klockslag, från och till, sträcka och ärende – och har en knapp som öppnar den. Kortet
+  säger i klartext vad som inte stämmer, vilket värde underlaget använder, vad du gör och vad som
+  händer om du inte gör något. Gäller avvikelsen två resor visas båda. Raderna i kön visar datum
+  och sträcka, så att två ärenden med samma rubrik går att skilja åt. Det gäller även ärenden som
+  redan låg i kön.
+- **Mindre brus i Granskning.** Kön innehåller bara sådant som kan ändra vad som redovisas och
+  som du kan göra något åt. *Onormal förbrukning* skapas inte längre – den är missvisande för en
+  laddhybrid och rör inte underlaget. Avvikelser på resor som är avgjorda som privata tas bort
+  (de kommer tillbaka om resan blir tjänst), *Körtiden är längre än resans längd* kräver minst
+  30 minuters skillnad, och inget ärende bygger på DriveLogs egna uppskattningar. Sådana ärenden
+  som redan ligger öppna stängs av sig själva direkt efter uppdateringen.
 - **Extra domäner – fler tjänster på samma server.** Den nya inställningen *Extra domäner*
   (`extra_domains`) tar en rad per domän, t.ex. `transcribe.smgd.se=transcribe:8080`. Appens
   proxy hämtar då certifikat även för den domänen och skickar trafiken vidare till den andra

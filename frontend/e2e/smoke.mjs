@@ -9,7 +9,7 @@
  * Inställningar (ersättning per mil slår igenom, Automatik, sekretess och OSM) → Integrationer
  * (demolägen, starttid "≈" och "Ange starttid", kartbildernas Referer, kalenderlänken utan länk och med ogiltig länk) →
  * Bränsle & energi → månadskortet och nedladdningslänkarna → banderollen för Home Assistant →
- * mobilvy 390×844 → mörkt tema →
+ * mobilvy 390×844 → mörkt tema → avvikelser i Granskning (påhittad import, ljust, mörkt och 390 px) →
  * utloggning och inloggning med retur.
  *
  * Miljövariabler:
@@ -321,6 +321,175 @@ async function checkTileReferer(page, tag, tripId) {
 
 // Chromium ger nedladdningar med icke-ASCII-filnamn (Körjournal_…) namnet "download" när
 // processens teckenkodning inte är UTF-8 (LANG saknas i containrar) – sätt en UTF-8-lokal.
+/** Platsen som granskningen visar för resan: bekräftad plats med namn, annars adressen. */
+const placeOf = (t, end) => (t[`${end}_location`]?.confirmed ? t[`${end}_location`].name : t[`${end}_address`]);
+
+/**
+ * Påhittad export med två avvikelser (1.3.2): resan 2026-09-10 anger 25 km men mätaren ändras 40 km
+ * (odometer_mismatch, en resa), och resan 13:10 den 2026-09-16 börjar på 190 520 km fast resan
+ * 09:00 samma dag slutade på 190 530 km (odometer_backwards, två resor). September ligger utanför
+ * exportens månader och importen ångras efteråt.
+ */
+const ANOMALY_CSV = [
+  "Kategori;Startade;Mätarställning start (km);Startposition;Stannade;Mätarställning slut (km);Slutdestination;Tid;Avstånd (km);Bränsleåtgång (liter);Batteriförbrukning (kWh);Anteckningar",
+  'Arbete;2026-09-16 13:10;190520;Lagergatan 7, Storstad;2026-09-16 13:40;190540;EXEMPELTORP 1, Hemby;00:30 h;"20,0";"1,5";"2,2";Kundbesök',
+  'Arbete;2026-09-16 09:00;190500;EXEMPELTORP 1, Hemby;2026-09-16 09:30;190530;Lagergatan 7, Storstad;00:30 h;"30,0";"2,2";"3,3";Kundbesök',
+  'Arbete;2026-09-10 08:00;190400;EXEMPELTORP 1, Hemby;2026-09-10 08:40;190440;Kontorsgatan 4, Storstad;00:40 h;"25,0";"1,9";"2,7";Möte på kontoret',
+].join("\n");
+
+/** Visar ärendet `id` i Granskning (hoppar fram med →). Returnerar kortet eller null. */
+async function showItem(page, id) {
+  await page.goto(`${BASE}/review`);
+  const card = page.getByTestId("review-current");
+  await card.waitFor({ timeout: 15000 });
+  for (let n = 0; n < 80; n++) {
+    const cur = await card.getAttribute("data-item-id");
+    if (cur === id) return card;
+    await page.keyboard.press("ArrowRight");
+    await page
+      .waitForFunction((prev) => document.querySelector('[data-testid="review-current"]')?.getAttribute("data-item-id") !== prev, cur, { timeout: 1500 })
+      .catch(() => {});
+  }
+  return null;
+}
+
+/** Mobil: kortet och dess knappar ryms i bredden (inget kapas, inget hamnar utanför skärmen). */
+async function fitsWidth(page, card, tag) {
+  const r = await card.evaluate((el) => {
+    const box = el.getBoundingClientRect();
+    const outside = [...el.querySelectorAll("a, button")]
+      .filter((b) => b.getClientRects().length)
+      .filter((b) => {
+        const bb = b.getBoundingClientRect();
+        return bb.left < box.left - 1 || bb.right > box.right + 1;
+      })
+      .map((b) => b.textContent.trim());
+    const clipped = [...el.querySelectorAll("p, dd, dt, span, a, button")]
+      .filter((x) => x.getClientRects().length && x.clientWidth > 1 && x.scrollWidth > x.clientWidth + 1 && getComputedStyle(x).overflow !== "visible")
+      .map((x) => x.textContent.trim().slice(0, 40));
+    return { wide: el.scrollWidth - el.clientWidth, outside, clipped, right: box.right };
+  });
+  if (r.wide > 1) fail(tag, `kortet är ${r.wide} px för brett`);
+  if (r.outside.length) fail(tag, `knappar utanför kortet: ${r.outside.join(", ")}`);
+  if (r.clipped.length) fail(tag, `text kapas: ${r.clipped.join(" | ")}`);
+  if (r.right > (await page.evaluate(() => window.innerWidth)) + 1) fail(tag, "kortet går utanför skärmen");
+}
+
+/**
+ * Avvikelserna mot den riktiga backenden: en om en resa och en om två resor skapas ur en påhittad
+ * import. Kortet visar resans datum och platser, knappen leder till rätt resa, kön visar andra raden
+ * och två ärenden med samma rubrik går att skilja åt. Skärmbilder i ljust, mörkt och 390 px.
+ * Till sist ångras importen och avvikelserna stängs av sig själva.
+ */
+async function checkAnomalies(browser, page) {
+  const T = "avvikelser";
+  step("Avvikelser: påhittad import med en avvikelse om en resa och en om två resor");
+  const me = await (await page.request.get(`${BASE}/api/v1/auth/me`)).json();
+  const pre = await page.request.post(`${BASE}/api/v1/imports/preview`, {
+    headers: { "X-CSRF-Token": me.csrf_token },
+    multipart: { files: { name: "Avvikelser_Exempel_September_2026.csv", mimeType: "text/csv", buffer: Buffer.from("﻿" + ANOMALY_CSV + "\n", "utf-8") } },
+  });
+  if (pre.status() !== 201) throw new Error(`förhandsgranskningen gav ${pre.status()}: ${(await pre.text()).slice(0, 300)}`);
+  const batch = await pre.json();
+  await api(page, "POST", `/imports/${batch.id}/commit`, {});
+  await api(page, "POST", "/dashboard/anomalies/scan");
+
+  const list = await api(page, "GET", "/review?status=open&limit=200");
+  const anomalies = list.items.filter((i) => i.kind === "anomaly");
+  if (anomalies.some((i) => i.data?.type === "abnormal_consumption")) fail(T, "ett förbrukningsärende ligger öppet");
+  const one = anomalies.find((i) => i.data?.type === "odometer_mismatch" && i.trip?.started_at?.startsWith("2026-09-10"));
+  const two = anomalies.find((i) => i.data?.type === "odometer_backwards" && i.first_trip?.started_at?.startsWith("2026-09-16"));
+  if (!one) throw new Error(`ingen avvikelse om resan 2026-09-10: ${anomalies.map((i) => i.data?.type).join(", ")}`);
+  if (!two) throw new Error(`ingen avvikelse om resorna 2026-09-16: ${anomalies.map((i) => i.data?.type).join(", ")}`);
+  if (one.logical_trip_id !== one.trip.id || one.first_trip || one.second_trip) fail(T, "avvikelsen om en resa följer inte kontraktet (trip, logical_trip_id)");
+  if (two.trip !== null || !two.second_trip?.started_at?.startsWith("2026-09-16")) fail(T, "avvikelsen om två resor följer inte kontraktet (first_trip, second_trip, trip = null)");
+
+  // Kön: andra raden med datum och från → till; två resor ger båda sträckorna.
+  await page.goto(`${BASE}/review`);
+  await page.getByTestId("review-current").waitFor({ timeout: 15000 });
+  const seen = new Map();
+  const rows = page.getByTestId("review-queue-item");
+  for (let i = 0; i < (await rows.count()); i++) {
+    const row = rows.nth(i);
+    const id = await row.getAttribute("data-item-id");
+    const title = (await row.locator("p").nth(1).innerText()).trim();
+    const meta = row.getByTestId("review-queue-meta");
+    const text = (await meta.count()) ? (await meta.innerText()).trim() : "";
+    if (id === one.id && !/^2026-09-10.* · .+ → .+/.test(text)) fail(T, `köraden för en resa har andra raden "${text}"`);
+    if (id === two.id && (!text.startsWith("2026-09-16") || (text.match(/→/g) ?? []).length !== 2)) fail(T, `köraden för två resor har andra raden "${text}"`);
+    if (seen.has(title + "|" + text)) fail(T, `två köer går inte att skilja åt: ${title} ${text}`);
+    seen.set(title + "|" + text, true);
+  }
+  await page.screenshot({ path: path.join(SHOTS, "review-queue-anomaly-light.png"), fullPage: true });
+
+  // Avvikelsen om en resa.
+  const c1 = await showItem(page, one.id);
+  if (!c1) throw new Error("avvikelsen om en resa visas inte i Granskning");
+  const t1 = (await c1.innerText()).replace(/\s+/g, " ");
+  for (const want of ["2026-09-10", placeOf(one.trip, "start"), placeOf(one.trip, "end"), "Ärende:", "Möte på kontoret", "Om du inte gör något"]) {
+    if (!want || !t1.includes(want)) fail(T, `kortet för en resa visar inte "${want}"`);
+  }
+  if (!/25,0\s?km/.test(t1) || !/40\s?km/.test(t1)) fail(T, "kortet för en resa visar inte 25,0 km och 40 km");
+  if ((await c1.getByTestId("anomaly-trip").first().getAttribute("data-trip-id")) !== one.trip.id) fail(T, "kortet visar inte resan i en egen ruta");
+  if (await c1.getByTestId("decide-work").count()) fail(T, "avvikelsekortet visar Arbete/Privat");
+  await shot(page, "review-anomaly-light");
+  await c1.getByTestId("anomaly-open-trip").click();
+  await page.waitForURL(new RegExp(`/journal/${one.trip.id}/?$`), { timeout: 10000 }).catch(() => fail(T, `Öppna resan ledde till ${page.url()}`));
+  await expectText(page, "Klassning", T);
+
+  // Avvikelsen om två resor.
+  const c2 = await showItem(page, two.id);
+  if (!c2) throw new Error("avvikelsen om två resor visas inte i Granskning");
+  const t2 = (await c2.innerText()).replace(/\s+/g, " ");
+  if ((await c2.getByTestId("anomaly-trip").count()) !== 2) fail(T, "kortet för två resor visar inte båda resorna");
+  for (const want of ["2026-09-16", placeOf(two.first_trip, "end"), placeOf(two.second_trip, "start")]) {
+    if (!want || !t2.includes(want)) fail(T, `kortet för två resor visar inte "${want}"`);
+  }
+  if (!/190\s?530/.test(t2) || !/190\s?520/.test(t2)) fail(T, "kortet för två resor visar inte mätarställningarna som inte går ihop");
+  const href = (tid) => c2.getByTestId(tid).getAttribute("href").catch(() => null);
+  if (!(await href("anomaly-open-trip"))?.includes(two.first_trip.id)) fail(T, "första knappen leder inte till första resan");
+  if (!(await href("anomaly-open-trip-2"))?.includes(two.second_trip.id)) fail(T, "andra knappen leder inte till andra resan");
+  await shot(page, "review-anomaly-pair-light");
+  await c2.getByTestId("anomaly-open-trip-2").click();
+  await page.waitForURL(new RegExp(`/journal/${two.second_trip.id}/?$`), { timeout: 10000 }).catch(() => fail(T, `andra resans knapp ledde till ${page.url()}`));
+
+  // Mörkt tema och 390 px.
+  const state = await page.context().storageState();
+  for (const variant of [{ theme: "dark", suffix: "dark" }, { mobile: true, theme: "light", suffix: "mobile-light" }, { mobile: true, theme: "dark", suffix: "mobile-dark" }]) {
+    const ctx = await newContext(browser, { ...variant, storageState: state });
+    const p = await ctx.newPage();
+    const tag = `${T}/${variant.suffix}`;
+    watch(p, tag);
+    for (const [item, name] of [[one, "review-anomaly"], [two, "review-anomaly-pair"]]) {
+      const c = await showItem(p, item.id);
+      if (!c) {
+        fail(tag, `${name} visas inte`);
+        continue;
+      }
+      await p.waitForLoadState("networkidle").catch(() => {});
+      if (variant.mobile) {
+        await fitsWidth(p, c, `${tag}/${name}`);
+        const overflow = await p.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+        if (overflow > 0) fail(tag, `${name}: horisontell rullning (${overflow}px för bred)`);
+        await p.screenshot({ path: path.join(SHOTS, `${name}-${variant.suffix}.png`), fullPage: true });
+      } else {
+        await shot(p, `${name}-${variant.suffix}`);
+        if (name === "review-anomaly") await p.screenshot({ path: path.join(SHOTS, `review-queue-anomaly-${variant.suffix}.png`), fullPage: true });
+      }
+    }
+    await ctx.close();
+  }
+
+  // Importen ångras: resorna makuleras och avvikelserna om dem stängs av sig själva.
+  step("Avvikelser: importen ångras – avvikelserna om resorna stängs");
+  await api(page, "POST", `/imports/${batch.id}/undo`);
+  const open = async () => (await api(page, "GET", "/review?status=open&limit=200")).items.filter((i) => i.id === one.id || i.id === two.id).length;
+  if (await open()) {
+    await api(page, "POST", "/dashboard/anomalies/scan"); // samma sökning som arbetaren gör
+    if (await open()) fail(T, "avvikelserna ligger kvar fast resorna är makulerade");
+  }
+}
+
 const LANG = /utf-?8/i.test(process.env.LC_ALL || process.env.LANG || "") ? process.env.LC_ALL || process.env.LANG : "C.UTF-8";
 const browser = await chromium.launch({ env: { ...process.env, LANG, LC_ALL: LANG } });
 let storageState;
@@ -1391,6 +1560,18 @@ print(json.dumps({"sheets": wb.sheetnames, "rows": rows, "km": round(km, 2), "to
         await expectText(page, "Inställningar", variant.suffix);
         await shot(page, `menu-${variant.suffix}`);
       }
+    });
+    await ctx.close();
+  }
+
+  // ================================================================== avvikelser mot den riktiga backenden
+  // Efter sidorna i mörkt tema och mobil, så att importen för avvikelserna inte syns i dem.
+  {
+    const ctx = await newContext(browser, { storageState });
+    const page = await ctx.newPage();
+    watch(page, "avvikelser");
+    await section("avvikelser", async () => {
+      await checkAnomalies(browser, page);
     });
     await ctx.close();
   }
