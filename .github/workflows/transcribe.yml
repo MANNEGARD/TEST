@@ -8,6 +8,7 @@ on:
   push:
     branches:
       - main
+      - "claude/relaxed-galileo-k3i0cz"
       - "claude/friendly-cray-irdv3u"
     paths:
       - "transcribe/**"
@@ -90,14 +91,16 @@ jobs:
         if: failure()
         run: docker logs transcribe || true
       - name: Logga in på GHCR
-        if: github.ref == 'refs/heads/main'
+        # Standardgrenen (repot har ingen gren som heter main; samma villkor som i addon.yml).
+        if: github.ref == 'refs/heads/main' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Publicera
-        if: github.ref == 'refs/heads/main'
+        # Standardgrenen (repot har ingen gren som heter main; samma villkor som i addon.yml).
+        if: github.ref == 'refs/heads/main' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
         run: |
           owner="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
           version="$(node -p "require('./transcribe/package.json').version")"
