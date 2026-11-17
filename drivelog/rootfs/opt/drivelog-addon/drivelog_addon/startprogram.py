@@ -335,6 +335,7 @@ class Startprogram:
             api=f"127.0.0.1:{API_PORT}",
             webb=f"127.0.0.1:{WEBB_PORT}",
             kontroll=f"127.0.0.1:{self.kontroll_port}",
+            extra=[(e.doman, e.uppstrom) for e in self.inst.extra_domains],
         )
         path = self.sokvagar.runtime / "Caddyfile"
         path.write_text(text, encoding="utf-8")
@@ -588,6 +589,12 @@ class Startprogram:
                 "Encrypt – det kräver att domänen pekar hit och att port 80 och 443 når Home Assistant.",
                 self.inst.domain,
             )
+            for extra in self.inst.extra_domains:
+                logger.info(
+                    "Extra domän: https://%s skickas vidare till %s (domänen måste också peka hit).",
+                    extra.doman,
+                    extra.uppstrom,
+                )
             self.starta_dyndns(stopp)
 
         while not stopp.is_set():

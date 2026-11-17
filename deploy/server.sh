@@ -25,6 +25,18 @@
 #   --utan-automatisk-uppdatering   slår av den (domänen behövs inte).
 #   --lage                          visar läget i klartext (domänen behövs inte).
 #
+# Extra domäner – fler tjänster på samma server (val sist på raden):
+#   --extra-doman <domän>=<värd>:<port>
+#                                   DriveLogs Caddy hämtar certifikat även för <domän> och skickar
+#                                   trafiken vidare till <värd>:<port>, t.ex.
+#                                     --extra-doman transcribe.smgd.se=transcribe:8080
+#                                   Valet kan upprepas, eller flera anges med komma emellan. Det
+#                                   sparas i inställningsfilen och gäller tills det ändras – även
+#                                   vid automatisk uppdatering. DriveLog ansluts då till Docker-nätet
+#                                   "smgd" (skapas om det saknas); den andra tjänstens container
+#                                   måste också vara med i det nätet för att nås på sitt namn.
+#   --utan-extra-doman              tar bort alla extra domäner.
+#
 # Inställningar via miljövariabler (behövs normalt inte):
 #   DRIVELOG_ADMIN_EMAIL, DRIVELOG_ADMIN_PASSWORD  konto utan frågor (automatiserad installation)
 #   DRIVELOG_VERSION     en viss version i stället för den senaste
@@ -51,6 +63,9 @@ ENHET=drivelog-uppdatering
 KONF="$HEM/automatik.conf"
 LAGEFIL="$HEM/lage.txt"
 KOPIEKATALOG="$HEM/kopior"
+# Docker-nätet som DriveLog ansluts till när det finns extra domäner (--extra-doman): där når
+# Caddy de andra tjänsternas containrar på deras namn.
+NATVERK=smgd
 # Finns medan en automatisk uppgradering pågår. Blir den kvar (avbrott, omstart) gör nästa körning
 # – tidsstyrd eller för hand – klart återgången innan något annat händer.
 PAGAENDE="$HEM/pagaende-uppgradering"
@@ -147,6 +162,15 @@ borja_logga() { # loggfilen i HEM; roteras vid 1 MB
     mv -f "$LOGGFIL" "$LOGGFIL.1" || true
   fi
   touch "$LOGGFIL" && chmod 600 "$LOGGFIL" || LOGGFIL=""
+}
+
+# <domän>=<värd>:<port> för --extra-doman. Samma regler som startprogrammet (installningar.py):
+# värden skrivs in i Caddyfilen, så bara a–z, 0–9, punkt, bindestreck och understreck.
+ar_extra_doman() {
+  [[ "$1" =~ ^([^=]+)=([a-z0-9][a-z0-9_.-]{0,62}):([0-9]{1,5})$ ]] || return 1
+  local doman="${BASH_REMATCH[1]}" vard="${BASH_REMATCH[2]}" port="${BASH_REMATCH[3]}"
+  ar_doman "$doman" && [[ "$doman" == *.* && "$doman" != localhost && "$vard" != localhost ]] \
+    && ((10#$port >= 1 && 10#$port <= 65535))
 }
 
 sakert_varde() { [[ "$1" =~ ^[A-Za-z0-9._:/@+=-]*$ && "${#1}" -le 300 ]]; }
@@ -357,9 +381,20 @@ NYTT_LOSENORD=0
 AUTO_PA=0
 AUTO_AV=0
 VISA_LAGE=0
+EXTRA=()     # --extra-doman, som de skrevs
+UTAN_EXTRA=0 # --utan-extra-doman
+vantar_extra=0
 for arg in "$@"; do
+  if [[ "$vantar_extra" == 1 ]]; then
+    vantar_extra=0
+    EXTRA+=("$arg")
+    continue
+  fi
   case "$arg" in
     --nytt-losenord) NYTT_LOSENORD=1 ;;
+    --extra-doman) vantar_extra=1 ;;
+    --extra-doman=*) EXTRA+=("${arg#*=}") ;;
+    --utan-extra-doman) UTAN_EXTRA=1 ;;
     --automatisk-uppdatering) AUTO_PA=1 ;;
     --utan-automatisk-uppdatering) AUTO_AV=1 ;;
     --lage) VISA_LAGE=1 ;;
@@ -369,6 +404,8 @@ for arg in "$@"; do
   esac
 done
 [[ "$AUTO_PA$AUTO_AV" != 11 ]] || die "Välj antingen --automatisk-uppdatering eller --utan-automatisk-uppdatering."
+[[ "$vantar_extra" == 0 ]] || die "--extra-doman behöver ett värde, t.ex. --extra-doman transcribe.smgd.se=transcribe:8080."
+[[ "$UTAN_EXTRA" == 0 || ${#EXTRA[@]} -eq 0 ]] || die "Välj antingen --extra-doman eller --utan-extra-doman."
 if [[ "$TIDSSTYRD" == 1 && $# -ne 1 ]]; then die "--tidsstyrd används bara av timern och tar inga andra val."; fi
 if [[ "$VISA_LAGE" == 1 || "$TIDSSTYRD" == 1 || ("$AUTO_AV" == 1 && -z "$DOMAN") ]]; then
   [[ "$(id -u)" == 0 ]] || die "Kör raden med sudo."
@@ -398,6 +435,28 @@ ar_doman "$DOMAN" \
 LOKAL=0
 [[ "$DOMAN" == localhost ]] && LOKAL=1
 
+# Extra domäner: "behall" = som i inställningsfilen, "satt:<a>,<b>" = ersätt (tomt = ta bort alla).
+EXTRA_RAD=behall
+EXTRA_DOMANER=() # kontrollerade, <domän>=<värd>:<port>
+if [[ ${#EXTRA[@]} -gt 0 || "$UTAN_EXTRA" == 1 ]]; then
+  for rad in "${EXTRA[@]}"; do
+    IFS=, read -r -a delar <<<"$rad"
+    for del in "${delar[@]}"; do
+      del="${del,,}"
+      [[ -n "$del" ]] || continue
+      ar_extra_doman "$del" || die "--extra-doman '$del' ska skrivas <domän>=<värd>:<port>, t.ex. transcribe.smgd.se=transcribe:8080." \
+        "Värden är namnet på den andra tjänstens container (eller 127.0.0.1), utan http:// och utan sökväg."
+      [[ "${del%%=*}" != "$DOMAN" ]] || die "--extra-doman: ${del%%=*} är redan DriveLogs egen domän."
+      for annan in "${EXTRA_DOMANER[@]}"; do
+        [[ "${annan%%=*}" != "${del%%=*}" ]] || die "--extra-doman: ${del%%=*} står med mer än en gång."
+      done
+      EXTRA_DOMANER+=("$del")
+    done
+  done
+  [[ ${#EXTRA_DOMANER[@]} -gt 0 || "$UTAN_EXTRA" == 1 ]] || die "--extra-doman behöver ett värde, t.ex. --extra-doman transcribe.smgd.se=transcribe:8080."
+  EXTRA_RAD="satt:$(IFS=,; printf '%s' "${EXTRA_DOMANER[*]}")"
+fi
+
 # Frågor ställs i terminalen även när skriptet kommer genom ett rör (curl … | bash).
 fraga() { # variabelnamn, ledtext, [dold]
   { : </dev/tty; } 2>/dev/null || die "Ingen terminal att fråga i." \
@@ -414,14 +473,16 @@ fraga() { # variabelnamn, ledtext, [dold]
 
 # --- Gemensamt för start och uppgradering --------------------------------------------------------
 # Inställningsfilen skrivs av Python i avbilden (riktig JSON även för konstiga tecken). Värdena
-# går in via standard in – aldrig på en kommandorad eller i en miljövariabel.
+# går in via standard in – aldrig på en kommandorad eller i en miljövariabel. De extra domänerna
+# (EXTRA_RAD) ändras bara när --extra-doman eller --utan-extra-doman angavs; annars behålls de.
 skriv_installningar() { # e-post ("" = behåll), lösenord ("" = inget)
-  printf '%s\n%s\n%s\n' "$DOMAN" "$1" "$2" | docker run --rm -i --entrypoint python3 -v "$DATA:/data" "$BILD" -I -c '
+  printf '%s\n%s\n%s\n%s\n' "$DOMAN" "$EXTRA_RAD" "$1" "$2" | docker run --rm -i --entrypoint python3 -v "$DATA:/data" "$BILD" -I -c '
 import json, os, sys
-doman, epost, losenord = (rad.rstrip("\n") for rad in sys.stdin.readlines()[:3])
+doman, extra, epost, losenord = (rad.rstrip("\n") for rad in sys.stdin.readlines()[:4])
 sokvag = "/data/options.json"
 standard = {"domain": "", "admin_email": "", "admin_password": "", "strato_dyndns": False,
-            "strato_dyndns_user": "", "strato_dyndns_password": "", "log_level": "info"}
+            "strato_dyndns_user": "", "strato_dyndns_password": "", "log_level": "info",
+            "extra_domains": []}
 try:
     with open(sokvag, encoding="utf-8") as fil:
         gammal = json.load(fil)
@@ -431,6 +492,8 @@ except (OSError, ValueError):
     gammal = {}
 data = {nyckel: gammal.get(nyckel, varde) for nyckel, varde in standard.items()}
 data["domain"] = doman
+if extra.startswith("satt:"):
+    data["extra_domains"] = [rad for rad in extra[len("satt:"):].split(",") if rad]
 if epost:
     data["admin_email"] = epost
 data["admin_password"] = losenord
@@ -444,12 +507,42 @@ os.replace(tmp, sokvag)
 '
 }
 
+# Finns det extra domäner i inställningsfilen? Läses med Python i avbilden (som när filen skrivs),
+# varje gång containern skapas – även vid automatisk uppdatering och återgång.
+har_extra_domaner() { # avbild
+  docker run --rm --entrypoint python3 -v "$DATA:/data:ro" "$1" -I -c '
+import json, sys
+try:
+    with open("/data/options.json", encoding="utf-8") as fil:
+        data = json.load(fil)
+except (OSError, ValueError):
+    sys.exit(1)
+lista = data.get("extra_domains") if isinstance(data, dict) else None
+sys.exit(0 if isinstance(lista, list) and any(isinstance(rad, str) and rad.strip() for rad in lista) else 1)
+' >/dev/null 2>&1
+}
+
+sakerstall_natverk() {
+  docker network inspect "$NATVERK" >/dev/null 2>&1 && return 0
+  info "Skapar Docker-nätet $NATVERK (för de extra domänerna)."
+  docker network create "$NATVERK" >/dev/null 2>&1 || docker network inspect "$NATVERK" >/dev/null 2>&1
+}
+
 starta_container() { # avbild (namn eller id)
+  local natverk=()
+  # Med extra domäner ansluts DriveLog till nätet där de andra tjänsterna nås på sina namn.
+  if har_extra_domaner "$1"; then
+    if sakerstall_natverk; then
+      natverk=(--network "$NATVERK")
+    else
+      varna "Docker-nätet $NATVERK kunde inte skapas – DriveLog startas utan det, och de extra domänerna når inte sina tjänster."
+    fi
+  fi
   if docker ps -a --format '{{.Names}}' | grep -qx "$NAME"; then
     docker stop -t 30 "$NAME" >/dev/null 2>&1 || true
     docker rm "$NAME" >/dev/null
   fi
-  docker run -d --name "$NAME" --restart unless-stopped --init -e TZ="$TZ_NAMN" \
+  docker run -d --name "$NAME" --restart unless-stopped --init -e TZ="$TZ_NAMN" "${natverk[@]}" \
     -v "$DATA:/data" -p 80:80 -p 443:443 -p 443:443/udp "$1" >/dev/null
 }
 
@@ -946,6 +1039,13 @@ if [[ "$LOKAL" == 0 && "${DRIVELOG_SKIP_DNS_CHECK:-0}" != 1 ]]; then
   fi
 fi
 
+if [[ "${DRIVELOG_SKIP_DNS_CHECK:-0}" != 1 ]]; then
+  for rad in "${EXTRA_DOMANER[@]}"; do
+    [[ -n "$(getent ahosts "${rad%%=*}" 2>/dev/null || true)" ]] \
+      || varna "${rad%%=*} hittas inte i DNS än – peka den på den här servern, annars kan certifikatet inte hämtas."
+  done
+fi
+
 if ! docker ps --format '{{.Names}}' | grep -qx "$NAME"; then
   upptagna="$(ss -ltnH 2>/dev/null | awk '{print $4}' | grep -E '[:.](80|443)$' | sort -u | tr '\n' ' ' || true)"
   [[ -z "$upptagna" ]] || die "Port 80 eller 443 används redan av något annat på servern ($upptagna)." \
@@ -1061,6 +1161,10 @@ fi
 
 rubrik "Klart"
 info "DriveLog $VERSION är igång: https://$DOMAN"
+for rad in "${EXTRA_DOMANER[@]}"; do
+  info "Extra domän: https://${rad%%=*} skickas vidare till ${rad#*=} (Docker-nätet $NATVERK)."
+done
+[[ "$UTAN_EXTRA" == 0 ]] || info "Inga extra domäner längre."
 if [[ "$NY_INSTALLATION" == 1 ]]; then
   info "Logga in med $EPOST och lösenordet du valde."
 elif [[ "$NYTT_LOSENORD" == 1 ]]; then

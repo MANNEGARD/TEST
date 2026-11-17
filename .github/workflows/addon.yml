@@ -408,6 +408,24 @@ jobs:
           if sudo grep -rF "$CI_NYTT_PASSWORD" "$DATA" >/dev/null 2>&1; then
             echo "Det nya lösenordet finns i klartext i datakatalogen" >&2; exit 1
           fi
+          # 3b) Extra domäner: sparas i inställningsfilen, Caddy får ett block för domänen och
+          #     DriveLog ansluts till Docker-nätet smgd. Valet behålls när raden körs igen utan det
+          #     och tas bort med --utan-extra-doman.
+          extra() { sudo python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["extra_domains"])' "$DATA/options.json"; }
+          natverk() { docker inspect -f '{{range $n, $_ := .NetworkSettings.Networks}}{{$n}} {{end}}' drivelog-server; }
+          server -- localhost --extra-doman extra.localhost=transcribe:8080 </dev/null
+          test "$(extra)" = "['extra.localhost=transcribe:8080']"
+          natverk | grep -qw smgd
+          docker exec drivelog-server cat /run/drivelog/Caddyfile | grep -F "reverse_proxy transcribe:8080 {"
+          test "$(logga_in "$CI_NYTT_PASSWORD")" = 200
+          server -- localhost </dev/null
+          test "$(extra)" = "['extra.localhost=transcribe:8080']"
+          natverk | grep -qw smgd
+          server -- localhost --utan-extra-doman </dev/null
+          test "$(extra)" = "[]"
+          if natverk | grep -qw smgd; then echo "DriveLog är kvar i nätet smgd" >&2; exit 1; fi
+          if docker exec drivelog-server cat /run/drivelog/Caddyfile | grep -F transcribe; then exit 1; fi
+          test "$(logga_in "$CI_NYTT_PASSWORD")" = 200
           # 4) Ny server utan uppgifter och utan terminal: tydligt fel i stället för en halv installation.
           docker rm -f drivelog-server >/dev/null
           if server DRIVELOG_DATA="$RUNNER_TEMP/server-tom" DRIVELOG_CONTAINER=drivelog-server-tom -- localhost \

@@ -89,6 +89,45 @@ Säkerhetskopiorna i `/opt/drivelog/kopior` ligger på samma disk som DriveLog. 
 misslyckad uppdatering, inte mot att servern går sönder, så ta fortfarande med `/opt/drivelog`
 i serverns vanliga säkerhetskopior.
 
+### Extra domäner (fler tjänster på samma server)
+
+DriveLog äger port 80 och 443 på servern. Ska en annan tjänst på samma server också nås med
+HTTPS på en egen domän – t.ex. `transcribe.smgd.se` – låter du DriveLogs proxy (Caddy) hämta
+certifikatet och skicka trafiken vidare till tjänstens container. Lägg till `--extra-doman`
+sist på raden:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/SMGD-MP/TEST/HEAD/deploy/server.sh | sudo bash -s -- drivelog.smgd.se --extra-doman transcribe.smgd.se=transcribe:8080
+```
+
+- Formen är `<domän>=<värd>:<port>`: domänen som ska nås utifrån, och namnet på den andra
+  tjänstens container och porten den lyssnar på (vanlig HTTP; WebSockets fungerar). Flera
+  domäner: upprepa valet eller skriv dem med komma emellan.
+- **Domänen måste peka på servern**, precis som DriveLogs egen (A-post, och ingen AAAA-post som
+  pekar någon annanstans) – annars kan certifikatet inte hämtas.
+- Valet sparas i `/opt/drivelog/data/options.json` och gäller tills du ändrar det, även när
+  raden körs igen utan valet och vid [automatisk uppdatering](#automatisk-uppdatering). Anger
+  du `--extra-doman` igen ersätts listan. Ta bort alla med `--utan-extra-doman`.
+- DriveLogs container ansluts till Docker-nätet **`smgd`** (skriptet skapar det om det saknas).
+  Den andra tjänsten måste vara med i samma nät, som ett *externt* nät, för att DriveLog ska nå
+  den på sitt namn. Den behöver inte publicera någon port på servern. I den andra tjänstens
+  `docker-compose.yml`:
+
+  ```yaml
+  services:
+    transcribe:
+      container_name: transcribe
+      networks: [smgd]
+  networks:
+    smgd:
+      external: true
+  ```
+
+  Startas den andra tjänsten först: skapa nätet med `sudo docker network create smgd`.
+- Den extra domänen får bara de allmänna säkerhetshuvudena (HSTS, `nosniff`, `Referrer-Policy`)
+  – inte DriveLogs spärr för mikrofon och kamera eller förbudet mot inramning. Det bestämmer
+  tjänsten själv.
+
 Resten av den här sidan beskriver den större uppsättningen med Docker Compose (PostgreSQL,
 Redis och separata tjänster), som bygger avbilderna på servern.
 

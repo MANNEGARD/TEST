@@ -276,6 +276,31 @@ def test_main_med_ogiltiga_installningar(tmp_path, capsys):
     assert "domännamn" in capsys.readouterr().err
 
 
+def test_main_med_ogiltig_extra_doman_startar_inte(tmp_path, capsys):
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "options.json").write_text(json.dumps({
+        "domain": "drivelog.example.se", "strato_dyndns": False,
+        "extra_domains": ["transcribe.example.se=transcribe:8080 {"],
+    }))
+    assert startprogram.main(Sokvagar(data=data, runtime=tmp_path / "run")) == 1
+    assert "extra_domains" in capsys.readouterr().err
+
+
+def test_extra_domaner_i_caddyfilen_och_loggen(tmp_path, caplog):
+    caplog.set_level(logging.INFO)
+    varld = Varld(behover_konto=False)
+    program = _program(tmp_path, varld, extra_domains=["transcribe.example.se=transcribe:8080"])
+    stopp, trad, _ = _kor_i_bakgrunden(program)
+    assert _vanta_tills(lambda: program.lage == "igang")
+    stopp.set()
+    trad.join(5)
+    caddyfil = (tmp_path / "run" / "Caddyfile").read_text()
+    assert "\ntranscribe.example.se {\n" in caddyfil
+    assert "reverse_proxy transcribe:8080 {" in caddyfil
+    assert "https://transcribe.example.se skickas vidare till transcribe:8080" in caplog.text
+
+
 def test_riktig_processtart_utan_anvandarbyte(tmp_path):
     """starta_process med en riktig (kort) process – utan setpriv eftersom ingen användare anges."""
     proc = startprogram.starta_process(

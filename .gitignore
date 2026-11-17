@@ -38,3 +38,6 @@ Underlag*.xlsx
 
 # Tillfälliga arbetskopior för verktyg – hör inte hemma i repot
 .claude/worktrees/
+
+# Transkribering
+transcribe/dist/

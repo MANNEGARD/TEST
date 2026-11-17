@@ -67,7 +67,7 @@ def test_options_och_schema(config):
     schema = config["schema"]
     assert set(schema) == {
         "domain", "admin_email", "admin_password", "strato_dyndns",
-        "strato_dyndns_user", "strato_dyndns_password", "log_level",
+        "strato_dyndns_user", "strato_dyndns_password", "log_level", "extra_domains",
     }
     # SUP-F3/GUI-F1: alla fält står under options så att formuläret visar dem direkt.
     assert set(config["options"]) == set(schema)
@@ -80,6 +80,9 @@ def test_options_och_schema(config):
         assert config["options"][nyckel] == ""
     nivaer = re.fullmatch(r"list\((.*)\)", schema["log_level"]).group(1).split("|")
     assert config["options"]["log_level"] in nivaer
+    # Extra domäner: en lista med text, tom som standard (kontrolleras av startprogrammet).
+    assert schema["extra_domains"] == ["str?"]
+    assert config["options"]["extra_domains"] == []
 
 
 def test_standardinstallningarna_godtas_av_startprogrammet(config):
@@ -91,6 +94,7 @@ def test_standardinstallningarna_godtas_av_startprogrammet(config):
     assert inst.admin_email is None and inst.admin_password is None and not inst.har_adminuppgifter
     assert inst.strato_dyndns_user is None and inst.strato_dyndns_password is None
     assert inst.varningar == ()
+    assert inst.extra_domains == ()
     assert set(installningar.LOGGNIVAER) == set(
         re.fullmatch(r"list\((.*)\)", config["schema"]["log_level"]).group(1).split("|")
     )
@@ -108,7 +112,10 @@ validera = AppOptions(CoreSys(), config["schema"], config["name"], config["slug"
 ut = {"standard": validera(config["options"])}
 ut["ifyllt"] = validera({**config["options"], "admin_email": "agare@example.se", "admin_password": "x" * 12,
                          "strato_dyndns": True, "strato_dyndns_user": "example.se",
-                         "strato_dyndns_password": "hemligt"})
+                         "strato_dyndns_password": "hemligt",
+                         "extra_domains": ["transcribe.smgd.se=transcribe:8080", "b.example.se=127.0.0.1:9000"]})
+# Äldre options.json (från före 1.4.0) saknar extra_domains: ska fortfarande godtas.
+ut["utan_extra"] = validera({k: v for k, v in config["options"].items() if k != "extra_domains"})
 print(json.dumps(ut))
 """
 
@@ -141,6 +148,8 @@ def test_supervisors_egen_validering_godkanner_config_och_standardvarden(tmp_pat
     config = _las(ADDON / "config.yaml")
     assert ut["standard"] == config["options"]
     assert ut["ifyllt"]["admin_email"] == "agare@example.se"
+    assert ut["ifyllt"]["extra_domains"] == ["transcribe.smgd.se=transcribe:8080", "b.example.se=127.0.0.1:9000"]
+    assert "domain" in ut["utan_extra"]
 
 
 @pytest.mark.parametrize("sprak", ["sv", "en"])

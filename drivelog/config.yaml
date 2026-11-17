@@ -53,6 +53,7 @@ options:
   strato_dyndns_user: ""
   strato_dyndns_password: ""
   log_level: info
+  extra_domains: []
 schema:
   domain: str
   admin_email: "str?"
@@ -61,3 +62,8 @@ schema:
   strato_dyndns_user: "str?"
   strato_dyndns_password: "password?"
   log_level: "list(debug|info|warning|error)"
+  # En lista med rader "<domän>=<värd>:<port>" (t.ex. transcribe.smgd.se=transcribe:8080).
+  # "str?": fältet får saknas (äldre inställningar) och Supervisor kontrollerar bara att det är
+  # text – resten kontrolleras av startprogrammet.
+  extra_domains:
+    - "str?"
