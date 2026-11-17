@@ -912,8 +912,10 @@ def question_hold_until(db: Session, trip: LogicalTrip, user_id: uuid.UUID) -> d
 
     En ankomst med kompletta uppgifter stängs direkt, men frågan ska inte komma tidigare än
     med väntan från före 1.5.0: när ankomsten först sågs plus ``settle_minutes``. Då hinner en
-    fortsatt körning efter ett kort stopp slås ihop med resan först. None för resor som inte
-    är rekonstruerade ur bilens avläsningar.
+    fortsatt körning efter ett kort stopp slås ihop med resan först. Hade bilen rapporterat
+    motorn avstängd vid ankomsten stängde väntan från före 1.5.0 resan redan vid nästa
+    hämtning (genvägen i ``_settled``); då väntar frågan bara dit, som förut. None för resor
+    som inte är rekonstruerade ur bilens avläsningar.
     """
     raws = seg.ordered_raws(trip)
     if not raws:
@@ -930,18 +932,31 @@ def question_hold_until(db: Session, trip: LogicalTrip, user_id: uuid.UUID) -> d
     if not ids:
         return None
     seen = [
-        fetched
-        for fetched, lat, lon in db.execute(
-            select(VehicleObservation.fetched_at, VehicleObservation.latitude, VehicleObservation.longitude).where(
-                VehicleObservation.id.in_(ids)
-            )
+        row
+        for row in db.execute(
+            select(
+                VehicleObservation.fetched_at, VehicleObservation.latitude, VehicleObservation.longitude,
+                VehicleObservation.engine_running, VehicleObservation.engine_reported_at,
+                VehicleObservation.position_reported_at, VehicleObservation.odometer_reported_at,
+            ).where(VehicleObservation.id.in_(ids))
         ).all()
-        if lat is not None and lon is not None and abs(lat - last.end_lat) < 1e-9 and abs(lon - last.end_lon) < 1e-9
+        if row.latitude is not None and row.longitude is not None
+        and abs(row.latitude - last.end_lat) < 1e-9 and abs(row.longitude - last.end_lon) < 1e-9
     ]
     if not seen:
         return None
-    settle = float(settings_svc.get_section(db, user_id, "volvo").get("settle_minutes", 10))
-    return min(seen) + timedelta(minutes=settle)
+    first = min(seen, key=lambda row: row.fetched_at)
+    cfg = settings_svc.get_section(db, user_id, "volvo")
+    reported = (first.position_reported_at, first.odometer_reported_at)
+    if (
+        first.engine_running is False
+        and first.engine_reported_at is not None
+        and None not in reported
+        and first.engine_reported_at >= max(reported) - CLOCK_SKEW  # type: ignore[type-var]
+    ):
+        # Genvägen från före 1.5.0: motorn av efter ankomsten, stängd vid andra hämtningen.
+        return first.fetched_at + timedelta(seconds=float(cfg.get("poll_interval_seconds", 300)))
+    return first.fetched_at + timedelta(minutes=float(cfg.get("settle_minutes", 10)))
 
 
 def process_vehicle(
