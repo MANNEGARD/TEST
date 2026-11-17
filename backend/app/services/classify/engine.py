@@ -619,7 +619,6 @@ def _assess(
                                           vehicle_terms=cache["vehicle_terms"])
         try:
             result = provider.assess(document)
-            _report_llm_outcome(db, user_id, None)
         except llm_mod.LLMError as exc:
             logger.warning("AI-leverantören svarade med fel: %s", exc)
             _report_llm_outcome(db, user_id, exc)
@@ -636,6 +635,10 @@ def _assess(
             _record_unexpected_llm_error(db, user_id, exc)
             result = None
             signals.append(Signal("ai_unavailable", "AI-leverantören kunde inte användas – endast regler tillämpades", "neutral"))
+        else:
+            # Bokföringen efter ett lyckat svar hör inte till AI-anropet: ett fel här ska synas som
+            # det fel det är och inte kasta bort ett giltigt svar.
+            _report_llm_outcome(db, user_id, None)
         if result is not None:
             data = result.data
             source, model = DecisionSource.AI, result.model
@@ -829,7 +832,7 @@ def classify_trip(
     prep = _prepare(db, trip, user_id=user_id, provider=provider, use_llm=use_llm, settings_cache=cache)
     rules, inputs_hash = prep.rules, prep.inputs_hash
     current = _current_classification(db, trip.id)
-    stored = (current.signals or {}) if current is not None else {}
+    stored = current.signals if current is not None and isinstance(current.signals, dict) else {}
     if decided:
         unchanged = stored.get("purpose_inputs_hash") == inputs_hash
     else:

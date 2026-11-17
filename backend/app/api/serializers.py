@@ -93,7 +93,7 @@ def trips_out(db: Session, trips: Sequence[LogicalTrip]) -> list[TripOut]:
     # Delresornas källa (vilka resor som kan tas bort) och sparade uppehåll i hämtningen.
     sources: dict[uuid.UUID, list[tuple[str, bool]]] = defaultdict(list)
     gaps: dict[uuid.UUID, CollectionGapOut] = {}
-    flagged = {t.id for t in trips if "collection_gap" in (t.quality_flags or [])}
+    flagged = {t.id for t in trips if isinstance(t.quality_flags, list) and "collection_gap" in t.quality_flags}
     for tid, source, batch_id in db.execute(
         select(TripSegment.logical_trip_id, RawTrip.source, RawTrip.import_batch_id)
         .join(RawTrip, RawTrip.id == TripSegment.raw_trip_id)

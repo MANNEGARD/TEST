@@ -21,6 +21,11 @@ def item_data(item: ReviewItem) -> dict[str, Any]:
     return item.data if isinstance(item.data, dict) else {}
 
 
+def item_resolution(item: ReviewItem) -> dict[str, Any]:
+    """Ärendets ``resolution`` som objekt, på samma villkor som ``item_data``."""
+    return item.resolution if isinstance(item.resolution, dict) else {}
+
+
 def upsert(
     db: Session,
     *,
@@ -64,7 +69,7 @@ def upsert(
     elif reopen or (
         reopen_reason is not None
         and item.status == ReviewState.RESOLVED
-        and (item.resolution or {}).get("reason") == reopen_reason
+        and item_resolution(item).get("reason") == reopen_reason
     ):
         item.status = ReviewState.OPEN
         item.title, item.detail = title, detail

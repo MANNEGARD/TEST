@@ -210,3 +210,121 @@ def test_trasigt_arende_faller_inte_listan_i_granskning(client, db, user, vehicl
     resp = client.post(f"/api/v1/review/{anomaly.id}/dismiss")
     assert resp.status_code == 200, resp.text
     assert db.execute(select(M.ReviewItem.status).where(M.ReviewItem.id == anomaly.id)).scalar_one() == ReviewState.DISMISSED
+
+
+# ----------------------------------------------------------------------------- granskningens fynd (1.4.2)
+
+
+class BookkeepingBoom(RuntimeError):
+    pass
+
+
+def test_fel_i_bokforingen_efter_ett_lyckat_ai_svar_doljs_inte(db, user, trips, world, monkeypatch):
+    """Bara själva AI-anropet omfattas av det breda skyddet: ett fel i vår egen bokföring efter
+    ett lyckat svar ska synas som det fel det är, inte som "Oväntat fel i AI-anropet"."""
+    from app.services.classify import engine
+    from tests.v130_ai_stod import FakeProvider
+
+    def boom(db_, user_id, error):
+        if error is None:
+            raise BookkeepingBoom("bokföringen gick sönder")
+
+    monkeypatch.setattr(engine, "_report_llm_outcome", boom)
+    t = live(trips, OFFICE, CUSTOMER, km=30, start_at=local(2026, 9, 15, 9, 0))
+    with internal_errors.tolerant_mode(True), pytest.raises(BookkeepingBoom):
+        classify(db, user, t, provider=FakeProvider(answer("Kundbesök hos Exempel Åkeri AB")))
+    assert internal_errors.entries(db, user.id) == []  # inget antecknas som ett AI-fel
+
+
+@pytest.mark.parametrize("value", ["bara text", ["en", "lista"], 17])
+def test_trasiga_fria_falt_faller_inte_klassningen_eller_autopiloten(db, user, vehicle, trips, world, value):
+    from sqlalchemy import update
+
+    from app.services.classify import autopilot
+    from app.services.classify import engine as engine_mod
+    from tests.v130_ai_stod import FakeProvider
+
+    t = live(trips, OFFICE, CUSTOMER, km=30, start_at=local(2026, 9, 15, 9, 0))
+    classify(db, user, t, provider=FakeProvider(answer("Kundbesök hos Exempel Åkeri AB")))
+    db.flush()
+    # Fälten skrivs alltid som objekt av appen; här sätts de till något annat direkt i databasen.
+    db.execute(update(M.TripClassification).where(M.TripClassification.logical_trip_id == t.id).values(signals=value))
+    db.execute(update(M.TripPurpose).where(M.TripPurpose.logical_trip_id == t.id).values(based_on=value))
+    db.expire_all()
+    trip = reload_trip(db, t.id)
+    assert autopilot._based_on(autopilot._current_purpose(db, trip)) == {} and autopilot._based_on(None) == {}
+    # Autopiloten läser det trasiga ärendet, klassningen läser de trasiga signalerna – ingen av dem faller.
+    autopilot.run_vehicle(db, user_id=user.id, vehicle=vehicle, actor=audit.SYSTEM)
+    db.flush()
+    engine_mod.classify_trip(db, reload_trip(db, t.id), user_id=user.id, actor=audit.SYSTEM, provider=None)
+    db.flush()
+
+
+@pytest.mark.parametrize("value", ["bara text", ["en", "lista"], 17])
+def test_trasig_resolution_faller_inte_stangningen_av_avvikelser(db, user, vehicle, trips, value):
+    from sqlalchemy import update
+
+    trips.trip(A, B, category=Category.WORK, purpose="Kundmöte", km=12.0)
+    item, _ = review.upsert(db, vehicle_id=vehicle.id, kind=ReviewKind.ANOMALY, dedupe_key="anomaly:stangd", title="Stängt",
+                            detail="Text", data={"type": "x"})
+    review.resolve(db, item, by="system", resolution={"auto": True, "reason": review.SCOPE_REASON})
+    db.flush()
+    db.execute(update(M.ReviewItem).where(M.ReviewItem.id == item.id).values(resolution=value))
+    db.expire_all()
+    assert review.item_resolution(db.get(M.ReviewItem, item.id)) == {}
+    anomalies.close_noise(db, vehicle.id, scope="business")
+    anomalies.close_noise(db, vehicle.id, scope="complete")
+    # Samma nyckel skapas på nytt: det trasiga ärendet öppnas inte igen av misstag och fäller inget.
+    review.upsert(db, vehicle_id=vehicle.id, kind=ReviewKind.ANOMALY, dedupe_key="anomaly:stangd", title="Stängt",
+                  detail="Text", data={"type": "x"}, reopen_reason=review.SCOPE_REASON)
+    db.flush()
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("via", "text"), ("via", 5), ("via", None), ("via", ["a", 1]), ("quality_flags", None), ("quality_flags", "text"),
+     ("quality_flags", 5), ("quality_flags", [1, {"a": 1}])],
+)
+def test_trasiga_listfalt_pa_en_resa_faller_inte_listorna(client, db, user, vehicle, trips, field, value):
+    from sqlalchemy import update
+
+    t = trips.trip(A, B, category=Category.WORK, purpose="Kundmöte", km=12.0)
+    review.upsert(db, vehicle_id=vehicle.id, kind=ReviewKind.PURPOSE, dedupe_key=f"purpose:{t.id}", title="Ärende saknas",
+                  detail="Text", data={}, logical_trip_id=t.id)
+    db.flush()
+    db.execute(update(M.LogicalTrip).where(M.LogicalTrip.id == t.id).values(**{field: value}))
+    db.commit()
+    resp = client.get("/api/v1/trips")
+    assert resp.status_code == 200, resp.text
+    row = next(i for i in resp.json()["items"] if i["id"] == str(t.id))
+    assert isinstance(row["via"], list) and isinstance(row["quality_flags"], list)
+    resp = client.get("/api/v1/review")
+    assert resp.status_code == 200, resp.text
+
+
+def test_vanliga_listfalt_pa_en_resa_visas_som_forut(client, db, user, vehicle, trips):
+    t = trips.trip(A, B, category=Category.WORK, purpose="Kundmöte", km=12.0)
+    t.via = [{"address": "Påhittvägen 9, Exempelby", "seq": 1}]
+    t.quality_flags = ["end_time_uncertain", "collection_gap"]
+    db.commit()
+    row = next(i for i in client.get("/api/v1/trips").json()["items"] if i["id"] == str(t.id))
+    assert row["via"] == [{"address": "Påhittvägen 9, Exempelby", "seq": 1}]
+    assert row["quality_flags"] == ["end_time_uncertain", "collection_gap"]
+
+
+def test_anthropic_ping_gor_ett_otolkbart_svar_till_ett_vanligt_fel(monkeypatch):
+    anthropic = pytest.importorskip("anthropic")
+    import httpx as _httpx
+
+    provider = llm.AnthropicProvider("test-nyckel", "test-modell")
+
+    class Models:
+        def retrieve(self, model):
+            raise anthropic.APIResponseValidationError(
+                response=_httpx.Response(200, request=_httpx.Request("GET", "https://api.anthropic.com/v1/models/x")),
+                body=None,
+            )
+
+    monkeypatch.setattr(provider, "client", type("C", (), {"models": Models()})())
+    with pytest.raises(llm.LLMError):
+        provider.ping()

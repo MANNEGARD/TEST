@@ -245,6 +245,8 @@ class AnthropicProvider:
             raise LLMError(f"Fel från Anthropic ({exc.status_code}).") from exc
         except anthropic.APIConnectionError as exc:
             raise LLMError("Kunde inte nå Anthropic.", retryable=True) from exc
+        except anthropic.APIError as exc:  # t.ex. ett svar som SDK:t inte kan tolka
+            raise LLMError("Oväntat svar från Anthropic.") from exc
         return getattr(info, "display_name", None) or self.model
 
 

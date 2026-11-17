@@ -695,7 +695,7 @@ def _ai_purpose(trip: LogicalTrip, ctx: Any, rules: Any) -> str | None:
     if trip.purpose_source != DecisionSource.AI or not trip.purpose:
         return None
     current = _current_purpose(db_of(trip), trip)
-    if current is None or (current.based_on or {}).get("supported") is not True:
+    if current is None or _based_on(current).get("supported") is not True:
         return None  # en AI-text utan stöd blir aldrig grund för ett automatiskt godkännande
     text = sanitize_text(trip.purpose)
     if not text:
@@ -710,6 +710,12 @@ def db_of(obj: Any) -> Session:
     session = object_session(obj)
     assert session is not None
     return session
+
+
+def _based_on(purpose: TripPurpose | None) -> dict[str, Any]:
+    """Ärendets ``based_on`` som objekt. Fältet är fri JSON: annat innehåll räknas som tomt."""
+    value = purpose.based_on if purpose is not None else None
+    return value if isinstance(value, dict) else {}
 
 
 def _current_purpose(db: Session, trip: LogicalTrip) -> TripPurpose | None:
@@ -734,7 +740,7 @@ def _calendar_purpose(db: Session, trip: LogicalTrip, ctx: Any, rules: Any) -> t
     if ctx is None or sig.calendar_support(ctx) != "strong":
         return None
     current = _current_purpose(db, trip)
-    based = (current.based_on or {}) if current is not None else {}
+    based = _based_on(current)
     if (
         current is not None and current.source == DecisionSource.AI and based.get("calendar") == "strong"
         and based.get("supported") is True and current.text and not based.get("fallback")
@@ -1127,7 +1133,7 @@ def purpose_candidate_items(
         out.append((clean, origin))
 
     current = _current_purpose(db, trip) if trip.purpose else None
-    based = (current.based_on or {}) if current is not None else {}
+    based = _based_on(current)
     if current is not None and not trip.purpose_confirmed and (
         based.get("calendar_event_id") or based.get("calendar_event_ids")
     ):
@@ -1162,7 +1168,7 @@ def candidate_origin(db: Session, trip: LogicalTrip, text: str) -> str:
     current = _current_purpose(db, trip)
     if current is None or sanitize_text(current.text, limit=80) != sanitize_text(text, limit=80):
         return "history"
-    based = current.based_on or {}
+    based = _based_on(current)
     if based.get("calendar_event_id") or based.get("calendar_event_ids"):
         return "calendar"
     if current.source == DecisionSource.AI:
@@ -1604,7 +1610,7 @@ def reject_calendar_purpose(db: Session, trip: LogicalTrip, *, user_id: uuid.UUI
     if trip.state != LogicalState.ACTIVE:
         raise TripError("Resan är inte aktiv.", "not_active")
     current = _current_purpose(db, trip)
-    based = (current.based_on or {}) if current is not None else {}
+    based = _based_on(current)
     ids = [str(i) for i in (based.get("calendar_event_ids") or [])]
     if based.get("calendar_event_id"):
         ids.append(str(based["calendar_event_id"]))

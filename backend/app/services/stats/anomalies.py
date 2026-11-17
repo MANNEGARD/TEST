@@ -404,7 +404,7 @@ def reopen_scope_closed(db: Session, vehicle_id: uuid.UUID, *, scope: str) -> in
                 ReviewItem.resolved_by == "system",
             )
         ).scalars()
-        if (i.resolution or {}).get("reason") == review.SCOPE_REASON
+        if review.item_resolution(i).get("reason") == review.SCOPE_REASON
     ]
     resolved = resolve_trip_ids(db, items)
     if not resolved:

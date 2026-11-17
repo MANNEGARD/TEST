@@ -126,6 +126,19 @@ class TripOut(ORM):
     # Kan resan tas bort? imported | manual efter källan (spärrarna ges som fel vid borttagning).
     deletable: Literal["imported", "manual"] | None = None
 
+    # Fälten är fri JSON i databasen. Innehåll i fel form (text, tal, null, fel slags element)
+    # visas som en tom lista i stället för att fälla listorna i Resor och Granskning. Bara
+    # svaret påverkas – ingenting skrivs tillbaka.
+    @field_validator("via", mode="before")
+    @classmethod
+    def _via_list(cls, value: Any) -> Any:
+        return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+
+    @field_validator("quality_flags", mode="before")
+    @classmethod
+    def _flag_list(cls, value: Any) -> Any:
+        return [item for item in value if isinstance(item, str)] if isinstance(value, list) else []
+
 
 class TripListOut(BaseModel):
     items: list[TripOut]
